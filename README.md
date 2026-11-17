@@ -79,7 +79,7 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 
 - 凭据放在你自己的机器上（**不写进本仓库**），优先用禅道个人令牌而不是密码。
 - 本仓库不包含任何内网地址、账号或凭据。
-- MCP 未登录时数据调用返回 401；技能会在会话开始时登录一次，失效后补登一次。
+- 技能会在需要禅道数据时登录一次，失效后补登一次。**实测当前 MCP 的登录接口不校验凭据、恒以服务端固定身份对外服务**，所以「每用户独立账号」暂时由客户端保证不了（见 [zentao-mcp.md](skills/rh-product-feedback/references/zentao-mcp.md) 的「实测偏差」）。
 - 每个用户用自己的禅道账号登录，反馈单留痕在本人名下。
 
 详见 [`skills/rh-product-feedback/references/setup.md`](skills/rh-product-feedback/references/setup.md) 与 [`references/zentao-mcp.md`](skills/rh-product-feedback/references/zentao-mcp.md)。
