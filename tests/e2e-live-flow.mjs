@@ -205,9 +205,11 @@ export async function runLiveE2E({ client, env = {}, credentials, stamp, log = (
   const targets = createdId ? [createdId] : residual.map((f) => f.id);
   for (const id of targets) {
     const del = await client.callTool('delete_feedbacks_feedbackID', { feedbackID: String(id) });
-    record('清理测试数据', del.status === 'success' || del.status === undefined, `#${id} status=${del.status}`);
     const after = await assistant.readBack(id);
-    record('清理后按 ID 复核不存在', !after.found, `#${id}`);
+    const gone = !after.found;
+    // 以按 ID 复核为准：删除响应无法解析、但记录确已消失时，不算清理失败
+    record('清理测试数据', del.status === 'success' || gone, `#${id} status=${del.status}`);
+    record('清理后按 ID 复核不存在', gone, `#${id}`);
   }
   const countAfter = (await assistant.scanFeedbacks(gate.productId)).items.length;
   record('条数回到基线（仅辅助证据）', countAfter === baseline, `基线 ${baseline} → 现在 ${countAfter}`);

@@ -36,6 +36,13 @@ function sameText(a, b) {
 function sameTitle(a, b) {
   return String(a ?? '').trim() === String(b ?? '').trim();
 }
+/**
+ * JSON-RPC 层面的拒绝：参数不合法（-32602）或工具不存在（-32601）。
+ * 这类是「请求根本没被执行」，不是「结果不确定」——不能拿它去做恢复扫描。
+ */
+function isRejected(res) {
+  return !!res?.error && (res.error.code === -32602 || res.error.code === -32601);
+}
 
 /** 标题关键词：中文按 2-gram 切分，英文按单词切分。 */
 function titleTokens(title) {
@@ -273,6 +280,10 @@ export class FeedbackAssistant {
       if (err instanceof SkillError) throw err;
       created = { timedOut: true, httpStatus: 0, status: null, data: null };
     }
+    // 请求被服务端拒绝（参数不合法、工具不存在）：根本没执行，按失败处理
+    if (isRejected(created)) {
+      return { status: 'failed', message: `请求被服务端拒绝：${created.error.message}`, writes: 1, duplicates };
+    }
     // 结果不确定：先查后报，绝不重复创建
     if (created.timedOut || created.httpStatus === 0 || created.status === null) {
       return await this.recoverCreate({
@@ -325,6 +336,9 @@ export class FeedbackAssistant {
     } catch (err) {
       if (err instanceof SkillError) throw err;
       updated = { timedOut: true, httpStatus: 0, status: null, data: null };
+    }
+    if (isRejected(updated)) {
+      return { status: 'failed', message: `请求被服务端拒绝：${updated.error.message}`, writes: 1 };
     }
     if (updated.status === 'fail') {
       return { status: 'failed', message: describeFailure(updated.data), writes: 1 };

@@ -74,6 +74,7 @@ export class McpClient {
     }
     if (res.httpStatus === 401) return { httpStatus: 401, text: '', data: null, status: null, unauthorized: true };
 
+    const rpcError = res.payload?.error || null;
     const content = res.payload?.result?.content || [];
     const text = content.map((c) => c.text ?? c.data ?? '').join('\n');
     let data = res.payload?.result?.structuredContent ?? null;
@@ -87,8 +88,9 @@ export class McpClient {
       httpStatus: res.httpStatus,
       text,
       data,
-      status: data?.status,
-      isError: !!res.payload?.result?.isError,
+      status: data?.status ?? null,
+      isError: !!res.payload?.result?.isError || !!rpcError,
+      error: rpcError,
     };
   }
 }

@@ -10,6 +10,8 @@
 //   7. 落库但没有 opened 流水：__NO_OPENED__
 //   8. 落库但描述被服务端改写：__ALTERED_DESC__
 //   9. 更新返回成功但没生效：__NOOP_UPDATE__（不改描述，也不新增 edited 流水）
+//  10. payload 在、但缺必填字段：返回 JSON-RPC 参数错误（HTTP 200，正文是 error），
+//      没有业务响应——请求根本没被执行
 //
 // 场景通过标题标记注入：
 //   __FAIL__          → 业务失败
@@ -70,6 +72,22 @@ const TOOLS = [
   { name: 'delete_feedbacks_feedbackID', description: '删除反馈', inputSchema: { type: 'object', properties: { feedbackID: { type: 'string' } } } },
 ];
 
+/** 工具的 payload 必填字段：真实 MCP 在缺字段时返回 JSON-RPC -32602。 */
+const REQUIRED_PAYLOAD_FIELDS = {
+  post_feedbacks: ['product', 'title'],
+  put_feedbacks_feedbackID: ['product', 'title'],
+};
+/** 真实 MCP 的参数错误形状：HTTP 200，正文是 JSON-RPC error，没有业务响应。 */
+function invalidParams(id, missing) {
+  return {
+    jsonrpc: '2.0',
+    id,
+    error: {
+      code: -32602,
+      message: `invalid params: validating "arguments": validating root: validating /properties/payload: required: missing properties: [${missing.map((k) => `"${k}"`).join(' ')}]`,
+    },
+  };
+}
 function feedbackView(fb) {
   return { ...fb, actions: fb.actions.map((a) => ({ ...a })) };
 }
@@ -87,8 +105,6 @@ function productVisible(state, session, productId) {
 }
 
 function handleToolCall(state, session, name, args) {
-  state.calls.push({ name, args });
-
   if (name === 'post_users_login') {
     if (state.loginFails) return { payload: { message: '账号或密码错误', status: 'fail' } };
     session.loggedIn = true;
@@ -237,7 +253,16 @@ export function startMockServer(overrides = {}) {
     }
 
     if (body.method === 'tools/call') {
-      const result = handleToolCall(state, session, body.params?.name, body.params?.arguments || {});
+      const name = body.params?.name;
+      const args = body.params?.arguments || {};
+      // 服务端收到了调用就记录——包括被参数校验拒绝的
+      state.calls.push({ name, args });
+      const required = REQUIRED_PAYLOAD_FIELDS[name];
+      if (required && args.payload && typeof args.payload === 'object') {
+        const missing = required.filter((k) => args.payload[k] === undefined || args.payload[k] === null);
+        if (missing.length) return ok(res, invalidParams(body.id, missing), 200);
+      }
+      const result = handleToolCall(state, session, name, args);
       if (result.hang) return; // 故意不响应，模拟超时
       if (result.httpStatus === 401) {
         return ok(res, { jsonrpc: '2.0', id: body.id, error: { code: -32001, message: 'Unauthorized' } }, 401);

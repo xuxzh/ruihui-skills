@@ -321,6 +321,25 @@ test('T25 历史已有 edited，本次更新新增了 edited：可以报成功',
     assert.equal(detail.actions.filter((a) => a === 'edited').length, 2, '本次应新增一条 edited 流水');
   });
 });
+test('T26 创建调用缺必填字段：服务端参数错误，按失败处理且不重试', async () => {
+  await withAssistant({}, async ({ client, state, calls }) => {
+    const assistant = new FeedbackAssistant({ client, confirm: async () => true });
+    // 真实 MCP：payload 在、但缺必填字段时返回 JSON-RPC -32602（HTTP 200，正文是 error）
+    const result = await assistant.submit({ ...DRAFT, productId: undefined });
+    assert.equal(result.status, 'failed', '请求被拒绝不是「结果不确定」，也不是「返回成功」');
+    assert.match(result.message, /invalid params|参数/);
+    assert.equal(calls('post_feedbacks').length, 1, '不得重试');
+    assert.equal(state.feedbacks.size, 0, '不得落库');
+  });
+});
+test('T27 MCP 的 JSON-RPC 错误要能被识别，不能被当成空响应', async () => {
+  await withAssistant({}, async ({ client }) => {
+    const res = await client.callTool('post_feedbacks', { payload: { desc: '缺字段' } });
+    assert.equal(res.isError, true);
+    assert.equal(res.error?.code, -32602);
+    assert.equal(res.status, null, '没有业务状态 = 结果不确定，不能当成成功');
+  });
+});
 // ---- Issue #4：真实 E2E 的写入保护（全部在 mock MCP 上验证，不碰真实禅道） ----
 const LIVE_ENV = {
   ZENTAO_E2E_ALLOW_WRITE: '1',
