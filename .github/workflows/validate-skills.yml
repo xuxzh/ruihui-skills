@@ -1,0 +1,25 @@
+name: validate-skills
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 静态校验（元数据 / 引用 / 硬约束 / 敏感信息）
+        run: node tests/validate-skills.mjs
+
+      - name: 模拟层测试（mock MCP）
+        run: node --test tests/e2e-mock.mjs
+
+      - name: Agent Skills 规范校验
+        run: npx --yes skills-ref validate skills/rh-product-feedback
