@@ -24,7 +24,7 @@ function normalize(text) {
   return String(text || '').toLowerCase().replace(/\s+/g, '');
 }
 
-/** 禅道会把描述里的 \n 存成 \r\n，回读比较前先归一化换行符。 */
+/** 禅道会把描述里的 \n 存成 \r\n（真实 E2E 实测确认），回读比较前先归一化换行符。 */
 function normalizeNewlines(text) {
   return String(text ?? '').replace(/\r\n/g, '\n');
 }

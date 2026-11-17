@@ -156,6 +156,7 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 
 - [ADR-0001](docs/adr/0001-每用户独立禅道账号.md) — 每用户独立禅道账号，不用共享服务账号
 - [ADR-0002](docs/adr/0002-业务用户接入形态.md) — Agent 自装 MCP、地址随包分发、凭据由本人写入
+- [ADR-0003](docs/adr/0003-真实端到端测试的写入闸门.md) — 真实端到端测试默认只读，写入要过三道闸门
 
 ## License
 

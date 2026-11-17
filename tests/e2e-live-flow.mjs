@@ -178,7 +178,9 @@ export async function runLiveE2E({ client, env = {}, credentials, stamp, log = (
   const createdId = created.status === 'created' ? created.id : null;
   if (createdId) {
     const detail = await assistant.readBack(createdId);
-    record('创建后回读一致', detail.found && detail.feedback.title === title, `反馈 #${createdId}`);
+    const storedDesc = String(detail.feedback?.desc || '');
+    const newlineForm = storedDesc.includes('\r\n') ? 'CRLF' : storedDesc.includes('\n') ? 'LF' : '无换行';
+    record('创建后回读一致', detail.found && detail.feedback.title === title, `反馈 #${createdId}｜描述换行形态：${newlineForm}`);
     const supplemented = await assistant.supplement({ id: createdId, addition: '【补充说明】验证补充路径。' });
     record('补充说明并回读', supplemented.status === 'updated', `status=${supplemented.status}`);
     const after = await assistant.readBack(createdId);
