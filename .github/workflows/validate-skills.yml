@@ -23,5 +23,8 @@ jobs:
       - name: 模拟层测试（mock MCP）
         run: node --test tests/e2e-mock.mjs
 
+      - name: 打包与随包脚本测试
+        run: node --test tests/package.mjs
+
       - name: Agent Skills 规范校验
         run: npx --yes skills-ref validate skills/rh-product-feedback
