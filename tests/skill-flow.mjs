@@ -4,9 +4,9 @@
 //   - 写入前必须有用户确认（confirm 回调返回 false → 一次写入都不发生）
 //   - 创建/更新的参数必须包在 payload 内
 //   - 写入后必须按 ID 回读校验
-//   - 结果不确定时先查询核实，不重复创建
+//   - 结果不确定时先查询核实，不重复创建；只认写入前不存在、现在唯一存在的记录
 //   - 业务失败（status: fail）不当作成功
-//   - 补充说明保留原文，走改 desc 的路径
+//   - 补充说明保留原文，走改 desc 的路径；写前二次回读，原文被改就停手
 //
 // 技能本身由 Agent 按 SKILL.md 执行；本模块不是技能的一部分，只用于测试与文档化流程。
 export const FEEDBACK_TYPES = ['bug', 'story', 'advice'];
@@ -25,9 +25,16 @@ function normalize(text) {
 }
 
 /** 禅道会把描述里的 \n 存成 \r\n，回读比较前先归一化换行符。 */
+function normalizeNewlines(text) {
+  return String(text ?? '').replace(/\r\n/g, '\n');
+}
 function sameText(a, b) {
-  const norm = (t) => String(t ?? '').replace(/\r\n/g, '\n').trim();
+  const norm = (t) => normalizeNewlines(t).trim();
   return norm(a) === norm(b);
+}
+/** 标题按去除首尾空白后精确比较。 */
+function sameTitle(a, b) {
+  return String(a ?? '').trim() === String(b ?? '').trim();
 }
 
 /** 标题关键词：中文按 2-gram 切分，英文按单词切分。 */
@@ -125,25 +132,54 @@ export class FeedbackAssistant {
     return res.data.products || [];
   }
 
-  async listFeedbacks(productId, { recPerPage = 100, maxPages = 3 } = {}) {
-    const out = [];
+  async scanFeedbacks(productId, { recPerPage = 100, maxPages = 3 } = {}) {
+    const items = [];
+    let complete = true;
+    let error = null;
     for (let page = 1; page <= maxPages; page++) {
-      const res = await this.withAuth(() => this.client.callTool('get_products_productID_feedbacks', {
-        productID: String(productId), pageID: String(page), recPerPage: String(recPerPage),
-      }));
-      if (res.status === 'fail' || !res.data) break;
+      let res;
+      try {
+        res = await this.withAuth(() => this.client.callTool('get_products_productID_feedbacks', {
+          productID: String(productId), pageID: String(page), recPerPage: String(recPerPage),
+        }));
+      } catch (err) {
+        // 认证类失败直接往上抛；只有网络类失败才当作「扫描不完整」。
+        if (err instanceof SkillError) throw err;
+        complete = false;
+        error = `读取反馈列表失败：${err.message}`;
+        break;
+      }
+      if (res.status === 'fail' || !res.data) {
+        complete = false;
+        error = `读取反馈列表失败：${describeFailure(res.data)}`;
+        break;
+      }
       const list = res.data.feedbacks || [];
-      out.push(...list);
+      items.push(...list);
       const pager = res.data.pager || {};
-      if (list.length === 0 || (pager.pageTotal && page >= pager.pageTotal)) break;
+      if (list.length === 0) break;
+      if (pager.pageTotal && page >= pager.pageTotal) break;
+      if (!pager.pageTotal && list.length >= recPerPage) {
+        complete = false;
+        error = '响应未给出总页数，无法确认已覆盖全部反馈';
+        break;
+      }
+      if (page === maxPages) {
+        complete = false;
+        error = `扫描达到 ${maxPages} 页上限，未覆盖该产品的全部反馈`;
+      }
     }
-    return out;
+    return { items, complete, error };
+  }
+  async listFeedbacks(productId, { recPerPage = 100, maxPages = 3 } = {}) {
+    const { items } = await this.scanFeedbacks(productId, { recPerPage, maxPages });
+    return items;
   }
 
   /** 客户端查重：分页拉取 + 标题关键词匹配。 */
   async findDuplicates(productId, title, { threshold = 0.5 } = {}) {
-    const list = await this.listFeedbacks(productId);
-    return list
+    const { items } = await this.scanFeedbacks(productId);
+    return items
       .map((f) => ({ ...f, score: similarity(title, f.title) }))
       .filter((f) => f.score >= threshold)
       .sort((a, b) => b.score - a.score);
@@ -166,77 +202,154 @@ export class FeedbackAssistant {
   }
 
   // ---- 写入 ---------------------------------------------------------
-
+  /** 回读结果是否与本次提交的草稿完全一致：产品、标题、完整描述、opened 流水。 */
+  matchesDraft(detail, { productId, title, desc }) {
+    if (!detail?.found) return false;
+    const fb = detail.feedback || {};
+    if (Number(fb.product) !== Number(productId)) return false;
+    if (!sameTitle(fb.title, title)) return false;
+    if (!sameText(fb.desc, desc)) return false;
+    if (!detail.actions.includes('opened')) return false;
+    return true;
+  }
+  /**
+   * 创建结果不确定时的核实：只认「写入前不存在、现在唯一存在、且回读完全一致」的记录。
+   * 写入前已存在的同名反馈不在候选里——只看同名会把旧记录误当成新建成功。
+   */
+  async recoverCreate({ productId, title, desc, baselineIds, baselineComplete, duplicates }) {
+    if (!baselineComplete) {
+      return {
+        status: 'unknown', reason: 'baseline_incomplete', writes: 1, duplicates,
+        message: '创建未拿到确认，写入前的扫描不完整，无法区分本次新建与既有反馈；未重复创建，请人工核对禅道',
+      };
+    }
+    const after = await this.scanFeedbacks(productId);
+    if (!after.complete) {
+      return {
+        status: 'unknown', reason: 'scan_incomplete', writes: 1, duplicates,
+        message: `创建未拿到确认，复查反馈列表不完整（${after.error || '未知原因'}）；未重复创建，请人工核对禅道`,
+      };
+    }
+    const candidates = after.items.filter(
+      (f) => !baselineIds.has(String(f.id)) && sameTitle(f.title, title),
+    );
+    const verified = [];
+    for (const candidate of candidates) {
+      const detail = await this.readBack(candidate.id);
+      if (this.matchesDraft(detail, { productId, title, desc })) verified.push({ id: candidate.id, detail });
+    }
+    if (verified.length === 1) {
+      return { status: 'created', recovered: true, id: verified[0].id, writes: 1, detail: verified[0].detail, duplicates };
+    }
+    if (verified.length > 1) {
+      return {
+        status: 'ambiguous', reason: 'multiple_candidates', writes: 1, duplicates,
+        candidates: verified.map((v) => v.id),
+        message: `创建未拿到确认，查到 ${verified.length} 条可能本次创建的反馈（${verified.map((v) => `#${v.id}`).join('、')}），无法唯一确认；未重复创建`,
+      };
+    }
+    return {
+      status: 'unknown', reason: 'no_match', writes: 1, duplicates,
+      message: '创建未拿到确认，复查未发现本次写入的新记录，不能断定禅道是否已落库；未重复创建，请人工核对后再决定',
+    };
+  }
   async submit({ title, desc, type, productId }) {
     if (!FEEDBACK_TYPES.includes(type)) throw new SkillError('bad_type', `未知反馈类型：${type}`);
-
-    const duplicates = await this.findDuplicates(productId, title);
+    // 写入前先把该产品的反馈扫一遍：既是查重，也是「本次新建」的 ID 基线。
+    const scan = await this.scanFeedbacks(productId);
+    const duplicates = scan.items
+      .map((f) => ({ ...f, score: similarity(title, f.title) }))
+      .filter((f) => f.score >= 0.5)
+      .sort((a, b) => b.score - a.score);
+    const baselineIds = new Set(scan.items.map((f) => String(f.id)));
     const approved = await this.confirm({ kind: 'submit', draft: { title, desc, type, productId }, duplicates });
     if (!approved) return { status: 'cancelled', writes: 0, duplicates };
-
     let created;
     try {
       created = await this.withAuth(() => this.client.callTool('post_feedbacks', {
         payload: { product: productId, title, desc, type },
       }));
     } catch (err) {
-      if (err?.code === 'auth_failed') throw err;
+      if (err instanceof SkillError) throw err;
       created = { timedOut: true, httpStatus: 0, status: null, data: null };
     }
-
     // 结果不确定：先查后报，绝不重复创建
     if (created.timedOut || created.httpStatus === 0 || created.status === null) {
-      const found = await this.findDuplicates(productId, title, { threshold: 0.99 });
-      if (found.length) {
-        const detail = await this.readBack(found[0].id);
-        return { status: 'created', recovered: true, id: found[0].id, writes: 1, detail, duplicates };
-      }
-      return { status: 'unknown', needsUserDecision: true, writes: 1, duplicates };
+      return await this.recoverCreate({
+        productId, title, desc, baselineIds, baselineComplete: scan.complete, duplicates,
+      });
     }
-
     if (created.status === 'fail') {
       return { status: 'failed', message: describeFailure(created.data), writes: 1, duplicates };
     }
-
     const id = created.data?.id;
+    if (!id) {
+      return { status: 'inconsistent', writes: 1, duplicates, message: '创建响应没有给出反馈 ID，无法回读确认' };
+    }
     const detail = await this.readBack(id);
-    const consistent = detail.found && detail.feedback.title === title && sameText(detail.feedback.desc, desc);
-    if (!consistent) {
+    if (!this.matchesDraft(detail, { productId, title, desc })) {
       return { status: 'inconsistent', id, writes: 1, detail, duplicates };
     }
     return { status: 'created', id, writes: 1, detail, duplicates };
   }
-
   async supplement({ id, addition }) {
     const before = await this.readBack(id);
     if (!before.found) return { status: 'not_found', writes: 0 };
-
-    const original = (before.feedback.desc || '').replace(/\r\n/g, '\n');
+    const original = normalizeNewlines(before.feedback.desc || '');
     const nextDesc = `${original}\n\n${SEPARATOR}\n【补充说明 · ${this.stamp()} · 用户口述，AI 整理】\n${addition}`;
-
     const approved = await this.confirm({ kind: 'supplement', id, original, next: nextDesc });
     if (!approved) return { status: 'cancelled', writes: 0 };
-
-    const updated = await this.withAuth(() => this.client.callTool('put_feedbacks_feedbackID', {
-      feedbackID: String(id),
-      // product 必须是数字：传字符串会被服务端静默忽略，回读才发现没生效。
-      payload: { product: Number(before.feedback.product), title: before.feedback.title, desc: nextDesc },
-    }));
+    // 用户确认后、写入前再读一次：原文被他人改动时停止写入，不覆盖新内容。
+    const recheck = await this.readBack(id);
+    if (!recheck.found) return { status: 'not_found', writes: 0, message: '写入前复核时反馈已不存在' };
+    const current = normalizeNewlines(recheck.feedback.desc || '');
+    const changed =
+      !sameText(current, original)
+      || !sameTitle(recheck.feedback.title, before.feedback.title)
+      || Number(recheck.feedback.product) !== Number(before.feedback.product);
+    if (changed) {
+      return {
+        status: 'conflict', needsUserDecision: true, writes: 0,
+        message: '写入前复核发现该反馈已被他人修改，本次补充未写入；请确认重新合并后的草稿',
+        current: { title: recheck.feedback.title, product: recheck.feedback.product, desc: current },
+      };
+    }
+    const editedBefore = (recheck.actions || []).filter((a) => a === 'edited').length;
+    let updated;
+    try {
+      updated = await this.withAuth(() => this.client.callTool('put_feedbacks_feedbackID', {
+        feedbackID: String(id),
+        // product 必须是数字：传字符串会被服务端静默忽略，回读才发现没生效。
+        payload: { product: Number(before.feedback.product), title: before.feedback.title, desc: nextDesc },
+      }));
+    } catch (err) {
+      if (err instanceof SkillError) throw err;
+      updated = { timedOut: true, httpStatus: 0, status: null, data: null };
+    }
     if (updated.status === 'fail') {
       return { status: 'failed', message: describeFailure(updated.data), writes: 1 };
     }
-
+    const uncertain = updated.timedOut || updated.httpStatus === 0 || updated.status === null;
     const after = await this.readBack(id);
-    const storedDesc = (after.feedback?.desc || '').replace(/\r\n/g, '\n');
-    const kept = after.found && storedDesc.includes(original.trim());
-    const appended = after.found && storedDesc.includes(addition);
-    const edited = after.actions.includes('edited');
-    if (!(kept && appended && edited)) {
-      return { status: 'inconsistent', id, writes: 1, detail: after };
+    const storedDesc = normalizeNewlines(after.feedback?.desc || '');
+    // 完整预期描述归一化后精确比较；流水看本次是否新增 edited，而不是历史上有没有。
+    const descMatched = after.found && sameText(storedDesc, nextDesc);
+    const editedAfter = (after.actions || []).filter((a) => a === 'edited').length;
+    const editedAdded = editedAfter > editedBefore;
+    if (descMatched && editedAdded) {
+      return { status: 'updated', id, writes: 1, detail: after, ...(uncertain ? { recovered: true } : {}) };
     }
-    return { status: 'updated', id, writes: 1, detail: after };
+    if (uncertain) {
+      return {
+        status: 'unknown', reason: 'update_unconfirmed', id, writes: 1, detail: after,
+        message: '更新未拿到确认，已只读核实；未重放更新，请人工核对后再决定',
+      };
+    }
+    return {
+      status: 'inconsistent', id, writes: 1, detail: after,
+      message: descMatched ? '描述已更新，但操作流水没有新增 edited' : '回读描述与本次预期不一致',
+    };
   }
-
   // ---- 解释 ---------------------------------------------------------
 
   /** 事实 / 推断 / 无法确定 三段式。 */

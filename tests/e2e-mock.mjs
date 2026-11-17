@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { startMockServer } from './mock-zentao-mcp.mjs';
 import { McpClient } from './mcp-client.mjs';
 import { FeedbackAssistant } from './skill-flow.mjs';
+import { runLiveE2E, resolveWriteGate } from './e2e-live-flow.mjs';
 
 async function withAssistant(overrides, fn) {
   const server = await startMockServer(overrides);
@@ -211,5 +212,200 @@ test('T18 权限差异：产品列表与写入都受当前账号权限限制', a
     assert.equal(result.status, 'failed');
     assert.match(result.message, /Product does not exist/);
     assert.equal(calls('post_feedbacks').length, 1);
+  });
+});
+// ---- Issue #4：写入安全与回读一致性 ---------------------------------------
+test('T19 写入前已存在的同名反馈 + 写入超时未落库：不得误报 created', async () => {
+  await withAssistant({}, async ({ client, state, calls }) => {
+    const draft = { ...DRAFT, title: '旧同名反馈 __TIMEOUT_GHOST__ 设备导出无响应' };
+    // 写入前就存在一条标题与描述完全相同的反馈：只看「同名 + 已落库」会把它误当成新建成功
+    state.feedbacks.set('100', {
+      id: 100, product: PRODUCT_ID, title: draft.title, desc: draft.desc, type: 'bug', status: 'wait',
+      assignedTo: '', feedbackBy: 'mock', actions: [{ action: 'opened', actor: 'mock', comment: '', date: '2026-03-04 09:00' }],
+    });
+    const assistant = new FeedbackAssistant({ client, confirm: async () => true });
+    const result = await assistant.submit(draft);
+    assert.notEqual(result.status, 'created', '写入前已存在的同名反馈不得被当成新建成功');
+    assert.equal(result.status, 'unknown');
+    assert.equal(result.reason, 'no_match');
+    assert.equal(calls('post_feedbacks').length, 1, '不得重复创建');
+    assert.equal(state.feedbacks.size, 1, '不得产生新记录');
+  });
+});
+test('T20 真正的写入超时且已落库：按新增 ID 唯一恢复', async () => {
+  await withAssistant({}, async ({ client, state, calls }) => {
+    const assistant = new FeedbackAssistant({ client, confirm: async () => true });
+    const result = await assistant.submit({ ...DRAFT, title: '超时场景 __TIMEOUT__ 设备导出无响应' });
+    assert.equal(result.status, 'created');
+    assert.equal(result.recovered, true, '应通过查询核实到已创建');
+    assert.equal(String(result.id), '900', '恢复出的应是本次新增的 ID，而不是写入前已有的记录');
+    assert.equal(result.detail.feedback.desc, DRAFT.desc, '恢复出的记录描述必须与本次提交的完整描述一致');
+    assert.ok(result.detail.actions.includes('opened'));
+    assert.equal(calls('post_feedbacks').length, 1, '不得重复创建');
+    assert.equal(state.feedbacks.size, 1);
+  });
+});
+test('T21 返回成功但操作流水没有 opened：不能报成功', async () => {
+  await withAssistant({}, async ({ client, calls }) => {
+    const assistant = new FeedbackAssistant({ client, confirm: async () => true });
+    const result = await assistant.submit({ ...DRAFT, title: '无 opened 流水 __NO_OPENED__ 场景' });
+    assert.equal(result.status, 'inconsistent');
+    assert.ok(!result.detail.actions.includes('opened'));
+    assert.equal(calls('post_feedbacks').length, 1);
+  });
+});
+test('T22 返回成功但描述被服务端改写：不能报成功', async () => {
+  await withAssistant({}, async ({ client, calls }) => {
+    const assistant = new FeedbackAssistant({ client, confirm: async () => true });
+    const result = await assistant.submit({ ...DRAFT, title: '描述被改写 __ALTERED_DESC__ 场景' });
+    assert.equal(result.status, 'inconsistent');
+    assert.notEqual(result.detail.feedback.desc, DRAFT.desc);
+    assert.equal(calls('post_feedbacks').length, 1);
+  });
+});
+test('T23 补充说明前出现并发修改：停止写入，不覆盖新原文', async () => {
+  await withAssistant({}, async ({ client, state, calls }) => {
+    const assistant = new FeedbackAssistant({ client, confirm: async () => true });
+    const created = await assistant.submit(DRAFT);
+    const concurrentDesc = '他人先改的原文：已补充新的复现信息';
+    const concurrent = new FeedbackAssistant({
+      client,
+      // 用户确认之后、写入之前，别人改了同一条反馈
+      confirm: async () => {
+        state.feedbacks.get(String(created.id)).desc = concurrentDesc;
+        return true;
+      },
+    });
+    const result = await concurrent.supplement({ id: created.id, addition: '补充：必须先选中至少一行设备。' });
+    assert.equal(result.status, 'conflict');
+    assert.equal(result.writes, 0);
+    assert.equal(result.needsUserDecision, true);
+    assert.equal(calls('put_feedbacks_feedbackID').length, 0, '发现并发修改时不得写入');
+    assert.equal(state.feedbacks.get(String(created.id)).desc, concurrentDesc, '不得覆盖他人刚写入的原文');
+  });
+});
+test('T24 历史已有 edited 且原文已含追加内容，本次更新未生效：不能报成功', async () => {
+  await withAssistant({}, async ({ client, state, calls }) => {
+    const addition = '补充：这次没有生效。';
+    state.feedbacks.set('200', {
+      id: 200, product: PRODUCT_ID, title: '更新未生效 __NOOP_UPDATE__ 场景', desc: `原始描述\n\n${addition}`, type: 'bug', status: 'wait',
+      assignedTo: '', feedbackBy: 'mock',
+      actions: [
+        { action: 'opened', actor: 'mock', comment: '', date: '2026-03-04 09:00' },
+        { action: 'edited', actor: 'mock', comment: '', date: '2026-03-05 10:00' },
+      ],
+    });
+    const assistant = new FeedbackAssistant({ client, confirm: async () => true });
+    const result = await assistant.supplement({ id: 200, addition });
+    assert.equal(result.status, 'inconsistent');
+    assert.equal(state.feedbacks.get('200').desc, `原始描述\n\n${addition}`, '未生效时描述不得变化');
+    const detail = await assistant.readBack(200);
+    assert.equal(detail.actions.filter((a) => a === 'edited').length, 1, '不得新增 edited 流水');
+    assert.equal(calls('put_feedbacks_feedbackID').length, 1);
+  });
+});
+test('T25 历史已有 edited，本次更新新增了 edited：可以报成功', async () => {
+  await withAssistant({}, async ({ client, state, calls }) => {
+    state.feedbacks.set('201', {
+      id: 201, product: PRODUCT_ID, title: '历史已编辑过 场景', desc: '原始描述', type: 'bug', status: 'wait',
+      assignedTo: '', feedbackBy: 'mock',
+      actions: [
+        { action: 'opened', actor: 'mock', comment: '', date: '2026-03-04 09:00' },
+        { action: 'edited', actor: 'mock', comment: '', date: '2026-03-05 10:00' },
+      ],
+    });
+    const assistant = new FeedbackAssistant({ client, confirm: async () => true });
+    const result = await assistant.supplement({ id: 201, addition: '补充：这次生效了。' });
+    assert.equal(result.status, 'updated');
+    const detail = await assistant.readBack(201);
+    assert.equal(detail.actions.filter((a) => a === 'edited').length, 2, '本次应新增一条 edited 流水');
+  });
+});
+// ---- Issue #4：真实 E2E 的写入保护（全部在 mock MCP 上验证，不碰真实禅道） ----
+const LIVE_ENV = {
+  ZENTAO_E2E_ALLOW_WRITE: '1',
+  ZENTAO_E2E_PRODUCT: '101',
+  ZENTAO_E2E_ALLOWED_PRODUCTS: '101',
+};
+test('L01 默认只读：没有写入开关时不产生任何写入', async () => {
+  await withAssistant({}, async ({ client, state, calls }) => {
+    const result = await runLiveE2E({
+      client,
+      env: { ZENTAO_E2E_PRODUCT: '101', ZENTAO_E2E_ALLOWED_PRODUCTS: '101' },
+    });
+    assert.equal(result.exitCode, 0, '只读验证应通过');
+    assert.equal(calls('post_feedbacks').length, 0, '未开启写入开关时不得写入');
+    assert.equal(state.feedbacks.size, 0);
+  });
+});
+test('L02 写入闸门缺一不可：缺允许清单时不得写入', async () => {
+  await withAssistant({}, async ({ client, calls }) => {
+    const env = { ZENTAO_E2E_ALLOW_WRITE: '1', ZENTAO_E2E_PRODUCT: '101' };
+    assert.equal(resolveWriteGate(env).allowed, false);
+    const result = await runLiveE2E({ client, env });
+    assert.notEqual(result.exitCode, 0, '声明了写入意图但条件不满足，不得误报整体通过');
+    assert.equal(calls('post_feedbacks').length, 0, '不得写入');
+  });
+});
+test('L03 目标产品不在允许清单：不得写入', async () => {
+  await withAssistant({}, async ({ client, calls }) => {
+    const env = { ...LIVE_ENV, ZENTAO_E2E_ALLOWED_PRODUCTS: '102' };
+    const result = await runLiveE2E({ client, env });
+    assert.notEqual(result.exitCode, 0, '产品不在白名单时不得误报整体通过');
+    assert.equal(calls('post_feedbacks').length, 0, '不得写入');
+  });
+});
+test('L04 目标产品不存在：前置自检失败，不得写入', async () => {
+  await withAssistant({}, async ({ client, calls }) => {
+    const env = { ...LIVE_ENV, ZENTAO_E2E_PRODUCT: '999', ZENTAO_E2E_ALLOWED_PRODUCTS: '999' };
+    const result = await runLiveE2E({ client, env });
+    assert.notEqual(result.exitCode, 0, '目标产品不存在时不得误报整体通过');
+    assert.equal(calls('post_feedbacks').length, 0, '前置自检失败不得写入');
+  });
+});
+test('L05 清理失败：整体不通过，并报告记录仍存在', async () => {
+  await withAssistant({ deleteFails: true }, async ({ client, state, calls }) => {
+    const result = await runLiveE2E({ client, env: LIVE_ENV });
+    assert.notEqual(result.exitCode, 0, '清理失败不得误报整体通过');
+    assert.equal(calls('post_feedbacks').length, 1, '写入只发生一次');
+    assert.equal(state.feedbacks.size, 1, '清理失败时记录应仍在，需人工处理');
+    assert.ok(result.steps.some((s) => !s.ok && s.name.includes('清理')), '应报告清理失败');
+  });
+});
+test('L06 创建超时且未落库：报告未确认、只调用一次创建', async () => {
+  await withAssistant({ createHang: 'ghost' }, async ({ client, state, calls }) => {
+    const result = await runLiveE2E({ client, env: LIVE_ENV });
+    assert.notEqual(result.exitCode, 0, '创建结果不确定时不得误报整体通过');
+    assert.equal(calls('post_feedbacks').length, 1, '不得重复创建');
+    assert.equal(state.feedbacks.size, 0, '未落库时不应产生记录');
+    assert.ok(result.steps.some((s) => !s.ok && s.name.includes('创建结果确认')), '应报告创建结果未确认');
+  });
+});
+test('L07 创建超时且已落库：按唯一标识查到残留、报告并清理', async () => {
+  await withAssistant({ createHang: 'persist' }, async ({ client, state, calls }) => {
+    const result = await runLiveE2E({ client, env: LIVE_ENV });
+    assert.notEqual(result.exitCode, 0, '有残留风险时必须以非零退出码结束');
+    assert.equal(calls('post_feedbacks').length, 1, '不得重复创建');
+    const residualStep = result.steps.find((s) => s.name.includes('创建结果确认'));
+    assert.ok(residualStep && !residualStep.ok, '应报告残留风险');
+    assert.match(residualStep.detail, /残留记录/, '应列出可能残留的记录');
+    assert.equal(state.feedbacks.size, 0, '标识匹配的记录应被清理');
+  });
+});
+test('L08 写入与清理全部成功：整体通过，且不残留记录', async () => {
+  await withAssistant({}, async ({ client, state, calls }) => {
+    const result = await runLiveE2E({ client, env: LIVE_ENV });
+    assert.equal(result.exitCode, 0, `整体应通过：${JSON.stringify(result.steps.filter((s) => !s.ok))}`);
+    assert.equal(calls('post_feedbacks').length, 1);
+    assert.equal(calls('delete_feedbacks_feedbackID').length, 1, '只清理本次创建的记录');
+    assert.equal(state.feedbacks.size, 0, '不得残留测试记录');
+  });
+});
+test('L09 前置自检读不到反馈：中止写入，整体不通过', async () => {
+  await withAssistant({ visibleProducts: { mock: [] } }, async ({ client, calls }) => {
+    const result = await runLiveE2E({ client, env: LIVE_ENV });
+    assert.notEqual(result.exitCode, 0, '前置自检失败不得误报整体通过');
+    assert.equal(calls('post_feedbacks').length, 0, '前置自检失败不得写入');
+    assert.ok(result.steps.some((s) => !s.ok && s.name.includes('前置自检')), '应报告前置自检失败');
   });
 });
