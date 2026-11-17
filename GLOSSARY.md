@@ -68,9 +68,9 @@ _Avoid_: 正单、正式工单
 运行 agent 并加载技能的客户端（pi、Claude Code、网页版聊天等）。
 _Avoid_: 客户端、平台
 
-**通用技能目录**：
-跨宿主通用的技能安装位置（`~/.agents/skills/`，Windows 为 `%USERPROFILE%\.agents\skills\`）。
-_Avoid_: 全局技能目录、共享技能目录
+**技能目录**：
+宿主加载技能的位置。Claude Code 是 `~/.claude/skills/`，pi 是 `~/.agents/skills/`。同一个技能目录名（如 `rh-product-feedback/`）在两处都能用，区别只在放哪里。
+_Avoid_: 通用技能目录（各宿主的目录并不通用）、全局技能目录、共享技能目录
 
 **主宿主**：
 我们优先做到零配置的那一个宿主。

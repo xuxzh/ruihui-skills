@@ -31,7 +31,7 @@
 > 这条命令你在终端跑一下就行，地址会自己从技能包里读：
 
 ```bash
-bash ~/.agents/skills/rh-product-feedback/scripts/connect.sh
+bash ~/.claude/skills/rh-product-feedback/scripts/connect.sh
 ```
 
 随后给出凭据写入命令（**由用户自己执行**，不在对话里要密码）：
@@ -39,7 +39,7 @@ bash ~/.agents/skills/rh-product-feedback/scripts/connect.sh
 > 再麻烦你跑一条，把你自己的禅道账号和令牌写进去（令牌在禅道「个人 → 令牌」里生成）：
 
 ```bash
-bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
+bash ~/.claude/skills/rh-product-feedback/scripts/set-credentials.sh
 ```
 
 用户写完**不需要再回一句「好了」**——下一句说业务诉求即可，agent 会自己登录、自检，然后直接进入收集要素。自检通过时不插入额外的「自检报告 → 等确认」往返。

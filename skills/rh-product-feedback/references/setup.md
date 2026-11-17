@@ -4,41 +4,54 @@
 
 ## 业务用户：三步
 
-### 1. 把技能包放进通用技能目录
+### 1. 把技能包放进你用的宿主的技能目录
 
-通用技能目录是 `~/.agents/skills/`（Windows：`%USERPROFILE%\.agents\skills\`），大多数 Agent 宿主都能从这里加载技能。
+各宿主的技能目录不一样，先看你用哪个：
 
-管理员分发的是一个自洽的 `rh-product-feedback` 目录，**整个目录**复制进去：
+| 宿主 | 技能目录（macOS / Linux） | Windows |
+| --- | --- | --- |
+| Claude Code（主宿主） | `~/.claude/skills/` | `%USERPROFILE%\.claude\skills\` |
+| pi（次宿主） | `~/.agents/skills/` | `%USERPROFILE%\.agents\skills\` |
 
-macOS / Linux：
+同一个 `rh-product-feedback` 目录在两处都能用，区别只在放哪里。**装错了宿主就发现不了技能。**
+
+管理员分发的是一个自洽的 `rh-product-feedback` 目录，**整个目录**复制进去。
+
+Claude Code：
+
+```bash
+mkdir -p ~/.claude/skills && cp -R <解压目录>/rh-product-feedback ~/.claude/skills/
+```
+
+```powershell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills" | Out-Null
+Copy-Item -Recurse "<解压目录>\rh-product-feedback" "$env:USERPROFILE\.claude\skills\"
+```
+
+pi：
 
 ```bash
 mkdir -p ~/.agents/skills && cp -R <解压目录>/rh-product-feedback ~/.agents/skills/
 ```
 
-Windows（PowerShell）：
-
-```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills" | Out-Null
-Copy-Item -Recurse "<解压目录>\rh-product-feedback" "$env:USERPROFILE\.agents\skills\"
-```
-
 复制完目录里应该有 `SKILL.md`、`references/`、`config.local.json`、`scripts/`。少了 `config.local.json` 说明拿到的是不含内网配置的公开版，找管理员要内网版。
+
+装完先确认宿主能发现它：在 Agent 里问一句「你的技能列表里有没有 rh-product-feedback」，**有**才继续下一步；没有就是目录放错了（或宿主还没重载）。
 
 ### 2. 对 Agent 说「帮我连上禅道」
 
 Agent 会读技能包里的 `config.local.json`（内网地址写死在里面），把禅道 MCP 登记到你的宿主，然后告诉你需要重开宿主。地址不回显，你也不用填 IP。
 
-宿主不让 Agent 改配置时，改用随包脚本——它自己从 `config.local.json` 读地址，地址不会出现在对话里：
+宿主不让 Agent 改配置时，改用随包脚本——它自己从 `config.local.json` 读地址，地址不会出现在对话里（路径按你装的宿主换）：
 
 ```bash
-# macOS / Linux
-bash ~/.agents/skills/rh-product-feedback/scripts/connect.sh
+# Claude Code
+bash ~/.claude/skills/rh-product-feedback/scripts/connect.sh
 ```
 
 ```powershell
 # Windows（PowerShell）
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.agents\skills\rh-product-feedback\scripts\connect.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-product-feedback\scripts\connect.ps1"
 ```
 
 ### 3. 写入你自己的禅道凭据
@@ -46,13 +59,13 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.agents\skills\rh-pro
 Agent 会给你一条命令，**你自己在终端执行**，输入禅道账号和令牌（禅道「个人 → 令牌」生成；没有就用密码）。
 
 ```bash
-# macOS / Linux
-bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
+# Claude Code
+bash ~/.claude/skills/rh-product-feedback/scripts/set-credentials.sh
 ```
 
 ```powershell
 # Windows（PowerShell）
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.agents\skills\rh-product-feedback\scripts\set-credentials.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-product-feedback\scripts\set-credentials.ps1"
 ```
 
 脚本交互式输入、令牌不回显，凭据落在你自己机器上、只有你能读。
@@ -116,7 +129,7 @@ MCP server 名为 `zentao`，类型是 Streamable HTTP，地址取自 `config.lo
 手工命令（地址从 `config.local.json` 取，不在对话里出现）：
 
 ```bash
-bash ~/.agents/skills/rh-product-feedback/scripts/connect.sh
+bash ~/.claude/skills/rh-product-feedback/scripts/connect.sh
 ```
 
 ### pi（次宿主）
@@ -167,7 +180,7 @@ node scripts/build-internal-package.mjs
 | 渠道 | 用户侧动作 |
 | --- | --- |
 | 内网 Git 仓库 | `git clone` 后复制目录 |
-| NAS / 内网对象存储 / 共享盘 | 下载压缩包 → 解压进通用技能目录 |
+| NAS / 内网对象存储 / 共享盘 | 下载压缩包 → 解压进对应宿主的技能目录 |
 | 公司软件中心 / 应用市场 | 在软件中心点安装 |
 | 终端管理（Intune / 域策略 / MDM） | 无需操作，机器上已有 |
 

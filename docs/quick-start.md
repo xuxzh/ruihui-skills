@@ -4,22 +4,33 @@
 
 ## 第 1 步：把技能包放进技能目录
 
-技能目录是 `~/.agents/skills/`（Windows：`%USERPROFILE%\.agents\skills\`）。管理员发你的压缩包解压后，里面有一个 `rh-product-feedback` 目录，**整个目录**复制进去。
+不同宿主的技能目录不一样，先看你用哪个：
 
-macOS / Linux：
+| 你用的 | 装到这里（macOS / Linux） | Windows |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/` | `%USERPROFILE%\.claude\skills\` |
+| pi | `~/.agents/skills/` | `%USERPROFILE%\.agents\skills\` |
+
+管理员发你的压缩包解压后，里面有一个 `rh-product-feedback` 目录，**整个目录**复制进去。
+
+Claude Code（macOS / Linux）：
 
 ```bash
-mkdir -p ~/.agents/skills && cp -R <解压目录>/rh-product-feedback ~/.agents/skills/
+mkdir -p ~/.claude/skills && cp -R <解压目录>/rh-product-feedback ~/.claude/skills/
 ```
 
 Windows（PowerShell）：
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills" | Out-Null
-Copy-Item -Recurse "<解压目录>\rh-product-feedback" "$env:USERPROFILE\.agents\skills\"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills" | Out-Null
+Copy-Item -Recurse "<解压目录>\rh-product-feedback" "$env:USERPROFILE\.claude\skills\"
 ```
 
+用 pi 的话，把上面的 `.claude` 换成 `.agents`。
+
 复制完检查一下：目录里应该有 `SKILL.md`、`references/`、`config.local.json`、`scripts/` 四个。少了 `config.local.json`，说明拿到的是不含内网地址的公开版，找管理员要内网版。
+
+**再确认一下宿主能发现它**：在 Agent 里问一句「你的技能列表里有没有 rh-product-feedback」。回答「没有」就是目录放错了（Claude Code 要放 `.claude/skills`，不是 `.agents/skills`），改完重开一次宿主。
 
 ## 第 2 步：对 Agent 说「帮我连上禅道」
 
@@ -38,14 +49,16 @@ Agent 会给你一条命令，**你在自己的终端里执行**，输入禅道�
 macOS / Linux：
 
 ```bash
-bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
+bash ~/.claude/skills/rh-product-feedback/scripts/set-credentials.sh
 ```
 
 Windows（PowerShell）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.agents\skills\rh-product-feedback\scripts\set-credentials.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-product-feedback\scripts\set-credentials.ps1"
 ```
+
+用 pi 的话，把路径里的 `.claude` 换成 `.agents`。
 
 令牌输入时不回显，文件只有你自己能读。
 
@@ -93,7 +106,7 @@ Agent 会依次做这些事：补齐缺的信息 → 确认属于哪个产品 �
 
 | 你看到的 | 原因 | 怎么办 |
 | --- | --- | --- |
-| Agent 说找不到这个技能 | 技能目录没放对，或宿主没重新加载 | 检查第 1 步的目录名；Claude Code 重开一次 |
+| Agent 说找不到这个技能 | 技能目录没放对，或宿主没重新加载 | 检查第 1 步：Claude Code 要放 `~/.claude/skills/`（不是 `.agents/skills`）；放对后重开一次宿主 |
 | Agent 说这是不含内网的公开版 | 复制到的包里没有 `config.local.json` | 找管理员拿内网版技能包 |
 | Agent 说禅道连不上 | 宿主没重开，或内网不通 | 先重开宿主；还不行就找管理员看内网地址 |
 | Agent 说凭据没设置 | 第 3 步的命令还没跑 | 跑一次凭据命令，然后直接说要提什么 |

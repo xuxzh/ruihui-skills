@@ -12,7 +12,7 @@
 
 完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的命令、三个示例和常见问题。三步概览：
 
-1. **把技能包放进技能目录**：把管理员发的 `rh-product-feedback` 整个目录复制到 `~/.agents/skills/`（Windows：`%USERPROFILE%\.agents\skills\`）。
+1. **把技能包放进技能目录**：Claude Code 放 `~/.claude/skills/`，pi 放 `~/.agents/skills/`（Windows 对应 `%USERPROFILE%\.claude\skills\` 与 `.agents\skills\`）——把管理员发的 `rh-product-feedback` 整个目录复制进去。
 2. **对 Agent 说「帮我连上禅道」**：Agent 自己从技能包里读出地址并登记禅道 MCP，**你不用填 IP，也不用改配置文件**；登记完重开一次宿主。
 3. **写入你自己的禅道凭据**：Agent 给你一条命令，**你自己在终端执行**，输入禅道账号和令牌。凭据落在你自己机器上，**Agent 不会展示或外传它**——但会话登录模式下它需要读取这个文件去登录，令牌会进入本次会话上下文，所以优先用可单独撤销的禅道令牌，而不是账号密码。
 
@@ -57,8 +57,8 @@ npx skills add xuxzh/ruihui-skills --all
 把技能目录复制到你的 Agent 的技能目录即可：
 
 ```bash
-cp -r skills/rh-product-feedback ~/.agents/skills/      # 通用
 cp -r skills/rh-product-feedback ~/.claude/skills/      # Claude Code
+cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 ```
 
 ## 使用
