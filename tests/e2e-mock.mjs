@@ -41,7 +41,7 @@ test('T05 查重命中相似反馈时给出候选，并可选择新建', async (
   await withAssistant({}, async ({ client, state, calls }) => {
     state.feedbacks.set('100', {
       id: 100, product: PRODUCT_ID, title: '设备列表导出无响应', desc: '', type: 'bug', status: 'wait',
-      assignedTo: '', feedbackBy: 'shared-service-account', actions: [{ action: 'opened', actor: 'shared-service-account', comment: '', date: '2026-03-04 09:00' }],
+      assignedTo: '', feedbackBy: 'mock', actions: [{ action: 'opened', actor: 'mock', comment: '', date: '2026-03-04 09:00' }],
     });
     let seen = null;
     const assistant = new FeedbackAssistant({
@@ -171,11 +171,45 @@ test('T07/T08/T09 查询与解释：事实、推断、无法确定分段', async
   });
 });
 
-test('T15 共享账号：反馈提交人不是终端用户', async () => {
+test('T15 每用户账号：反馈留痕在当前登录账号上', async () => {
   await withAssistant({}, async ({ client, state }) => {
     const assistant = new FeedbackAssistant({ client, confirm: async () => true });
     const created = await assistant.submit(DRAFT);
     const fb = state.feedbacks.get(String(created.id));
-    assert.equal(fb.feedbackBy, 'shared-service-account', '记录留痕在共享服务账号上');
+    assert.equal(fb.feedbackBy, 'mock', '记录留痕在当前登录账号上');
+  });
+});
+
+test('T16 MCP 未注册：给安装指引，不给原始错误', async () => {
+  await withAssistant({ hideTools: true }, async ({ client, calls }) => {
+    const assistant = new FeedbackAssistant({ client, confirm: async () => true });
+    await assert.rejects(
+      () => assistant.ensureEnvironment(),
+      (err) => err.code === 'mcp_not_configured' && /setup\.md/.test(err.message) && /config\.local\.json/.test(err.message),
+    );
+    assert.equal(calls('post_feedbacks').length, 0, '未注册时不得写入');
+  });
+});
+
+test('T17 未认证：给凭据写入指引，不在对话里索要密码', async () => {
+  await withAssistant({}, async ({ client, calls }) => {
+    const assistant = new FeedbackAssistant({ client, confirm: async () => true, credentials: null });
+    await assert.rejects(
+      () => assistant.submit(DRAFT),
+      (err) => err.code === 'not_authenticated' && /setup\.md/.test(err.message),
+    );
+    assert.equal(calls('post_feedbacks').length, 0, '未认证不得写入');
+  });
+});
+
+test('T18 权限差异：产品列表与写入都受当前账号权限限制', async () => {
+  await withAssistant({ visibleProducts: { mock: [101] } }, async ({ client, calls }) => {
+    const assistant = new FeedbackAssistant({ client, confirm: async () => true });
+    const products = await assistant.listProducts();
+    assert.deepEqual(products.map((p) => p.id), [101], '只应看到有权限的产品');
+    const result = await assistant.submit({ ...DRAFT, productId: 102 });
+    assert.equal(result.status, 'failed');
+    assert.match(result.message, /Product does not exist/);
+    assert.equal(calls('post_feedbacks').length, 1);
   });
 });

@@ -8,9 +8,10 @@
 - 接入方式：Streamable HTTP MCP（HTTP POST + SSE 响应）。
 - 工具名前缀随宿主而异：有的宿主暴露 `post_feedbacks`，有的暴露 `mcp__zentao__post_feedbacks`。用宿主实际暴露的名字。
 - **每个会话先登录一次**：`post_users_login`，参数包在 `payload` 内 `{"payload": {"account": "...", "password": "..."}}`。
-  - 服务端配置了账号时，会做服务端占位符替换：传任意账号口令都返回服务端账号的 token。此时不要向用户索要凭据。
+  - 账号是**用户本人的禅道账号**，凭据来自本机接入凭据文件（见 [setup.md](setup.md)）；不要在对话里索要密码或令牌。
   - 未登录时所有数据调用返回 **HTTP 401**。
-  - 该账号 `admin=false`（普通用户权限），且**无法切换成对话中的终端用户**——所有工具入参都没有 `user` / `account` 参数。
+  - 登录返回的 `user` 是该账号本人；所有工具入参都没有 `user` / `account` 参数——**当前会话的身份在登录时确定，之后所有操作都以它进行**。
+  - 账号通常是 `admin=false` 的普通用户权限：可见的产品、项目、反馈因人而异，见下文「权限随账号」。
 
 ## 参数包装：`payload` 不可省
 
@@ -48,7 +49,7 @@
 | `id` / `title` / `desc` | 编号、标题、描述正文（`desc` 回读时换行是 `\r\n`） |
 | `product` | 所属产品 ID（回读是字符串形式，更新时要转成数字） |
 | `status` / `subStatus` | 状态与子状态（新建反馈为 `wait`） |
-| `feedbackBy` | 反馈者（共享服务账号模式下即服务账号） |
+| `feedbackBy` | 反馈者：当前登录账号本人 |
 | `assignedTo` | 负责人（未指派时为空） |
 | `processedBy` / `processedDate` | 处理人、处理时间 |
 | `reviewedBy` / `reviewedDate` | 评审人、评审时间 |
@@ -74,7 +75,7 @@
 
 本技能只使用三个：`bug`（Bug）、`story`（需求）、`advice`（建议）。
 
-`get_products_productID_feedbacks` 的 `browseType` 可选：`wait`、`doing`、`toclosed`、`review`、`assigntome`、`openedbyme`。查重时用默认范围（不传）以覆盖全部反馈；`openedbyme` 指的是**共享服务账号**提交的记录，不是终端用户的。
+`get_products_productID_feedbacks` 的 `browseType` 可选：`wait`、`doing`、`toclosed`、`review`、`assigntome`、`openedbyme`。查重时用默认范围（不传）以覆盖全部反馈；`openedbyme` 指的是**当前登录账号**本人提交的记录。
 
 ## 已知限制（实测结论）
 
@@ -87,7 +88,8 @@
 | 状态流转可能静默 no-op | 反馈 `activate` 返回「保存成功」但状态与 `actions` 无变化 | 补充说明不使用流转接口；任何写入都回读校验 |
 | 枚举几乎不校验 | `openedBuild`、`resolution` 传任意字符串都「保存成功」并入库 | 本技能不写这两类字段；需要归属字段时先与用户确认 |
 | Schema 与运行时不一致 | `post_stories` 的 `reviewer`、`post_tickets` 的 `module` 实际必填；`post_requirements` 不返回 `id` | 不按 Schema 判断字段存在与否；关键字段按运行时读取 |
-| 共享服务账号 | 无法按终端用户过滤，审计留痕在服务账号上 | 明确说明身份边界，不把结果说成个人工单 |
+| 权限随账号 | 每个用户用自己的账号登录，能看到的产品、项目、反馈都不同；看不见不等于不存在 | 只在可见范围内选品与查重，如实说明覆盖范围；用户提到的产品不可见时提示找管理员开权限 |
+| 登录失败会锁号 | 连续登录失败可能触发禅道账号锁定 | 登录失败只重试一次就停，不反复试；提示用户去禅道解锁 |
 | 无「反馈转 Bug/需求」工具 | `post_bugs` 的 `payload` 不接收来源反馈 ID | 反馈优先：先建反馈单，转正式单据由人评审后决定 |
 
 ## Bug 不要用统一 issue 视图

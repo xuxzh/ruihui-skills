@@ -70,7 +70,29 @@ export class FeedbackAssistant {
 
   // ---- 会话与认证 -------------------------------------------------
 
+  /**
+   * 环境自检：宿主里必须已经注册禅道 MCP。
+   * 未注册时给出的是「照 setup.md 引导安装」的指引，不是让用户自己去填地址。
+   */
+  async ensureEnvironment() {
+    let tools = [];
+    try {
+      tools = await this.client.toolsList();
+    } catch {
+      throw new SkillError('mcp_unreachable', '连不上禅道 MCP：检查网络与内网地址（地址在技能包的 config.local.json 里），不要向用户索要地址。');
+    }
+    const hasZentao = tools.some((t) => /post_users_login|post_feedbacks/.test(t.name || ''));
+    if (!hasZentao) {
+      throw new SkillError('mcp_not_configured', '禅道 MCP 未注册：按 references/setup.md 引导安装——读 config.local.json 的地址 → 按宿主登记 MCP → 请用户自己写入凭据；不要向用户索要地址、账号或密码。');
+    }
+    return tools;
+  }
+
   async login() {
+    if (!this.credentials || !this.credentials.account) {
+      this.loggedIn = false;
+      throw new SkillError('not_authenticated', '本机没有禅道接入凭据：请用户自己运行 references/setup.md 里的凭据写入命令，不要在对话里索要密码或令牌。');
+    }
     const res = await this.client.callTool('post_users_login', { payload: { ...this.credentials } });
     if (res.status === 'fail' || res.httpStatus === 401) {
       this.loggedIn = false;
@@ -95,6 +117,13 @@ export class FeedbackAssistant {
   }
 
   // ---- 只读 ---------------------------------------------------------
+
+  /** 当前账号可见的产品：后续选产品的候选范围。 */
+  async listProducts() {
+    const res = await this.withAuth(() => this.client.callTool('get_products', { pageID: '1', recPerPage: '100' }));
+    if (res.status === 'fail' || !res.data) return [];
+    return res.data.products || [];
+  }
 
   async listFeedbacks(productId, { recPerPage = 100, maxPages = 3 } = {}) {
     const out = [];

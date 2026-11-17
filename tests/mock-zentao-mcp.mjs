@@ -27,6 +27,10 @@ export function createMockState(overrides = {}) {
     calls: [],
     sessions: new Map(),
     loginFails: false,
+    // 登录账号 → 可见产品 ID 列表；不设则全部可见
+    visibleProducts: null,
+    // tools/list 返回空数组，模拟「宿主里没注册禅道 MCP」
+    hideTools: false,
     ...overrides,
   };
 }
@@ -57,23 +61,40 @@ function feedbackView(fb) {
   return { ...fb, actions: fb.actions.map((a) => ({ ...a })) };
 }
 
+/** 当前登录账号可见的产品；state.visibleProducts 为空时全部可见。 */
+function visibleProducts(state, session) {
+  if (!state.visibleProducts) return MOCK_PRODUCTS;
+  const ids = state.visibleProducts[session.account] ?? [];
+  return MOCK_PRODUCTS.filter((p) => ids.includes(p.id));
+}
+
+/** 产品对当前账号不可见时，禅道侧表现为「不存在」。 */
+function productVisible(state, session, productId) {
+  return visibleProducts(state, session).some((p) => p.id === Number(productId));
+}
+
 function handleToolCall(state, session, name, args) {
   state.calls.push({ name, args });
 
   if (name === 'post_users_login') {
     if (state.loginFails) return { payload: { message: '账号或密码错误', status: 'fail' } };
     session.loggedIn = true;
-    return { payload: { status: 'success', token: '{{SECRET_mock}}', user: { account: 'shared-service-account', admin: false } } };
+    session.account = args?.payload?.account || 'unknown';
+    return { payload: { status: 'success', token: '{{SECRET_mock}}', user: { account: session.account, admin: false } } };
   }
 
   if (!session.loggedIn) return { httpStatus: 401, payload: { message: 'Unauthorized', status: 'fail' } };
 
   if (name === 'get_products') {
-    return { payload: { pager: { recTotal: MOCK_PRODUCTS.length, pageTotal: 1, pageID: 1, recPerPage: 20 }, products: MOCK_PRODUCTS } };
+    const products = visibleProducts(state, session);
+    return { payload: { pager: { recTotal: products.length, pageTotal: 1, pageID: 1, recPerPage: 20 }, products } };
   }
 
   if (name === 'get_products_productID_feedbacks') {
     const productID = Number(args.productID);
+    if (!productVisible(state, session, productID)) {
+      return { payload: { message: 'Product does not exist.', status: 'fail' } };
+    }
     const list = [...state.feedbacks.values()].filter((f) => f.product === productID);
     return { payload: { pager: { recTotal: list.length, pageTotal: 1, pageID: 1, recPerPage: list.length || 20 }, feedbacks: list.map(feedbackView) } };
   }
@@ -96,6 +117,9 @@ function handleToolCall(state, session, name, args) {
     if (!payload.product) {
       return { payload: { message: { product: ['『所属产品』不能为空。'] }, status: 'fail' } };
     }
+    if (!productVisible(state, session, payload.product)) {
+      return { payload: { message: 'Product does not exist.', status: 'fail' } };
+    }
     if (payload.title.includes('__FAIL__')) {
       return { payload: { message: 'Product does not exist.', status: 'fail' } };
     }
@@ -108,7 +132,7 @@ function handleToolCall(state, session, name, args) {
       // 行为 6：已落库但不返回响应
       state.feedbacks.set(String(id), {
         id, product: payload.product, title: payload.title, desc: payload.desc || '', type: payload.type || '',
-        status: 'wait', assignedTo: '', feedbackBy: 'shared-service-account', actions: [{ action: 'opened', actor: 'shared-service-account', comment: '', date: '2026-03-11 10:22' }],
+        status: 'wait', assignedTo: '', feedbackBy: session.account, actions: [{ action: 'opened', actor: session.account, comment: '', date: '2026-03-11 10:22' }],
       });
       return { hang: true };
     }
@@ -117,7 +141,7 @@ function handleToolCall(state, session, name, args) {
     }
     state.feedbacks.set(String(id), {
       id, product: payload.product, title: payload.title, desc: payload.desc || '', type: payload.type || '',
-      status: 'wait', assignedTo: '', feedbackBy: 'shared-service-account', actions: [{ action: 'opened', actor: 'shared-service-account', comment: '', date: '2026-03-11 10:22' }],
+      status: 'wait', assignedTo: '', feedbackBy: session.account, actions: [{ action: 'opened', actor: session.account, comment: '', date: '2026-03-11 10:22' }],
     });
     return { payload: { id, message: '保存成功', status: 'success' } };
   }
@@ -131,7 +155,7 @@ function handleToolCall(state, session, name, args) {
     }
     fb.title = payload.title;
     fb.desc = payload.desc ?? fb.desc;
-    fb.actions.push({ action: 'edited', actor: 'shared-service-account', comment: '', date: '2026-03-12 09:05' });
+    fb.actions.push({ action: 'edited', actor: session.account, comment: '', date: '2026-03-12 09:05' });
     return { payload: { id: fb.id, message: '保存成功', status: 'success' } };
   }
 
@@ -170,7 +194,7 @@ export function startMockServer(overrides = {}) {
     state.sessions.set(sessionId, session);
 
     if (body.method === 'tools/list') {
-      return ok(res, { jsonrpc: '2.0', id: body.id, result: { tools: TOOLS } });
+      return ok(res, { jsonrpc: '2.0', id: body.id, result: { tools: state.hideTools ? [] : TOOLS } });
     }
 
     if (body.method === 'tools/call') {

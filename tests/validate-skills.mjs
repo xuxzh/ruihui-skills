@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILLS_DIR = path.join(ROOT, 'skills');
@@ -112,7 +113,9 @@ if (!parsed) {
     ['写入后必须回读校验', /回读/],
     ['写入前需要用户确认', /确认/],
     ['结果不确定时先查核实、不重复创建', /不重复创建|先查后报|不盲目重试/],
-    ['共享服务账号的身份限制', /共享服务账号/],
+    ['当前登录账号的身份边界', /当前登录账号/],
+    ['接入凭据由用户本机写入', /接入凭据/],
+    ['未注册时指向引导安装', /references\/setup\.md/],
     ['附件上传不可用的说明', /附件/],
     ['反馈类型映射 bug/story/advice', /`bug`/],
     ['需求类型映射 story', /`story`/],
@@ -122,7 +125,7 @@ if (!parsed) {
   ];
   for (const [label, re] of rules) check(`rh-product-feedback: ${label}`, re.test(all));
 
-  const refs = ['feedback-templates.md', 'zentao-mcp.md', 'workflow.md', 'error-handling.md'];
+  const refs = ['feedback-templates.md', 'zentao-mcp.md', 'workflow.md', 'error-handling.md', 'setup.md'];
   for (const ref of refs) {
     check(`rh-product-feedback: SKILL.md 引用 references/${ref}`, parsed.body.includes(`references/${ref}`));
   }
@@ -132,6 +135,13 @@ if (!parsed) {
 console.log('\n[3] 敏感信息扫描（公开仓库）');
 const tracked = walk(ROOT);
 const textFiles = tracked.filter((f) => /\.(md|mjs|js|json|yml|yaml|txt|example)$/.test(f) && !f.includes(`${path.sep}.git${path.sep}`));
+
+// 被 .gitignore 忽略的文件不进公开仓库（如技能包内的 config.local.json），不参与扫描。
+function isIgnored(rel) {
+  const r = spawnSync('git', ['check-ignore', '-q', '--', rel], { cwd: ROOT });
+  return r.status === 0;
+}
+const scannedFiles = textFiles.filter((f) => !isIgnored(path.relative(ROOT, f)));
 
 const envFile = path.join(ROOT, '.env');
 const secretValues = [];
@@ -154,7 +164,7 @@ const PATTERNS = [
 ];
 
 let leaks = 0;
-for (const file of textFiles) {
+for (const file of scannedFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const rel = path.relative(ROOT, file);
   for (const [re, label] of PATTERNS) {
@@ -177,6 +187,7 @@ check('未发现内网地址 / 凭据 / 真实业务数据', leaks === 0, leaks 
 // .env 必须被忽略
 const gitignore = fs.existsSync(path.join(ROOT, '.gitignore')) ? fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8') : '';
 check('.env 在 .gitignore 中', /^\s*\.env\s*$/m.test(gitignore));
+check('技能包内的 config.local.json 在 .gitignore 中', /^\s*skills\/\*\/config\.local\.json\s*$/m.test(gitignore));
 
 // ---- 汇总 --------------------------------------------------------------
 const failed = results.filter((r) => !r.ok);
