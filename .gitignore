@@ -1,2 +1,5 @@
 .worktrees/
 .env
+
+# 技能包内的本机配置（含内网地址，不进仓库）
+skills/*/config.local.json
