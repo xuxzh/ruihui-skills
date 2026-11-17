@@ -1,6 +1,6 @@
 # 连接禅道 MCP
 
-业务用户只需要三步；管理员看「各宿主配置」与「内网地址从哪来」。
+业务用户只需要三步；管理员看「内网地址从哪来」与「打包分发」。
 
 ## 业务用户：三步
 
@@ -8,10 +8,12 @@
 
 通用技能目录是 `~/.agents/skills/`（Windows：`%USERPROFILE%\.agents\skills\`），大多数 Agent 宿主都能从这里加载技能。
 
+管理员分发的是一个自洽的 `rh-product-feedback` 目录，**整个目录**复制进去：
+
 macOS / Linux：
 
 ```bash
-mkdir -p ~/.agents/skills && cp -r <解压目录>/rh-product-feedback ~/.agents/skills/
+mkdir -p ~/.agents/skills && cp -R <解压目录>/rh-product-feedback ~/.agents/skills/
 ```
 
 Windows（PowerShell）：
@@ -21,15 +23,43 @@ New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills" | Out-Null
 Copy-Item -Recurse "<解压目录>\rh-product-feedback" "$env:USERPROFILE\.agents\skills\"
 ```
 
+复制完目录里应该有 `SKILL.md`、`references/`、`config.local.json`、`scripts/`。少了 `config.local.json` 说明拿到的是不含内网配置的公开版，找管理员要内网版。
+
 ### 2. 对 Agent 说「帮我连上禅道」
 
-Agent 会读技能包里的 `config.local.json`（内网地址写死在里面），按你用的宿主把禅道 MCP 登记进去，然后告诉你还差一步。
+Agent 会读技能包里的 `config.local.json`（内网地址写死在里面），把禅道 MCP 登记到你的宿主，然后告诉你需要重开宿主。地址不回显，你也不用填 IP。
+
+宿主不让 Agent 改配置时，改用随包脚本——它自己从 `config.local.json` 读地址，地址不会出现在对话里：
+
+```bash
+# macOS / Linux
+bash ~/.agents/skills/rh-product-feedback/scripts/connect.sh
+```
+
+```powershell
+# Windows（PowerShell）
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.agents\skills\rh-product-feedback\scripts\connect.ps1"
+```
 
 ### 3. 写入你自己的禅道凭据
 
-Agent 会给你一条命令，**你自己在终端执行**，输入禅道账号和令牌（密码）。凭据落在你自己机器上，Agent 不经手、看不到、也不会写进任何仓库。
+Agent 会给你一条命令，**你自己在终端执行**，输入禅道账号和令牌（禅道「个人 → 令牌」生成；没有就用密码）。
 
-写完之后回到 Agent 说一句「好了」，它会自检连接，然后就能提反馈了。
+```bash
+# macOS / Linux
+bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
+```
+
+```powershell
+# Windows（PowerShell）
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.agents\skills\rh-product-feedback\scripts\set-credentials.ps1"
+```
+
+脚本交互式输入、令牌不回显，凭据落在你自己机器上、只有你能读。
+
+**写完不用再回来说「好了」**：直接说要提什么，Agent 会自己登录、自检，然后开始收集反馈内容。
+
+> 凭据由你写入，Agent 不会主动展示或回显它；但会话登录模式下 Agent 需要**读取**这个文件去登录，令牌会进入本次会话上下文——所以优先用可单独撤销的禅道令牌，不要用账号密码。
 
 ## 接入凭据
 
@@ -53,101 +83,57 @@ ZENTAO_TOKEN=<你的禅道令牌>
 
 用密码时把第二行换成 `ZENTAO_PASSWORD=<你的禅道密码>`。
 
-### 三种写入方式（任选其一）
-
-**Node（跨平台，交互式，输入不回显）**——内部分发包内含该脚本：
-
-```bash
-node scripts/set-credentials.mjs
-```
-
-**macOS / Linux（bash）**：
-
-```bash
-mkdir -p ~/.config/rh-zentao && chmod 700 ~/.config/rh-zentao && \
-read -r -p "禅道账号: " A && read -r -s -p "禅道令牌: " T && echo && \
-umask 077 && printf 'ZENTAO_ACCOUNT=%s\nZENTAO_TOKEN=%s\n' "$A" "$T" > ~/.config/rh-zentao/credentials && \
-echo "已写入 ~/.config/rh-zentao/credentials"
-```
-
-**Windows（PowerShell）**：
-
-```powershell
-$dir = "$env:APPDATA\rh-zentao"
-New-Item -ItemType Directory -Force $dir | Out-Null
-$account = Read-Host "禅道账号"
-$token = Read-Host "禅道令牌" -AsSecureString
-$plain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($token))
-Set-Content -Path "$dir\credentials" -Value "ZENTAO_ACCOUNT=$account`nZENTAO_TOKEN=$plain"
-Remove-Variable plain, token
-Write-Host "已写入 $dir\credentials"
-```
-
 文件权限：macOS / Linux 用 `chmod 600`；Windows 依赖用户目录本身的 ACL，不要放到共享盘。
 
 ### 两种鉴权模式
 
 | 模式 | 凭据是否进入 Agent 上下文 | 说明 |
 | --- | --- | --- |
-| **会话登录**（当前默认） | 会（读文件时） | Agent 调 `post_users_login` 换 token，后续调用沿用。优先用令牌，泄露面小且可撤销 |
-| **请求头令牌** | 不会 | 若禅道 MCP 支持 `Authorization: Bearer <令牌>`，凭据由宿主客户端从环境变量注入，Agent 全程看不到。当前 MCP 是否支持，见「管理员」一节 |
+| **会话登录**（当前默认） | 会 | Agent 读本机凭据文件 → 调 `post_users_login` 换会话令牌 → 后续调用沿用。优先用令牌，泄露面小且可撤销 |
+| **请求头令牌** | 不会 | 若禅道 MCP 支持 `Authorization: Bearer <令牌>`，凭据由宿主客户端从环境变量注入，Agent 全程不碰凭据文件。当前 MCP 是否支持，见「管理员」一节 |
+
+「Agent 完全看不到你的令牌」是**不准确**的说法：会话登录模式下 Agent 会读取凭据文件。准确的说法是——凭据由你自己写入，Agent 不会主动展示、回显或外传它。
 
 ## 各宿主配置
 
-MCP server 名为 `zentao`，类型是 Streamable HTTP，地址取自 `config.local.json` 的 `mcpUrl`。用宿主自带命令注册最稳；需要手改文件时用下面的片段。
+MCP server 名为 `zentao`，类型是 Streamable HTTP，地址取自 `config.local.json` 的 `mcpUrl`。
 
-### pi
+### Claude Code（主宿主）
 
-命令：
+配置文件是用户级 `~/.claude.json` 的 `mcpServers`（项目级 `.mcp.json` 需要逐项目批准，不走这条路）。
 
-```bash
-pi mcp add zentao --url "<mcpUrl>"
-```
+登记方式——**只改一个键**：
 
-文件（`~/.pi/agent/mcp.json`）：
+1. 读 `~/.claude.json`（不存在就当空对象）。
+2. 只动 `mcpServers.zentao`：不存在就新增 `{"type":"http","url":"<mcpUrl>"}`；已存在就只更新 `url`，保留 `headers` 等其他字段。
+3. 写回前先备份一份 `~/.claude.json.bak-<时间戳>`。
+4. 写回后复核：`claude mcp get zentao` 能查到、地址与 `config.local.json` 一致。
 
-```json
-{
-  "mcpServers": {
-    "zentao": {
-      "url": "<mcpUrl>"
-    }
-  }
-}
-```
+**不要用 `claude mcp add` 覆盖**：它遇到同名条目会直接拒绝（`already exists in user config`，地址变了也不更新），也保留不了条目上的其他字段。
 
-### Claude Code
+改完需要**重开 Claude Code** 才生效。重开后第一件事是复核 `mcpServers.zentao` 还在不在：不在说明被运行中的 Claude Code 回写覆盖，重写一次；仍然不行就走 `connect.sh` 降级路径。
 
-命令：
+手工命令（地址从 `config.local.json` 取，不在对话里出现）：
 
 ```bash
-claude mcp add zentao "<mcpUrl>" --transport http --scope user
+bash ~/.agents/skills/rh-product-feedback/scripts/connect.sh
 ```
 
-文件（用户级 `~/.claude.json` 的 `mcpServers`，或项目级 `.mcp.json`）：
+### pi（次宿主）
 
-```json
-{
-  "mcpServers": {
-    "zentao": {
-      "type": "http",
-      "url": "<mcpUrl>"
-    }
-  }
-}
-```
+配置文件是用户级 `~/.pi/agent/mcp.json`（项目级 `.pi/mcp.json` 需要项目信任）。
 
-改完配置后需要重连或重启宿主，让新 server 生效。
+`pi mcp add zentao --url <地址>` 是**整条替换**，会丢掉该条目上已有的其他字段（例如将来加的请求头令牌）；要保留就同样按「只改一个键」的方式合并写。
+
+pi 支持 `/reload`：改完配置在会话里执行 `/reload` 就生效，不必重启宿主。
 
 ## 自检
 
-登记完成后确认三件事：
+只做只读调用，不写任何反馈单。
 
 1. 工具列表里有 `post_users_login`、`get_products`、`post_feedbacks`（工具名可能带 `mcp__zentao__` 前缀）。
 2. `post_users_login` 成功返回。
-3. `get_products` 能返回产品列表——这份列表就是当前账号**可见**的产品范围，之后提反馈只能选这里面的产品。
-
-只做只读调用，不写任何反馈单。
+3. `get_products` 能返回产品列表——这份列表就是当前账号的**可见范围**，之后提反馈只能选这里面的产品。
 
 ## 管理员
 
@@ -166,9 +152,17 @@ claude mcp add zentao "<mcpUrl>" --transport http --scope user
 - 仓库里的 `config.example.json` 只有占位符。
 - 优先用内网域名而不是 IP：IP 会随网络调整失效，也更容易被误贴到外部。
 
-### 分发渠道
+### 打包分发
 
-技能包内容与分发渠道无关，下面几种都能用，按现有 IT 条件选一个：
+在仓库里打包，产物是顶层自洽的 `rh-product-feedback/` 目录，用户复制这一个目录即完成安装：
+
+```bash
+node scripts/build-internal-package.mjs
+```
+
+地址来源优先级：命令行参数 > 仓库根 `.env`（`ZENTAO_MCP_URL`、`ZENTAO_BASE_URL`）> 技能目录里的 `config.local.json`。产物默认在 `dist/`（已 gitignore）。
+
+分发渠道与技能内容解耦，下面几种都能用，按现有 IT 条件选一个：
 
 | 渠道 | 用户侧动作 |
 | --- | --- |
@@ -176,8 +170,6 @@ claude mcp add zentao "<mcpUrl>" --transport http --scope user
 | NAS / 内网对象存储 / 共享盘 | 下载压缩包 → 解压进通用技能目录 |
 | 公司软件中心 / 应用市场 | 在软件中心点安装 |
 | 终端管理（Intune / 域策略 / MDM） | 无需操作，机器上已有 |
-
-分发包里应包含：`skills/rh-product-feedback/`（含 `config.local.json`）与 `scripts/set-credentials.mjs`。
 
 ### 禅道 MCP 侧可改进的两点
 

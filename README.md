@@ -4,34 +4,17 @@
 
 | 技能 | 版本 | 说明 |
 | --- | --- | --- |
-| [`rh-product-feedback`](skills/rh-product-feedback) | 0.3.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交成禅道反馈单，并支持查询反馈单、解释处理进度、补充说明；禅道 MCP 没配好时，能引导你完成安装与认证 |
+| [`rh-product-feedback`](skills/rh-product-feedback) | 0.4.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交成禅道反馈单，并支持查询反馈单、解释处理进度、补充说明；禅道 MCP 没配好时，能引导你完成安装与认证 |
 
 ## 业务用户：三步接入
 
 > 面向不用懂 MCP、只要能把话说清楚的同事。前提是拿到**内网版技能包**（含禅道 MCP 地址）。
 
-### 1. 把技能包放进通用技能目录
+完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的命令、三个示例和常见问题。三步概览：
 
-通用技能目录是 `~/.agents/skills/`（Windows：`%USERPROFILE%\.agents\skills\`），大多数 Agent 宿主都能从这里加载技能。
-
-```bash
-# macOS / Linux
-mkdir -p ~/.agents/skills && cp -r <解压目录>/rh-product-feedback ~/.agents/skills/
-```
-
-```powershell
-# Windows（PowerShell）
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills" | Out-Null
-Copy-Item -Recurse "<解压目录>\rh-product-feedback" "$env:USERPROFILE\.agents\skills\"
-```
-
-### 2. 对 Agent 说「帮我连上禅道」
-
-Agent 会读技能包里的内网地址，按你用的宿主把禅道 MCP 登记进去（不用你填 IP），然后告诉你还差一步。
-
-### 3. 写入你自己的禅道凭据
-
-Agent 会给你一条命令，**你自己在终端执行**，输入禅道账号和令牌（禅道「个人 → 令牌」生成；没有就用密码）。凭据落在你自己机器上，Agent 不经手、看不到、也不会写进任何仓库。
+1. **把技能包放进技能目录**：把管理员发的 `rh-product-feedback` 整个目录复制到 `~/.agents/skills/`（Windows：`%USERPROFILE%\.agents\skills\`）。
+2. **对 Agent 说「帮我连上禅道」**：Agent 自己从技能包里读出地址并登记禅道 MCP，**你不用填 IP，也不用改配置文件**；登记完重开一次宿主。
+3. **写入你自己的禅道凭据**：Agent 给你一条命令，**你自己在终端执行**，输入禅道账号和令牌。凭据落在你自己机器上，**Agent 不会展示或外传它**——但会话登录模式下它需要读取这个文件去登录，令牌会进入本次会话上下文，所以优先用可单独撤销的禅道令牌，而不是账号密码。
 
 之后就能直接用：
 
@@ -43,14 +26,14 @@ Agent 会给你一条命令，**你自己在终端执行**，输入禅道账号�
 
 技能会自动：识别反馈类型 → 补齐缺失信息 → 查重 → 生成草稿 → **等你确认后**写入禅道 → 回读校验并给出真实反馈 ID。
 
-完整步骤见 [`skills/rh-product-feedback/references/setup.md`](skills/rh-product-feedback/references/setup.md)。
+技术细节见 [`skills/rh-product-feedback/references/setup.md`](skills/rh-product-feedback/references/setup.md)（连接禅道、写入凭据、各宿主配置）。
 
 ## 管理员：内网地址与分发
 
 - **地址从哪来**：写死在技能包内的 `config.local.json`（`mcpUrl` = 禅道 MCP 的 Streamable HTTP 地址，`zentaoWebUrl` = 禅道 Web 端地址）。该文件**不进仓库**，随内部分发包发出；仓库里只有 `config.example.json` 占位符。
 - **优先用内网域名而不是 IP**：IP 随网络调整失效，也更容易被误贴到外部。
 - **分发渠道**：技能包内容与渠道解耦，选一个现成的即可——内网 Git（`git clone` 后复制目录）、NAS / 对象存储（下载压缩包后解压）、公司软件中心（点安装）、终端管理（推到用户机器）。
-- **分发包内容**：`skills/rh-product-feedback/`（含 `config.local.json`）与 `scripts/set-credentials.mjs`。
+- **分发包内容**：`node scripts/build-internal-package.mjs` 打包，产物是 `dist/rh-product-feedback/`——顶层自洽的一个目录（技能文件 + `config.local.json` + 凭据与连接脚本），用户复制这一个目录即完成安装。地址来源：`.env` 里的 `ZENTAO_MCP_URL` / `ZENTAO_BASE_URL`，或命令行参数。
 - **本仓库不包含任何内网地址、账号或凭据**；扫描器会跳过被 `.gitignore` 忽略的文件，但被提交的文件一律扫描。
 - **禅道 MCP 侧可改进的两点**：支持 `Authorization: Bearer <令牌>` 请求头鉴权（凭据就能完全不进 Agent 上下文）；登录失败时可区分「密码错」与「账号被锁定」（避免连续重试触发锁定）。
 
@@ -103,7 +86,7 @@ cp -r skills/rh-product-feedback ~/.claude/skills/      # Claude Code
 
 ## 能力边界
 
-当前版本（v0.3.0）的能力与限制：
+当前版本（v0.4.0）的能力与限制：
 
 - **反馈优先**：新反馈统一落在禅道的反馈单（`feedback`）上，正式 Bug / 需求由人工评审后再建。
 - **每用户独立账号**：用你自己的禅道账号登录，反馈留痕在本人名下；代价是**你只能看到有权限的产品与反馈**，查重只覆盖可见范围（话术里会写明「在你可见的 N 条中」）。
@@ -122,6 +105,9 @@ node tests/validate-skills.mjs
 
 # 模拟层测试：在 mock MCP 上验证写入确认、回读校验、防重复、并发冲突、真实 E2E 的写入闸门
 node --test tests/e2e-mock.mjs
+
+# 打包脚本与凭据脚本测试
+node --test tests/package.mjs
 
 # 规范校验（Agent Skills 官方参考实现）
 npx skills-ref validate skills/rh-product-feedback
@@ -157,6 +143,7 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 - [ADR-0001](docs/adr/0001-每用户独立禅道账号.md) — 每用户独立禅道账号，不用共享服务账号
 - [ADR-0002](docs/adr/0002-业务用户接入形态.md) — Agent 自装 MCP、地址随包分发、凭据由本人写入
 - [ADR-0003](docs/adr/0003-真实端到端测试的写入闸门.md) — 真实端到端测试默认只读，写入要过三道闸门
+- [ADR-0004](docs/adr/0004-主宿主与首次接入链路.md) — 主宿主 Claude Code、首次接入三阶段 ≤4 次交互、会话登录是唯一凭据路径
 
 ## License
 
