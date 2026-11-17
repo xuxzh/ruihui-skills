@@ -1,5 +1,7 @@
 name: validate-skills
 
+# CI 只跑本地校验：静态校验、mock 层测试、规范校验。
+# 真实禅道 MCP 的端到端测试需要内网环境与明确授权，不在 CI 中运行。
 on:
   push:
     branches: [main]

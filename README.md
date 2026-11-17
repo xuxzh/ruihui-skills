@@ -4,7 +4,7 @@
 
 | 技能 | 版本 | 说明 |
 | --- | --- | --- |
-| [`rh-product-feedback`](skills/rh-product-feedback) | 0.2.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交成禅道反馈单，并支持查询反馈单、解释处理进度、补充说明；禅道 MCP 没配好时，能引导你完成安装与认证 |
+| [`rh-product-feedback`](skills/rh-product-feedback) | 0.3.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交成禅道反馈单，并支持查询反馈单、解释处理进度、补充说明；禅道 MCP 没配好时，能引导你完成安装与认证 |
 
 ## 业务用户：三步接入
 
@@ -103,13 +103,14 @@ cp -r skills/rh-product-feedback ~/.claude/skills/      # Claude Code
 
 ## 能力边界
 
-当前版本（v0.2.0）的能力与限制：
+当前版本（v0.3.0）的能力与限制：
 
 - **反馈优先**：新反馈统一落在禅道的反馈单（`feedback`）上，正式 Bug / 需求由人工评审后再建。
 - **每用户独立账号**：用你自己的禅道账号登录，反馈留痕在本人名下；代价是**你只能看到有权限的产品与反馈**，查重只覆盖可见范围（话术里会写明「在你可见的 N 条中」）。
 - **无服务端关键词检索**：查重靠分页拉取 + 客户端标题匹配，只覆盖扫描到的范围。
 - **附件上传不可用**：请用文字描述，或走禅道 Web 端上传后再补充描述。
 - **没有「只评论不改状态」的接口**：补充说明走「更新描述」路径；关闭 / 解决 / 删除等流转由人来做。
+- **更新没有版本号 CAS**：禅道的更新接口无条件覆盖。补充说明会在写入前再读一次原文，发现被改过就停手交回你确认——这能显著降低覆盖他人内容的风险，但复核与写入之间仍可能有竞态。
 
 ## 开发与测试
 
@@ -119,7 +120,7 @@ cp -r skills/rh-product-feedback ~/.claude/skills/      # Claude Code
 # 静态校验：元数据、引用链接、硬约束覆盖、敏感信息扫描
 node tests/validate-skills.mjs
 
-# 模拟层测试：在 mock MCP 上验证写入确认、回读校验、防重复、错误分类
+# 模拟层测试：在 mock MCP 上验证写入确认、回读校验、防重复、并发冲突、真实 E2E 的写入闸门
 node --test tests/e2e-mock.mjs
 
 # 规范校验（Agent Skills 官方参考实现）
@@ -130,9 +131,15 @@ npx skills-ref validate skills/rh-product-feedback
 
 ```bash
 node tests/e2e-live.mjs                                     # 只读
-ZENTAO_E2E_PRODUCT=<产品 id> ZENTAO_E2E_ALLOW_WRITE=1 \
-  node tests/e2e-live.mjs                                   # 允许在指定产品内写入并自动清理
+
+# 写入验证：三项条件缺一不可（开关 + 目标产品 + 允许写入的产品白名单）
+ZENTAO_E2E_ALLOW_WRITE=1 \
+ZENTAO_E2E_PRODUCT=<产品 id> \
+ZENTAO_E2E_ALLOWED_PRODUCTS=<产品 id,...> \
+  node tests/e2e-live.mjs                                   # 在白名单产品内写入并自动清理
 ```
+
+写入前还要通过前置自检（认证成功、目标产品存在且在白名单内、反馈读取成功），任一项不满足立即中止、不写入。测试数据带 `[rh-skill-e2e]` 唯一标识，清理只处理本次创建且标识明确匹配的记录；创建超时或结果不明时按唯一标识复查、报告残留风险并以非零退出码结束。
 
 CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills.yml)）会跑静态校验、模拟层测试与规范校验；真实端到端测试需要内网禅道环境，不在 CI 中运行。
 
