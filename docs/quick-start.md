@@ -22,6 +22,14 @@ npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
 
 装完确认一下：在 Agent 里问一句「你的技能列表里有没有 rh-product-feedback」。**没有**就是路径没放对（Claude Code 要在 `~/.claude/skills/` 下，或让 skills CLI 装），改完重开一次 Agent。
 
+> 赶时间也可以只跑一条命令（它会先装技能、再登记禅道 MCP）：
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/xuxzh/ruihui-skills/main/skills/rh-product-feedback/scripts/install.sh | bash
+> ```
+>
+> 这种方式读不到终端输入，脚本会打印「再跑这条命令写入凭据」，照着跑那一条即可（见第 2 步）。仓库刚更新过时 raw 可能短暂给到旧脚本，缓一会儿再试。
+
 ## 第 2 步：跑安装脚本
 
 ```bash
@@ -111,6 +119,7 @@ Agent 会依次做这些事：补齐缺的信息 → 确认属于哪个产品 �
 | --- | --- | --- |
 | Agent 说没有 rh-product-feedback 这个技能 | 技能目录没放对，或装完没重开 | 问一句「你的技能列表里有没有 rh-product-feedback」确认；装完重开一次 Agent |
 | 脚本说没有检测到宿主 | Claude Code 和 pi 都没装 | 先装好其中一个再跑脚本 |
+| 一条命令装完，但凭据没写进去 | 管道方式读不到终端输入 | 按脚本打印的那条命令跑一次 `set-credentials.sh` |
 | 脚本说 Claude Code 正在运行 | 运行中的宿主会覆盖配置 | 退出 Claude Code 再跑（或加 `--force`） |
 | 装完连不上禅道 | 宿主回写覆盖了配置 | 在 Agent 里说「更新禅道地址」，它只改一个键；或再跑一次脚本 |
 | 登录失败 | 账号或密码不对 | 核对后重跑脚本；不要反复试，连续失败可能锁号 |
