@@ -189,9 +189,16 @@ done
 # --- 写入本人凭据 -------------------------------------------------------
 if [ "$SKIP_CREDENTIALS" -eq 1 ]; then
   note "凭据：已跳过（本人之后自己写）"
+elif [ -z "$script_dir" ]; then
+  # 管道方式（curl | bash）：脚本的 stdin 是管道，交互输入拿不到；
+  # 子进程还可能先把终端输入吃掉，所以这里不猜，给出确定的下一条命令。
+  for host in $hosts; do
+    note "凭据：管道方式下读不到终端输入，请再跑一条命令写入你自己的账号密码："
+    note "  bash $(host_skill_dir "$host")/$SKILL_NAME/scripts/set-credentials.sh"
+  done
 else
   cred_script=""
-  if [ -n "$script_dir" ] && [ -f "$script_dir/set-credentials.sh" ]; then
+  if [ -f "$script_dir/set-credentials.sh" ]; then
     cred_script="$script_dir/set-credentials.sh"
   else
     WORKDIR="${WORKDIR:-$(mktemp -d)}"
