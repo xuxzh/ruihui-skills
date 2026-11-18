@@ -10,7 +10,7 @@
 // 三项之外还要通过写入前置自检（认证成功、目标产品存在且在白名单内、反馈读取成功）。
 // 任一项不满足就停止，不写入。
 import { randomUUID } from 'node:crypto';
-import { FeedbackAssistant } from './skill-flow.mjs';
+import { FeedbackAssistant, DefectAssistant } from './skill-flow.mjs';
 
 export const E2E_MARKER_PREFIX = '[rh-skill-e2e]';
 
@@ -41,6 +41,11 @@ export function buildRunMarker(now = new Date()) {
 /** 按唯一标识找出可能属于本次运行的记录。 */
 export function findMarkedFeedbacks(feedbacks = [], marker) {
   return feedbacks.filter((f) => typeof f?.title === 'string' && f.title.includes(marker));
+}
+
+/** 缺陷单的标记查找：标题含唯一标识的缺陷。 */
+export function findMarkedBugs(bugs = [], marker) {
+  return bugs.filter((b) => typeof b?.title === 'string' && b.title.includes(marker));
 }
 
 function describeMessage(data) {
@@ -214,6 +219,123 @@ export async function runLiveE2E({ client, env = {}, credentials, stamp, log = (
     record('清理后按 ID 复核不存在', gone, `#${id}`);
   }
   const countAfter = (await assistant.scanFeedbacks(gate.productId)).items.length;
+  record('条数回到基线（仅辅助证据）', countAfter === baseline, `基线 ${baseline} → 现在 ${countAfter}`);
+  return finish();
+}
+
+/**
+ * 缺陷单的真实写入闭环：与反馈单同一套闸门、前置自检、唯一标识与清理纪律。
+ * 缺陷单会进开发流程，所以写入前的自检与清理的复核一项都不能省。
+ */
+export async function runLiveBugE2E({ client, env = {}, credentials, stamp, log = () => {} }) {
+  const steps = [];
+  const record = (name, ok, detail = '') => {
+    steps.push({ name, ok, detail });
+    log(`${ok ? '  ok  ' : ' FAIL '} ${name}${detail ? ` — ${detail}` : ''}`);
+  };
+  const finish = () => ({
+    steps,
+    gate,
+    marker,
+    exitCode: steps.some((s) => !s.ok) ? 1 : 0,
+  });
+  const gate = resolveWriteGate(env);
+  let marker = null;
+  const assistant = new DefectAssistant({
+    client,
+    credentials,
+    stamp,
+    confirm: async () => {
+      if (!gate.allowed) throw new Error('写入闸门未通过，拒绝自动确认写入');
+      return true;
+    },
+  });
+
+  log('\n[只读·缺陷]');
+  try {
+    await assistant.login();
+    record('登录成功', true);
+  } catch (err) {
+    record('登录成功', false, err.message);
+    return finish();
+  }
+  const products = await client.callTool('get_products', { pageID: '1', recPerPage: '100' });
+  const list = products.data?.products || [];
+  record('产品列表可读', list.length > 0, `${list.length} 个产品`);
+  const target = gate.productId ? list.find((p) => String(p.id) === gate.productId) : null;
+  record('目标产品存在', !gate.productId || !!target, target ? `${target.name}（#${target.id}）` : '未指定 ZENTAO_E2E_PRODUCT');
+  const readOnly = await assistant.scanBugs(gate.productId || list[0]?.id);
+  record('缺陷列表可读', readOnly.complete, readOnly.complete ? `${readOnly.items.length} 条` : readOnly.error);
+  if (readOnly.items.length) {
+    const detail = await assistant.readBackBug(readOnly.items[0].id);
+    record('缺陷详情可读且含 actions[]', detail.found && Array.isArray(detail.raw?.actions), `缺陷 #${readOnly.items[0].id}`);
+  } else {
+    record('缺陷详情可读且含 actions[]', true, '该产品暂无缺陷，跳过详情回读');
+  }
+
+  log('\n[写入·缺陷]');
+  if (!gate.allowed) {
+    const skipped = !gate.requested;
+    record(
+      '写入闸门',
+      skipped,
+      skipped
+        ? '未设置 ZENTAO_E2E_ALLOW_WRITE=1，只做只读验证'
+        : `写入条件不满足（${gate.reasons.join('；')}），已中止写入`,
+    );
+    return finish();
+  }
+  const preflight = await runPreflight({
+    client, assistant, productId: gate.productId, allowedProducts: gate.allowedProducts, record,
+  });
+  if (!preflight.ok) {
+    record('写入前置自检', false, '前置自检未通过，已中止写入');
+    return finish();
+  }
+
+  marker = buildRunMarker();
+  const title = `${marker} 端到端验证缺陷`;
+  const bugSteps = '<p><strong>[步骤]</strong></p><p>1. 验证用记录，验证后删除</p><p><strong>[实际结果]</strong></p><p>端到端验证</p>';
+  const baseline = (await assistant.scanBugs(gate.productId)).items.length;
+  const created = await assistant.submitBug({
+    title, steps: bugSteps, productId: Number(gate.productId), openedBuild: ['trunk'], severity: 3, pri: 3, type: 'others',
+  });
+  record('创建缺陷', created.status === 'created', `status=${created.status} id=${created.id || '-'}`);
+  const createdId = created.status === 'created' ? created.id : null;
+  if (createdId) {
+    const detail = await assistant.readBackBug(createdId);
+    record('创建后回读一致', detail.found && detail.bug.title === title, `缺陷 #${createdId}`);
+    record('回读含 opened 流水', (detail.actions || []).includes('opened'), (detail.actions || []).join(','));
+    const supplemented = await assistant.supplementBug({ id: createdId, addition: '验证补充路径。' });
+    record('补充说明并回读', supplemented.status === 'updated', `status=${supplemented.status}`);
+    const after = await assistant.readBackBug(createdId);
+    const kept = after.found && String(after.bug.steps || '').includes('[步骤]');
+    record('补充后保留原文', kept);
+  }
+
+  const uncertain = !createdId || created.recovered === true;
+  let residual = [];
+  if (uncertain) {
+    const scan = await assistant.scanBugs(gate.productId);
+    residual = findMarkedBugs(scan.items, marker);
+    if (!scan.complete) {
+      record('创建结果确认', false, `创建未拿到原始确认，复查不完整（${scan.error || '未知原因'}），无法确认是否有残留`);
+    } else if (residual.length) {
+      record('创建结果确认', false, `创建未拿到原始确认，按唯一标识 ${marker} 查到 ${residual.length} 条可能残留记录（${residual.map((b) => `#${b.id}`).join('、')}）`);
+    } else {
+      record('创建结果确认', false, `创建未拿到原始确认（status=${created.status}），按唯一标识 ${marker} 未查到残留记录；仍需人工核对禅道`);
+    }
+  }
+
+  const targets = createdId ? [createdId] : residual.map((b) => b.id);
+  for (const id of targets) {
+    const del = await client.callTool('delete_bugs_bugID', { bugID: String(id) });
+    const after = await assistant.readBackBug(id);
+    const gone = !after.found;
+    record('清理测试数据', del.status === 'success' || gone, `#${id} status=${del.status}`);
+    record('清理后按 ID 复核不存在', gone, `#${id}`);
+  }
+  const countAfter = (await assistant.scanBugs(gate.productId)).items.length;
   record('条数回到基线（仅辅助证据）', countAfter === baseline, `基线 ${baseline} → 现在 ${countAfter}`);
   return finish();
 }

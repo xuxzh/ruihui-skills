@@ -7,9 +7,17 @@
 //   - 结果不确定时先查询核实，不重复创建；只认写入前不存在、现在唯一存在的记录
 //   - 业务失败（status: fail）不当作成功
 //   - 补充说明保留原文，走改 desc 的路径；写前二次回读，原文被改就停手
+//   - 缺陷单（bug 对象）走同一套硬约束，差异在字段名（productID）与正文载体（steps）
+//     - 创建/更新同样必须包在 payload 内，且 openedBuild 必填
+//     - 回读比较前要剥掉 HTML 标签并归一化空白
+//     - 查重、结果不确定时的“先查后报”规则与反馈单一致
 //
 // 技能本身由 Agent 按 SKILL.md 执行；本模块不是技能的一部分，只用于测试与文档化流程。
 export const FEEDBACK_TYPES = ['bug', 'story', 'advice'];
+export const BUG_TYPES = [
+  'codeerror', 'config', 'install', 'security',
+  'performance', 'standard', 'automation', 'designdefect', 'others',
+];
 
 export class SkillError extends Error {
   constructor(code, message) {
@@ -406,4 +414,330 @@ function describeFailure(data) {
     return Object.entries(msg).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join('; ') : v}`).join(' | ');
   }
   return String(msg);
+}
+
+/** 缺陷单的正文是富文本 HTML：比较前剥掉标签、归一化空白。 */
+export function normalizeHtml(text) {
+  return String(text ?? '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+}
+
+/** 主干版本：列表视图显示「主干」、详情视图显示 trunk，指同一个值。 */
+export function normalizeBuild(value) {
+  const raw = Array.isArray(value) ? value : [value];
+  return raw
+    .map((v) => (String(v).trim() === '主干' ? 'trunk' : String(v).trim()))
+    .join(',');
+}
+
+/**
+ * 选品规则：用户这次明说的 > 默认产品 > 追问一次。
+ * 默认产品只是默认值；它当前不可见时如实说明，不静默换一个产品建单。
+ *
+ * @param {{stated?: {id: number, name?: string}|null, defaultProduct?: {id: number, name?: string}|null, visibleProducts?: Array<{id: number, name?: string}>}} input
+ */
+export function pickProduct({ stated = null, defaultProduct = null, visibleProducts = [] } = {}) {
+  const visibleIds = new Set((visibleProducts || []).map((p) => Number(p.id)));
+  const isVisible = (p) => p && visibleIds.has(Number(p.id));
+
+  if (stated) {
+    if (!isVisible(stated)) {
+      return {
+        status: 'not_visible',
+        product: stated,
+        message: `你的账号看不到 ${stated.name || stated.id}，这条暂时无法提交到该产品，请找管理员开权限或换一个产品`,
+      };
+    }
+    return { status: 'stated', product: stated };
+  }
+
+  if (defaultProduct) {
+    if (!isVisible(defaultProduct)) {
+      return {
+        status: 'not_visible',
+        product: defaultProduct,
+        message: `你设的默认产品 ${defaultProduct.name || defaultProduct.id} 当前账号看不到，请找管理员开权限或换一个`,
+        askUser: true,
+      };
+    }
+    return { status: 'default', product: defaultProduct };
+  }
+
+  return { status: 'ask', askUser: true };
+}
+
+/**
+ * 缺陷单流程的参考实现：与反馈单同一套硬约束，字段名与正文载体不同。
+ */
+export class DefectAssistant extends FeedbackAssistant {
+  // ---- 只读 ---------------------------------------------------------
+
+  async scanBugs(productId, { recPerPage = 100, maxPages = 3 } = {}) {
+    const items = [];
+    let complete = true;
+    let error = null;
+    for (let page = 1; page <= maxPages; page++) {
+      let res;
+      try {
+        res = await this.withAuth(() => this.client.callTool('get_products_productID_bugs', {
+          productID: String(productId), pageID: String(page), recPerPage: String(recPerPage),
+        }));
+      } catch (err) {
+        if (err instanceof SkillError) throw err;
+        complete = false;
+        error = `读取缺陷列表失败：${err.message}`;
+        break;
+      }
+      if (res.status === 'fail' || !res.data) {
+        complete = false;
+        error = `读取缺陷列表失败：${describeFailure(res.data)}`;
+        break;
+      }
+      const list = res.data.bugs || [];
+      items.push(...list);
+      const pager = res.data.pager || {};
+      if (list.length === 0) break;
+      if (pager.pageTotal && page >= pager.pageTotal) break;
+      if (!pager.pageTotal && list.length >= recPerPage) {
+        complete = false;
+        error = '响应未给出总页数，无法确认已覆盖全部缺陷';
+        break;
+      }
+      if (page === maxPages) {
+        complete = false;
+        error = `扫描达到 ${maxPages} 页上限，未覆盖该产品的全部缺陷`;
+      }
+    }
+    return { items, complete, error };
+  }
+
+  /** 缺陷查重：分页拉取 + 标题关键词匹配。 */
+  async findBugDuplicates(productId, title, { threshold = 0.5 } = {}) {
+    const { items } = await this.scanBugs(productId);
+    return items
+      .map((b) => ({ ...b, score: similarity(title, b.title) }))
+      .filter((b) => b.score >= threshold)
+      .sort((a, b) => b.score - a.score);
+  }
+
+  async readBackBug(id) {
+    const res = await this.withAuth(() => this.client.callTool('get_bugs_bugID', { bugID: String(id) }));
+    if (res.status === 'fail' || !res.data?.bug) {
+      return { found: false, raw: res.data, httpStatus: res.httpStatus, actions: [] };
+    }
+    const bug = res.data.bug;
+    return {
+      found: true,
+      bug,
+      status: bug.status,
+      assignedTo: bug.assignedTo || '',
+      openedBy: bug.openedBy || '',
+      actions: (res.data.actions || bug.actions || []).map((a) => a.action),
+      raw: res.data,
+    };
+  }
+
+  // ---- 写入 ---------------------------------------------------------
+
+  /** 回读结果是否与本次提交的草稿完全一致。 */
+  matchesBugDraft(detail, { productId, title, steps, openedBuild, severity, pri }) {
+    if (!detail?.found) return false;
+    const bug = detail.bug || {};
+    if (Number(bug.product) !== Number(productId)) return false;
+    if (!sameTitle(bug.title, title)) return false;
+    if (normalizeHtml(bug.steps) !== normalizeHtml(steps)) return false;
+    if (normalizeBuild(bug.openedBuild) !== normalizeBuild(openedBuild)) return false;
+    if (severity !== undefined && Number(bug.severity) !== Number(severity)) return false;
+    if (pri !== undefined && Number(bug.pri) !== Number(pri)) return false;
+    if (!detail.actions.includes('opened')) return false;
+    return true;
+  }
+
+  /** 创建结果不确定时的核实：只认基线之外、唯一、回读完全一致的缺陷。 */
+  async recoverBugCreate({ productId, title, steps, openedBuild, severity, pri, baselineIds, baselineComplete, duplicates }) {
+    if (!baselineComplete) {
+      return {
+        status: 'unknown', reason: 'baseline_incomplete', writes: 1, duplicates,
+        message: '创建未拿到确认，写入前的扫描不完整，无法区分本次新建与既有缺陷；未重复创建，请人工核对禅道',
+      };
+    }
+    const after = await this.scanBugs(productId);
+    if (!after.complete) {
+      return {
+        status: 'unknown', reason: 'scan_incomplete', writes: 1, duplicates,
+        message: `创建未拿到确认，复查缺陷列表不完整（${after.error || '未知原因'}）；未重复创建，请人工核对禅道`,
+      };
+    }
+    const candidates = after.items.filter(
+      (b) => !baselineIds.has(String(b.id)) && sameTitle(b.title, title),
+    );
+    const verified = [];
+    for (const candidate of candidates) {
+      const detail = await this.readBackBug(candidate.id);
+      if (this.matchesBugDraft(detail, { productId, title, steps, openedBuild, severity, pri })) {
+        verified.push({ id: candidate.id, detail });
+      }
+    }
+    if (verified.length === 1) {
+      return { status: 'created', recovered: true, id: verified[0].id, writes: 1, detail: verified[0].detail, duplicates };
+    }
+    if (verified.length > 1) {
+      return {
+        status: 'ambiguous', reason: 'multiple_candidates', writes: 1, duplicates,
+        candidates: verified.map((v) => v.id),
+        message: `创建未拿到确认，查到 ${verified.length} 条可能本次创建的缺陷（${verified.map((v) => `#${v.id}`).join('、')}），无法唯一确认；未重复创建`,
+      };
+    }
+    return {
+      status: 'unknown', reason: 'no_match', writes: 1, duplicates,
+      message: '创建未拿到确认，复查未发现本次写入的新记录，不能断定禅道是否已落库；未重复创建，请人工核对后再决定',
+    };
+  }
+
+  async submitBug({ title, steps, productId, openedBuild = ['trunk'], severity = 3, pri = 3, type = 'others', project }) {
+    if (!BUG_TYPES.includes(type)) throw new SkillError('bad_type', `未知缺陷类型：${type}`);
+    // 写入前先把该产品的缺陷扫一遍：既是查重，也是「本次新建」的 ID 基线。
+    const scan = await this.scanBugs(productId);
+    const duplicates = scan.items
+      .map((b) => ({ ...b, score: similarity(title, b.title) }))
+      .filter((b) => b.score >= 0.5)
+      .sort((a, b) => b.score - a.score);
+
+    const baselineIds = new Set(scan.items.map((b) => String(b.id)));
+    const draft = { title, steps, productId, openedBuild, severity, pri, type, project };
+    const approved = await this.confirm({ kind: 'submitBug', draft, duplicates });
+    if (!approved) return { status: 'cancelled', writes: 0, duplicates };
+
+    const payload = { productID: Number(productId), title, steps, openedBuild, severity, pri, type };
+    if (project !== undefined && project !== null) payload.project = Number(project);
+
+    let created;
+    try {
+      created = await this.withAuth(() => this.client.callTool('post_bugs', { payload }));
+    } catch (err) {
+      if (err instanceof SkillError) throw err;
+      created = { timedOut: true, httpStatus: 0, status: null, data: null };
+    }
+    if (isRejected(created)) {
+      return { status: 'failed', message: `请求被服务端拒绝：${created.error.message}`, writes: 1, duplicates };
+    }
+    if (created.timedOut || created.httpStatus === 0 || created.status === null) {
+      return await this.recoverBugCreate({
+        productId, title, steps, openedBuild, severity, pri, baselineIds, baselineComplete: scan.complete, duplicates,
+      });
+    }
+    if (created.status === 'fail') {
+      return { status: 'failed', message: describeFailure(created.data), writes: 1, duplicates };
+    }
+    const id = created.data?.id;
+    if (!id) {
+      return { status: 'inconsistent', writes: 1, duplicates, message: '创建响应没有给出缺陷 ID，无法回读确认' };
+    }
+    const detail = await this.readBackBug(id);
+    if (!this.matchesBugDraft(detail, { productId, title, steps, openedBuild, severity, pri })) {
+      return { status: 'inconsistent', id, writes: 1, detail, duplicates };
+    }
+    return { status: 'created', id, writes: 1, detail, duplicates };
+  }
+
+  async supplementBug({ id, addition }) {
+    const before = await this.readBackBug(id);
+    if (!before.found) return { status: 'not_found', writes: 0 };
+    const original = String(before.bug.steps || '');
+    const nextSteps = `${original}<p><strong>──────────────</strong></p><p><strong>[补充说明 · ${this.stamp()} · 用户口述，AI 整理]</strong></p><p>${addition}</p>`;
+    const approved = await this.confirm({ kind: 'supplementBug', id, original, next: nextSteps });
+    if (!approved) return { status: 'cancelled', writes: 0 };
+    // 用户确认后、写入前再读一次：正文被他人改动时停止写入，不覆盖新内容。
+    const recheck = await this.readBackBug(id);
+    if (!recheck.found) return { status: 'not_found', writes: 0, message: '写入前复核时缺陷已不存在' };
+    const current = String(recheck.bug.steps || '');
+    const changed =
+      normalizeHtml(current) !== normalizeHtml(original)
+      || !sameTitle(recheck.bug.title, before.bug.title)
+      || Number(recheck.bug.product) !== Number(before.bug.product);
+    if (changed) {
+      return {
+        status: 'conflict', needsUserDecision: true, writes: 0,
+        message: '写入前复核发现该缺陷已被他人修改，本次补充未写入；请确认重新合并后的草稿',
+        current: { title: recheck.bug.title, product: recheck.bug.product, steps: current },
+      };
+    }
+    const editedBefore = (recheck.actions || []).filter((a) => a === 'edited').length;
+    let updated;
+    try {
+      updated = await this.withAuth(() => this.client.callTool('put_bugs_bugID', {
+        bugID: String(id),
+        payload: { productID: Number(before.bug.product), title: before.bug.title, steps: nextSteps },
+      }));
+    } catch (err) {
+      if (err instanceof SkillError) throw err;
+      updated = { timedOut: true, httpStatus: 0, status: null, data: null };
+    }
+    if (isRejected(updated)) {
+      return { status: 'failed', message: `请求被服务端拒绝：${updated.error.message}`, writes: 1 };
+    }
+    if (updated.status === 'fail') {
+      return { status: 'failed', message: describeFailure(updated.data), writes: 1 };
+    }
+    const uncertain = updated.timedOut || updated.httpStatus === 0 || updated.status === null;
+    const after = await this.readBackBug(id);
+    const stepsMatched = after.found && normalizeHtml(after.bug?.steps || '') === normalizeHtml(nextSteps);
+    const editedAfter = (after.actions || []).filter((a) => a === 'edited').length;
+    const editedAdded = editedAfter > editedBefore;
+    if (stepsMatched && editedAdded) {
+      return { status: 'updated', id, writes: 1, detail: after, ...(uncertain ? { recovered: true } : {}) };
+    }
+    if (uncertain) {
+      return {
+        status: 'unknown', reason: 'update_unconfirmed', id, writes: 1, detail: after,
+        message: '更新未拿到确认，已只读核实；未重放更新，请人工核对后再决定',
+      };
+    }
+    return {
+      status: 'inconsistent', id, writes: 1, detail: after,
+      message: stepsMatched ? '正文已更新，但操作流水没有新增 edited' : '回读正文与本次预期不一致',
+    };
+  }
+
+  // ---- 解释 ---------------------------------------------------------
+
+  async explainBug(id) {
+    const detail = await this.readBackBug(id);
+    if (!detail.found) return { status: 'not_found', facts: [], inferences: [], unknown: [] };
+    const bug = detail.bug;
+    const actions = detail.raw?.actions || bug.actions || [];
+
+    const facts = [`当前状态：${bug.status || '未知'}`, `负责人：${bug.assignedTo || '未指派'}`];
+    for (const a of actions) {
+      facts.push(`${a.date || ''} ${a.actor || ''} ${a.action || ''}${a.comment ? `：${a.comment}` : ''}`);
+    }
+
+    const inferences = [];
+    if (bug.assignedTo && !bug.assignedDate) {
+      inferences.push('缺陷已指派负责人，但看不到指派时间，推断刚指派不久（依据：assignedTo 有值而 assignedDate 为空）');
+    }
+    if (!bug.resolvedDate && !bug.closedDate) {
+      inferences.push('没有解决与关闭记录，推断仍在处理中（依据：resolvedDate 与 closedDate 均为空）');
+    }
+
+    const unknown = [];
+    if (!bug.resolvedDate && !bug.closedDate) {
+      unknown.push('预计修复时间：接口没有该字段，也没有可引用的评论说明');
+    }
+    if (!bug.resolution) {
+      unknown.push('最终处理结论：resolution 为空');
+    }
+
+    return { status: 'ok', facts, inferences, unknown, detail };
+  }
 }

@@ -23,6 +23,10 @@
 //   __NOOP_UPDATE__   → 更新返回成功但不生效
 // 另外可用 state.createHang 注入创建行为（'ghost'/'persist'），
 // 用 state.deleteFails 注入删除失败。
+//
+// 缺陷单（bug 对象）的复刻行为与反馈单一致，但有两处结构性差异：
+//   - 字段名是 productID（反馈单是 product），openedBuild 是必填的字符串数组
+//   - 正文载体是 steps，且按富文本 HTML 存储（裸换行会被压掉）
 import http from 'node:http';
 
 export const MOCK_PRODUCTS = [
@@ -30,10 +34,17 @@ export const MOCK_PRODUCTS = [
   { id: 102, name: '示例产品 B' },
 ];
 
+export const MOCK_PROJECTS = [
+  { id: 11, name: '示例项目 A', product: 101, status: 'doing' },
+  { id: 12, name: '示例项目 B', product: 101, status: 'doing' },
+];
+
 export function createMockState(overrides = {}) {
   return {
     feedbacks: new Map(),
+    bugs: new Map(),
     nextId: 900,
+    bugNextId: 1900,
     calls: [],
     sessions: new Map(),
     loginFails: false,
@@ -70,12 +81,20 @@ const TOOLS = [
   { name: 'post_feedbacks', description: '创建反馈', inputSchema: { type: 'object', properties: { payload: { type: 'object', properties: { product: { type: 'integer' }, title: { type: 'string' }, desc: { type: 'string' }, type: { type: 'string' } } } } } },
   { name: 'put_feedbacks_feedbackID', description: '更新反馈', inputSchema: { type: 'object', properties: { feedbackID: { type: 'string' }, payload: { type: 'object', properties: { product: { type: 'integer' }, title: { type: 'string' }, desc: { type: 'string' } } } } } },
   { name: 'delete_feedbacks_feedbackID', description: '删除反馈', inputSchema: { type: 'object', properties: { feedbackID: { type: 'string' } } } },
+  { name: 'get_projects', description: '项目列表', inputSchema: { type: 'object', properties: { pageID: { type: 'string' }, recPerPage: { type: 'string' } } } },
+  { name: 'get_products_productID_bugs', description: '产品缺陷列表', inputSchema: { type: 'object', properties: { productID: { type: 'string' }, pageID: { type: 'string' }, recPerPage: { type: 'string' } } } },
+  { name: 'get_bugs_bugID', description: '缺陷详情', inputSchema: { type: 'object', properties: { bugID: { type: 'string' } } } },
+  { name: 'post_bugs', description: '创建缺陷', inputSchema: { type: 'object', properties: { payload: { type: 'object', properties: { productID: { type: 'integer' }, title: { type: 'string' }, openedBuild: { type: 'array' }, steps: { type: 'string' }, severity: { type: 'integer' }, pri: { type: 'integer' }, type: { type: 'string' }, project: { type: 'integer' }, execution: { type: 'integer' } } } } } },
+  { name: 'put_bugs_bugID', description: '更新缺陷', inputSchema: { type: 'object', properties: { bugID: { type: 'string' }, payload: { type: 'object', properties: { productID: { type: 'integer' }, title: { type: 'string' }, steps: { type: 'string' } } } } } },
+  { name: 'delete_bugs_bugID', description: '删除缺陷', inputSchema: { type: 'object', properties: { bugID: { type: 'string' } } } },
 ];
 
 /** 工具的 payload 必填字段：真实 MCP 在缺字段时返回 JSON-RPC -32602。 */
 const REQUIRED_PAYLOAD_FIELDS = {
   post_feedbacks: ['product', 'title'],
   put_feedbacks_feedbackID: ['product', 'title'],
+  post_bugs: ['productID', 'title', 'openedBuild'],
+  put_bugs_bugID: ['productID', 'title'],
 };
 /** 真实 MCP 的参数错误形状：HTTP 200，正文是 JSON-RPC error，没有业务响应。 */
 function invalidParams(id, missing) {
@@ -90,6 +109,10 @@ function invalidParams(id, missing) {
 }
 function feedbackView(fb) {
   return { ...fb, actions: fb.actions.map((a) => ({ ...a })) };
+}
+
+function bugView(bug) {
+  return { ...bug, actions: bug.actions.map((a) => ({ ...a })) };
 }
 
 /** 当前登录账号可见的产品；state.visibleProducts 为空时全部可见。 */
@@ -212,6 +235,123 @@ function handleToolCall(state, session, name, args) {
     if (!fb) return { payload: { message: `对象不存在：${args.feedbackID}`, status: 'fail' } };
     state.feedbacks.delete(key);
     return { payload: { id: fb.id, message: '删除成功', status: 'success' } };
+  }
+
+  // ---- 缺陷单（bug 对象） ------------------------------------------
+
+  if (name === 'get_projects') {
+    const products = visibleProducts(state, session);
+    const ids = products.map((p) => p.id);
+    const projects = MOCK_PROJECTS.filter((p) => ids.includes(p.product));
+    return { payload: { pager: { recTotal: projects.length, pageTotal: 1, pageID: 1, recPerPage: 20 }, projects } };
+  }
+
+  if (name === 'get_products_productID_bugs') {
+    const productID = Number(args.productID);
+    if (!productVisible(state, session, productID)) {
+      return { payload: { message: 'Product does not exist.', status: 'fail' } };
+    }
+    const list = [...state.bugs.values()].filter((b) => b.product === productID);
+    return { payload: { pager: { recTotal: list.length, pageTotal: 1, pageID: 1, recPerPage: list.length || 20 }, bugs: list.map(bugView) } };
+  }
+
+  if (name === 'get_bugs_bugID') {
+    const bug = state.bugs.get(String(args.bugID));
+    if (!bug) return { payload: { message: `对象不存在：${args.bugID}`, status: 'fail' } };
+    return { payload: { bug: bugView(bug), actions: bug.actions.map((a) => ({ ...a })), status: bug.status } };
+  }
+
+  if (name === 'post_bugs') {
+    const payload = args.payload;
+    if (!payload || typeof payload !== 'object') {
+      return { payload: { message: { title: ['『缺陷标题』不能为空。'] }, status: 'fail' } };
+    }
+    if (!payload.title) {
+      return { payload: { message: { title: ['『缺陷标题』不能为空。'] }, status: 'fail' } };
+    }
+    // 真实服务端会静默忽略不认识的字段：传 product（反馈单的字段名）等于没传产品。
+    const productID = payload.productID;
+    if (productID === undefined || productID === null) {
+      return { payload: { message: { product: ['『所属产品』不能为空。'] }, status: 'fail' } };
+    }
+    if (!Array.isArray(payload.openedBuild) || !payload.openedBuild.length) {
+      return { payload: { message: { openedBuild: ['『影响版本』不能为空。'] }, status: 'fail' } };
+    }
+    if (!productVisible(state, session, productID)) {
+      return { payload: { message: 'Product does not exist.', status: 'fail' } };
+    }
+    if (payload.title.includes('__FAIL__')) {
+      return { payload: { message: 'Product does not exist.', status: 'fail' } };
+    }
+    const id = state.bugNextId++;
+    if (payload.title.includes('__NOOP__')) {
+      return { payload: { id, message: '保存成功', status: 'success' } };
+    }
+    const persist = () => {
+      const actions = payload.title.includes('__NO_OPENED__')
+        ? []
+        : [{ action: 'opened', actor: session.account, comment: '', date: '2026-03-12 10:22' }];
+      const steps = payload.title.includes('__ALTERED_STEPS__')
+        ? `${payload.steps || ''}<p>（禅道侧自动改写）</p>`
+        : payload.steps || '';
+      state.bugs.set(String(id), {
+        id,
+        product: Number(productID),
+        project: payload.project === undefined ? 0 : payload.project,
+        execution: payload.execution === undefined ? 0 : payload.execution,
+        title: payload.title,
+        steps,
+        openedBuild: payload.openedBuild,
+        severity: payload.severity === undefined ? 3 : payload.severity,
+        pri: payload.pri === undefined ? 3 : payload.pri,
+        type: payload.type || 'others',
+        status: 'active',
+        assignedTo: '',
+        openedBy: session.account,
+        actions,
+      });
+    };
+    if (state.createHang === 'ghost') return { hang: true };
+    if (state.createHang === 'persist') {
+      persist();
+      return { hang: true };
+    }
+    if (payload.title.includes('__TIMEOUT__')) {
+      persist();
+      return { hang: true };
+    }
+    if (payload.title.includes('__TIMEOUT_GHOST__')) {
+      return { hang: true };
+    }
+    persist();
+    return { payload: { id, message: '保存成功', status: 'success' } };
+  }
+
+  if (name === 'put_bugs_bugID') {
+    const payload = args.payload;
+    const bug = state.bugs.get(String(args.bugID));
+    if (!bug) return { payload: { message: `对象不存在：${args.bugID}`, status: 'fail' } };
+    if (!payload || !payload.title || payload.productID === undefined) {
+      return { payload: { message: { title: ['『缺陷标题』不能为空。'] }, status: 'fail' } };
+    }
+    if (bug.title.includes('__NOOP_UPDATE__')) {
+      return { payload: { id: bug.id, message: '保存成功', status: 'success' } };
+    }
+    bug.title = payload.title;
+    bug.steps = payload.steps ?? bug.steps;
+    bug.actions.push({ action: 'edited', actor: session.account, comment: '', date: '2026-03-12 11:05' });
+    return { payload: { id: bug.id, message: '保存成功', status: 'success' } };
+  }
+
+  if (name === 'delete_bugs_bugID') {
+    const key = String(args.bugID);
+    if (state.deleteFails) {
+      return { payload: { message: '删除失败（测试注入）', status: 'fail' } };
+    }
+    const bug = state.bugs.get(key);
+    if (!bug) return { payload: { message: `对象不存在：${args.bugID}`, status: 'fail' } };
+    state.bugs.delete(key);
+    return { payload: { id: bug.id, message: '删除成功', status: 'success' } };
   }
 
   return { payload: { message: `未知工具：${name}`, status: 'fail' } };

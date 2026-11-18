@@ -59,6 +59,49 @@
 | 删除反馈 | `delete_feedbacks_feedbackID` | `feedbackID` | `message`、`status`（仅在明确授权的测试数据上使用） |
 | 交叉读取 | `get_bugs_bugID`、`get_stories_storyID`、`get_issues_issueID` | 各自 ID | 见下方「Bug 不要用统一 issue 视图」 |
 
+## 缺陷单相关（实测）
+
+### 工具
+
+| 用途 | 工具 | 参数 | 返回要点 |
+| --- | --- | --- | --- |
+| 产品缺陷列表 | `get_products_productID_bugs` | `productID`、`pageID`、`recPerPage` | `bugs[]` + `pager` |
+| 缺陷详情 | `get_bugs_bugID` | `bugID` | `bug{...}` + 顶层 **`actions[]`** + `status` |
+| 创建缺陷 | `post_bugs` | `payload.productID`（整数，必填）、`payload.title`（必填）、`payload.openedBuild`（字符串数组，必填）、`payload.steps`、`payload.severity`、`payload.pri`、`payload.type`、`payload.project`、`payload.execution` | `id`、`message`、`status` |
+| 更新缺陷 | `put_bugs_bugID` | `bugID` + `payload.productID`、`payload.title`、`payload.steps` | `id`、`message`、`status` |
+| 删除缺陷 | `delete_bugs_bugID` | `bugID` | `message`、`status`（仅在明确授权的测试数据上使用） |
+| 项目列表 | `get_projects` | `pageID`、`recPerPage` | `projects[]` + `pager` |
+| 项目下的版本 | `get_projects_projectID_builds` | `projectID` | `builds[]`（`branch` 为 `0` 即主干分支） |
+
+### 三个必须记住的坑
+
+1. **字段名是 `productID`，不是 `product`**：反馈单用 `payload.product`，缺陷单用 `payload.productID`。`productID` 在工具 schema 里是必填，传错字段名会被 MCP 的参数校验拦下（JSON-RPC `-32602`，`missing properties: [productID]`），请求根本没执行；只有当 `payload` 整个缺失（传了扁平参数）时，才会落到禅道自己的业务校验、报『所属产品』不能为空。
+2. **`openedBuild` 是必填的字符串数组**：这台实例的主干值是 `trunk`——缺陷列表视图显示「主干」，详情视图显示 `trunk`，指同一个值，比较时要归一化。
+3. **`steps` 是富文本 HTML**：禅道存的是 HTML，裸 `\n` 会被压掉；正文按段落写 `<p>`，回读比较前先剥标签再归一化空白。
+
+### 枚举
+
+`post_bugs` 的 `payload.type`：`codeerror`（代码错误）｜`config`（配置相关）｜`install`（安装部署）｜`security`（安全相关）｜`performance`（性能问题）｜`standard`（标准规范）｜`automation`（测试脚本）｜`designdefect`（设计缺陷）｜`others`（其他）。线上数据里出现过枚举外的值（如 `codeimprovement`），**只用上面这些**。
+
+`severity` / `pri` 默认都是 `3`。
+
+### 线上真实缺陷的字段分布（抽样 100 条，决定默认值）
+
+| 字段 | 分布 | 技能的处理 |
+| --- | --- | --- |
+| `severity` | `3` 占 82% | 默认 3 |
+| `pri` | `3` 占 82% | 默认 3 |
+| `execution` | `0` 占 99% | 不挂执行 |
+| `project` | 有值占 94%（集中在少数几个项目） | 产品下只有一个 doing 项目时默认挂它，多个则不挂并注明 |
+| `module` | `0` 占 97% | 不设（MCP 也没有这个参数） |
+| `openedBuild` | 主干占 82% | 默认 `["trunk"]` |
+| `type` | `codeerror` 占 90% | 按描述归类，拿不准用 `others` |
+| `assignedTo` | 99% 都有值 | 指派归人（技能不做指派） |
+
+### 缺陷详情的 `actions[]`
+
+与反馈单一样，`get_bugs_bugID` 的响应顶层有 `actions[]`（`action` / `actor` / `comment` / `date`），新建后应出现 `opened`。
+
 ## 反馈详情里读什么
 
 `get_feedbacks_feedbackID` 返回的 `feedback` 对象常用字段：
@@ -109,7 +152,8 @@
 | Schema 与运行时不一致 | `post_stories` 的 `reviewer`、`post_tickets` 的 `module` 实际必填；`post_requirements` 不返回 `id` | 不按 Schema 判断字段存在与否；关键字段按运行时读取 |
 | 权限随账号 | 每个用户用自己的账号登录，能看到的产品、项目、反馈都不同；看不见不等于不存在 | 只在可见范围内选品与查重，如实说明覆盖范围；用户提到的产品不可见时提示找管理员开权限 |
 | 登录失败会锁号 | 连续登录失败可能触发禅道账号锁定 | 登录失败只重试一次就停，不反复试；提示用户去禅道解锁 |
-| 无「反馈转 Bug/需求」工具 | `post_bugs` 的 `payload` 不接收来源反馈 ID | 反馈优先：先建反馈单，转正式单据由人评审后决定 |
+| 无「反馈转 Bug/需求」工具 | `post_bugs` 的 `payload` 不接收来源反馈 ID | 缺陷单与反馈单之间没有自动转换：用户明确要缺陷单时直接建缺陷单，不附带建反馈单（见 ADR-0008） |
+| 附件上传没有内容通道 | `post_files` 的 payload 只有 `fileName`，没有内容字段；`delete_files_fileID` 存在但没有对应的上传通道 | 明确告知不支持图片，请用户贴文字或走禅道 Web 端（仓库 issue #8 跟踪） |
 
 ## Bug 不要用统一 issue 视图
 

@@ -17,7 +17,7 @@
 //
 // 流程实现见 tests/e2e-live-flow.mjs；闸门与清理逻辑在 mock MCP 上有测试覆盖。
 import { McpClient, loadEnv } from './mcp-client.mjs';
-import { runLiveE2E } from './e2e-live-flow.mjs';
+import { runLiveE2E, runLiveBugE2E } from './e2e-live-flow.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,17 +30,18 @@ if (!url) {
 }
 const client = new McpClient(url, { timeoutMs: 20000 });
 await client.initialize();
-const result = await runLiveE2E({
-  client,
-  env,
-  credentials: { account: env.ZENTAO_ACCOUNT || '', password: env.ZENTAO_PASSWORD || '' },
-  stamp: () => new Date().toISOString().slice(0, 10),
-  log: (line) => console.log(line),
-});
-const failed = result.steps.filter((s) => !s.ok);
-console.log(`\n合计 ${result.steps.length} 项，通过 ${result.steps.length - failed.length}，失败 ${failed.length}`);
+const credentials = { account: env.ZENTAO_ACCOUNT || '', password: env.ZENTAO_PASSWORD || '' };
+const stamp = () => new Date().toISOString().slice(0, 10);
+const log = (line) => console.log(line);
+
+// 两条写入闭环共用同一套闸门与唯一标识；各自清理各自创建的记录。
+const feedbackRun = await runLiveE2E({ client, env, credentials, stamp, log });
+const bugRun = await runLiveBugE2E({ client, env, credentials, stamp, log });
+const steps = [...feedbackRun.steps, ...bugRun.steps];
+const failed = steps.filter((s) => !s.ok);
+console.log(`\n合计 ${steps.length} 项，通过 ${steps.length - failed.length}，失败 ${failed.length}`);
 if (failed.length) {
   console.log('失败项：');
   for (const f of failed) console.log(`  - ${f.name}${f.detail ? ` (${f.detail})` : ''}`);
 }
-process.exit(result.exitCode);
+process.exit(failed.length ? 1 : 0);
