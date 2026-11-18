@@ -6,15 +6,15 @@
 | --- | --- | --- |
 | [`rh-product-feedback`](skills/rh-product-feedback) | 0.4.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交成禅道反馈单，并支持查询反馈单、解释处理进度、补充说明；禅道 MCP 没配好时，能引导你完成安装与认证 |
 
-## 业务用户：三步接入
+## 业务用户：一条命令接入
 
 > 面向不用懂 MCP、只要能把话说清楚的同事。技能包里已含禅道 MCP 地址，装完直接用。
 
-完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的命令、三个示例和常见问题。三步概览：
+完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的命令、三个示例和常见问题。概览：
 
-1. **把技能包放进技能目录**：Claude Code 放 `~/.claude/skills/`，pi 放 `~/.agents/skills/`（Windows 对应 `%USERPROFILE%\.claude\skills\` 与 `.agents\skills\`）——把管理员发的 `rh-product-feedback` 整个目录复制进去。
-2. **对 Agent 说「帮我连上禅道」**：Agent 自己从技能包里读出地址并登记禅道 MCP，**你不用填 IP，也不用改配置文件**；登记完重开一次宿主。
-3. **写入你自己的禅道凭据**：Agent 给你一条命令，**你自己在终端执行**，输入禅道账号和令牌。凭据落在你自己机器上，**Agent 不会展示或外传它**——但会话登录模式下它需要读取这个文件去登录，令牌会进入本次会话上下文，所以优先用可单独撤销的禅道令牌，而不是账号密码。
+1. **装技能**：`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`——自动装到 Claude Code 的 `~/.claude/skills/` 或 pi 的 `~/.agents/skills/`。
+2. **跑安装脚本**：`bash ~/.claude/skills/rh-product-feedback/scripts/install.sh`——一次做完「登记禅道 MCP + 让你输入自己的账号密码」。**你不用填 IP，也不用改配置文件**；密码不回显，只写在你自己的机器上。
+3. **重启 Agent 后验证**：Claude Code 退出重开，pi 执行 `/reload`；在 Agent 里说「验证一下禅道连接」。
 
 之后就能直接用：
 
