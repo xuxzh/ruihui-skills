@@ -32,7 +32,7 @@
 
 **技能装了但禅道工具不可用**（宿主里没有 `zentao` 工具）：只给第 2 步。
 
-用户重开后按 0.3 登录并自检，然后**如实说明两件事**：
+用户重开后按 0.3 登录并自检（自检用查询器 `products`），然后**如实说明两件事**：
 
 - 凭据已写入本机，本次登录用的是它；
 - **当前禅道 MCP 恒以服务端固定身份服务**，所以反馈单的提交人暂时不是本人（见 `zentao-mcp.md` 的「实测偏差」）。
@@ -107,7 +107,7 @@
 
 ### 3. 查重
 
-调用 `get_products_productID_feedbacks`（`recPerPage=100`，最多 3 页），客户端按标题关键词匹配。
+查询器 `feedbacks --product <产品ID> --match <关键词>`（最多 3 页、300 条），客户端按标题关键词匹配。
 
 输出样例：
 
@@ -141,7 +141,7 @@
 
 ### 6. 回读
 
-`get_feedbacks_feedbackID`（用返回的 `id`）→ 核对 `product` / `title` / 完整 `desc` / `actions` 里的 `opened`。
+查询器 `feedback --id <ID>`（用返回的 `id`）→ 核对 `product` / `title` / 完整 `desc` / `actions` 里的 `opened`。
 
 ```
 ✓ 创建成功，反馈 #421
@@ -234,7 +234,7 @@
 
 ### 3. 查重
 
-调用 `get_products_productID_bugs`（`recPerPage=100`，最多 3 页）客户端匹配标题；**同一批扫描顺带查反馈单**（`get_products_productID_feedbacks`），避免同一件事在两个模块各建一张。
+查询器 `bugs --product <产品ID> --match <关键词>`（最多 3 页、300 条）客户端匹配标题；**同一产品顺带查反馈单**（`feedbacks --product <产品ID> --match <关键词>`），避免同一件事在两个模块各建一张。
 
 > 在你可见的 300 条缺陷中发现 1 条相近记录：
 > - #1934「设备列表导出按钮点击后无响应」— 状态 active — 负责人 张工
@@ -268,7 +268,7 @@
 
 ### 6. 回读
 
-`get_bugs_bugID`（用返回的 `id`）→ 核对 `product` / `title` / `steps`（**剥标签 + 归一化空白**后逐字比较）/ `openedBuild`（`trunk` 与「主干」归一化）/ `severity` / `pri` / `actions` 里的 `opened`。
+查询器 `bug --id <ID>`（用返回的 `id`）→ 核对 `product` / `title` / `steps`（**剥标签 + 归一化空白**后逐字比较）/ `openedBuild`（`trunk` 与「主干」归一化）/ `severity` / `pri` / `actions` 里的 `opened`。
 
 ```
 ✓ 创建成功，缺陷 #1935
@@ -299,7 +299,7 @@
 
 用户说「默认产品是 <产品名>」时：
 
-1. `get_products` 确认它在当前账号可见范围内；不可见就如实说明并让用户换一个。
+1. 查询器 `products --match <产品名>` 确认它在当前账号可见范围内；不可见就如实说明并让用户换一个。
 2. 把要写的内容给用户确认（产品 id + 名称）。
 3. 写入用户机器上的偏好文件 `~/.config/rh-zentao/preferences.json`：
 
@@ -317,8 +317,8 @@
 
 ### 定位
 
-- 给了编号 → 看上下文判断单据类型：缺陷用 `get_bugs_bugID`，反馈用 `get_feedbacks_feedbackID`。
-- 给了标题或产品 → `get_products_productID_feedbacks` / `get_products_productID_bugs` 分页拉取 + 客户端匹配，列候选让用户选编号。
+- 给了编号 → 看上下文判断单据类型：缺陷用 `bug --id <ID>`，反馈用 `feedback --id <ID>`。
+- 给了标题或产品 → 查询器 `feedbacks --product <ID> --match <关键词>` / `bugs --product <ID> --match <关键词>` 客户端匹配，列候选让用户选编号。
 
 ### 输出格式
 

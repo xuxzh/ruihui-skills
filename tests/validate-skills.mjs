@@ -126,6 +126,11 @@ if (!parsed) {
     ['Agent 代跑安装脚本时不代输凭据', /--skip-credentials/],
     ['交付时给出禅道直达链接', /feedback-view-/],
     ['链接地址取自 config.local.json 的 zentaoWebUrl', /zentaoWebUrl/],
+    ['列表与详情读取走随包查询器', /zentao-query/],
+    ['原始 JSON 不进上下文', /原始 JSON/],
+    ['不用调小分页绕开截断', /recPerPage/],
+    ['地址核对按需触发', /按需触发/],
+    ['查询器在 setup.md 里有说明', /禅道查询器/],
   ];
   for (const [label, re] of rules) check(`rh-product-feedback: ${label}`, re.test(all));
 

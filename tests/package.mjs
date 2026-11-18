@@ -39,7 +39,7 @@ test('打包产物是一个顶层自洽的技能目录', () => {
   assert.ok(fs.existsSync(path.join(pkg, 'SKILL.md')), '缺 SKILL.md');
   assert.ok(fs.existsSync(path.join(pkg, 'references', 'setup.md')), '缺 references/');
   assert.ok(fs.existsSync(path.join(pkg, 'config.local.json')), '缺 config.local.json');
-  for (const script of ['install.sh', 'install.ps1', 'set-credentials.sh', 'set-credentials.ps1']) {
+  for (const script of ['install.sh', 'install.ps1', 'set-credentials.sh', 'set-credentials.ps1', 'zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1']) {
     assert.ok(fs.existsSync(path.join(pkg, 'scripts', script)), `缺 scripts/${script}`);
   }
 
@@ -108,9 +108,19 @@ test('地址为空时打包失败，并给出可执行的提示', () => {
 });
 
 test('技能目录随包分发安装脚本（skills.sh 装的就是这个目录）', () => {
-  for (const script of ['install.sh', 'install.ps1', 'set-credentials.sh', 'set-credentials.ps1']) {
+  for (const script of ['install.sh', 'install.ps1', 'set-credentials.sh', 'set-credentials.ps1', 'zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1']) {
     assert.ok(fs.existsSync(path.join(SCRIPTS_DIR, script)), `技能目录缺 scripts/${script}`);
   }
+});
+
+test('查询器随包分发且能跑起来（--help 自带用法）', () => {
+  const stdout = execFileSync('node', [path.join(SCRIPTS_DIR, 'zentao-query.mjs'), '--help'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  assert.match(stdout, /products/, '--help 里要列出子命令');
+  assert.match(stdout, /prep/, '--help 里要列出 prep');
+  assert.match(stdout, /check/, '--help 里要列出 check');
 });
 
 test('打包产物目录在 .gitignore 里，避免内网地址被提交', () => {

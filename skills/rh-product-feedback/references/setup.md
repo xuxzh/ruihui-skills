@@ -106,7 +106,8 @@ ZENTAO_PASSWORD=<你的禅道密码>
 
 | 模式 | 凭据是否进入 Agent 上下文 | 说明 |
 | --- | --- | --- |
-| **会话登录**（当前默认） | 会 | Agent 读本机凭据文件 → 调 `post_users_login` 换会话令牌 → 后续调用沿用。优先用可单独撤销的令牌，泄露面小 |
+| **会话登录**（写操作的默认） | 会 | Agent 读本机凭据文件 → 调 `post_users_login` 换会话令牌 → 后续写入沿用。优先用可单独撤销的令牌，泄露面小 |
+| **查询器登录**（读操作的默认） | 不会 | 随包的 `scripts/zentao-query.mjs` 自己读凭据文件并登录，密码与令牌只在它的进程内，不打印、不进上下文 |
 | **请求头令牌** | 不会 | 若禅道 MCP 支持 `Authorization: Bearer <令牌>`，凭据由宿主客户端从环境变量注入，Agent 全程不碰凭据文件。当前 MCP 是否支持，见「管理员」一节 |
 
 「Agent 完全看不到你的令牌」是**不准确**的说法：会话登录模式下 Agent 会读取凭据文件。准确的说法是——凭据由你自己写入，Agent 不会主动展示、回显或外传它。
@@ -157,7 +158,7 @@ ZENTAO_PASSWORD=<你的禅道密码>
 
 用户在对话里说「默认产品是 <产品名>」时，Agent：
 
-1. 调 `get_products` 确认它在当前账号可见范围内（不可见就如实说明，让用户换一个）。
+1. 用查询器 `products --match <产品名>` 确认它在当前账号可见范围内（不可见就如实说明，让用户换一个）。
 2. 把要写的内容（产品 id + 名称）给用户确认。
 3. 写入上面的偏好文件（目录不存在就创建）。
 4. 回读复核文件内容，再告诉用户「默认产品已设为 <名称>」。
@@ -198,13 +199,37 @@ MCP server 名为 `zentao`，类型是 Streamable HTTP，地址取自 `config.lo
 
 pi 支持 `/reload`：改完配置在会话里执行 `/reload` 就生效，不必重启宿主。
 
+## 禅道查询器（只读）
+
+随包的 `scripts/zentao-query.mjs` 负责**读**：产品、项目、缺陷/反馈列表、单据详情。它把取数、过滤、投影放在脚本进程内做完，只打印十几行表格——禅道列表接口的原始响应是几十 KB 到上百 KB 的 JSON，直接进 Agent 上下文会被截断（实测一次提单据有 8 分钟耗在这上面）。
+
+```bash
+node <技能目录>/scripts/zentao-query.mjs products --match 报表
+node <技能目录>/scripts/zentao-query.mjs projects --match 报表
+node <技能目录>/scripts/zentao-query.mjs bugs --product 29 --match 切换语言
+node <技能目录>/scripts/zentao-query.mjs feedbacks --product 29 --match 切换语言
+node <技能目录>/scripts/zentao-query.mjs bug --id 1936
+node <技能目录>/scripts/zentao-query.mjs feedback --id 421
+node <技能目录>/scripts/zentao-query.mjs prep --product 瑞辉智能报表平台 --match 切换语言
+node <技能目录>/scripts/zentao-query.mjs check   # 宿主地址是否与技能包一致（只给结论）
+node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao 地址改成技能包的（只改 url）
+```
+
+- **前置**：Node.js 18+（用 `fetch`）。没有 node 时改用 MCP 工具分小页取，只把需要的字段抄下来。
+- **凭据**：脚本自己读本机凭据文件并登录，密码与令牌不打印、不进上下文。没写凭据时它会提示去跑 `set-credentials.sh`。
+- **地址**：从技能包的 `config.local.json` 读；`check` / `sync` **只输出结论**，不回显地址。`sync` 只改宿主配置里 `zentao` 条目的 `url`，写前备份。
+- **环境变量**（测试用）：`ZENTAO_MCP_URL` 覆盖禅道地址，`ZENTAO_CREDENTIALS_FILE` 覆盖凭据文件路径。
+- **写操作不走它**：建单、更新、流转一律用 MCP 工具，保留用户确认链路。
+
+Windows 用 `scripts\zentao-query.ps1`（PowerShell）。
+
 ## 自检
 
 只做只读调用，不写任何反馈单。
 
 1. 工具列表里有 `post_users_login`、`get_products`、`post_feedbacks`（工具名可能带 `mcp__zentao__` 前缀）。
-2. `post_users_login` 成功返回。
-3. `get_products` 能返回产品列表——这份列表就是当前账号的**可见范围**，之后提反馈只能选这里面的产品。
+2. 跑一次查询器 `products`：能返回产品列表即说明连上了——这份列表就是当前账号的**可见范围**，之后提反馈只能选这里面的产品。
+3. 要写入时再登录（`post_users_login`），登录失败只重试一次就停。
 
 ## 管理员
 

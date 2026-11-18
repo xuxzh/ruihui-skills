@@ -3,7 +3,7 @@ name: rh-product-feedback
 description: 把自然语言产品反馈提交到禅道 ZenTao：明确要 Bug 时直接创建**正式缺陷单**（bug 对象，进开发流程），其余走**反馈单**（feedback 对象）；两条路径都支持查询、进度解释与补充说明。也能在禅道 MCP 未配置时引导用户完成安装与认证。触发场景：用户要「提 Bug / 报缺陷 / 页面报错 / 复现步骤是…」「提需求 / 提建议 / 提交反馈」「查反馈 / 查缺陷 / 看反馈到哪了 / 为什么还没排期 / 补充反馈信息」「帮我装禅道 MCP / 配置禅道 / 连不上禅道」，或提到 report a bug、file a feature request、check feedback status、connect zentao；用户输入斜杠命令 `/rh-product-feedback install`（pi 是 `/skill:rh-product-feedback install`）时走安装模式——Agent 代跑随包的安装脚本登记禅道 MCP，账号密码仍由本人写入。
 compatibility: 需要连接禅道 MCP（工具名前缀 zentao，至少含 post_users_login、post_feedbacks、post_bugs、put_feedbacks_feedbackID、get_feedbacks_feedbackID、get_products_productID_feedbacks）并能访问该服务；首次使用需要本机已有自己的禅道账号凭据（见 references/setup.md）。
 metadata:
-  rh-version: "0.8.0"
+  rh-version: "0.9.0"
   rh-mcp-server: zentao
 ---
 
@@ -16,26 +16,60 @@ metadata:
 
 两条路径**并存**：走缺陷单时**不自动附带创建反馈单**（禅道没有「反馈转缺陷」的关联字段，两张单会变成同一件事的两份记录）。
 
-禅道 MCP 的工具名、参数包装、字段与枚举都以实测为准 → 读 [references/zentao-mcp.md](references/zentao-mcp.md)。
-本文件只保留流程与硬约束；模板、话术与错误处理按需下钻。
+禅道 MCP 的工具名、参数包装、字段与枚举都以实测为准 → 读 [references/zentao-mcp.md](references/zentao-mcp.md)。本文件只保留流程与硬约束；模板、话术与错误处理按需下钻。
+
+## 按需读
+
+只读你现在要用的那一份，**不要通读**（每多读一份都是实打实的上下文与时间）：
+
+| 现在要做的事 | 读 |
+| --- | --- |
+| 提缺陷单 | 本文件 + [references/bug-templates.md](references/bug-templates.md) |
+| 提反馈单 | 本文件 + [references/feedback-templates.md](references/feedback-templates.md) |
+| 装技能 / 连不上禅道 / 改默认产品 | [references/setup.md](references/setup.md) |
+| 报错了、超时了、结果对不上 | [references/error-handling.md](references/error-handling.md) |
+| 不确定字段名、枚举、返回结构 | [references/zentao-mcp.md](references/zentao-mcp.md) |
+| 不确定输出格式、话术 | [references/workflow.md](references/workflow.md) |
+
+## 读禅道数据：走查询器
+
+禅道的列表类接口单次返回几十 KB 到上百 KB 的 JSON（一个产品对象带 70 多个统计字段，单个约 1.3KB）。原始输出进上下文会被截断，Agent 只能反复调小分页试错——实测一次提单据有 8 分钟耗在这上面。
+
+随包的**查询器**把「取数据 + 过滤 + 投影」放在脚本进程内做完，只打印十几行表格：
+
+```bash
+node <技能目录>/scripts/zentao-query.mjs products --match 报表
+node <技能目录>/scripts/zentao-query.mjs projects --match 报表
+node <技能目录>/scripts/zentao-query.mjs bugs --product 29 --match 切换语言
+node <技能目录>/scripts/zentao-query.mjs feedbacks --product 29 --match 切换语言
+node <技能目录>/scripts/zentao-query.mjs bug --id 1936
+node <技能目录>/scripts/zentao-query.mjs feedback --id 421
+node <技能目录>/scripts/zentao-query.mjs prep --product 瑞辉智能报表平台 --match 切换语言
+```
+
+- **读**（产品、项目、缺陷/反馈列表、单据详情）→ 查询器。
+- **写**（建单、更新、流转）→ MCP 工具（`post_bugs` / `post_feedbacks` / `put_*`），保留用户确认链路。
+- 查询器自己读本机凭据并登录，**密码与令牌不进上下文**。
+- `<技能目录>` 是技能包根目录：pi 在 `~/.agents/skills/rh-product-feedback`，Claude Code 在 `~/.claude/skills/rh-product-feedback`。
+- 环境里没有 `node` 时改用 MCP 工具分小页取（如 `recPerPage=20`），**只把需要的字段抄下来**，不要把原始 JSON 整段贴进上下文。
+
+`prep` 一次给全「产品 + 项目 + 缺陷/反馈查重候选」，用它替代串行的四轮查询。
 
 ## 术语
 
-- **反馈单**：禅道 `feedback` 对象（`post_feedbacks` 创建、`get_feedbacks_feedbackID` 读取）。自带类型（Bug / 需求 / 建议），不进入开发流程。
-- **缺陷单**：禅道 `bug` 对象（`post_bugs` 创建、`get_bugs_bugID` 读取）。属于正式单据，可被指派、可流转。
+- **反馈单**：禅道 `feedback` 对象（`post_feedbacks` 创建）。自带类型（Bug / 需求 / 建议），不进入开发流程。
+- **缺陷单**：禅道 `bug` 对象（`post_bugs` 创建）。属于正式单据，可被指派、可流转。
 - **正式单据**：禅道里的缺陷单、需求、任务等对象。状态流转与指派由人决定。
+- **查询器**：随包的只读查询脚本（`scripts/zentao-query.mjs`）。在进程内过滤禅道数据，只把结果表格交给 Agent。
 - **草稿**：写库前展示给用户确认的结构化内容。
 - **回读**：写入后用返回的 ID 重新读取，核对内容与操作流水。
 - **当前登录账号**：本会话登录禅道用的那个账号，就是对话里的用户本人；禅道里的单据留痕在它名下。
-- **接入凭据**：当前登录账号的账号名与密码（或令牌），存在用户自己机器的凭据文件里，由用户本人写入；会话登录时会被读取，密码或令牌会进入 Agent 上下文。
-- **默认产品**：用户在本机设置的、默认用于提交单据的禅道产品。存在用户自己的机器上，不在技能包里。
+- **接入凭据**：当前登录账号的账号名与密码（或令牌），存在用户自己机器的凭据文件里，由用户本人写入。
+- **默认产品**：用户在本机设置的、默认用于提交单据的禅道产品，存在用户自己的机器上（偏好文件），不在技能包里。
 - **随包默认产品**：写在技能包 `config.local.json` 里、由分发者预置的公司级默认产品，所有装了这个包的人共享同一份。
 - **可见范围**：当前登录账号在禅道里能看到的产品的集合；单据只能落在这里面，查重也只覆盖这里面。
-- **禅道 Web 地址**：技能包内 `config.local.json` 的 `zentaoWebUrl`，禅道 Web 端的根地址（与 `mcpUrl` 同一个文件，该文件还放着随包默认产品）。
+- **禅道 Web 地址**：技能包内 `config.local.json` 的 `zentaoWebUrl`（与 `mcpUrl` 同一个文件）。
 - **单据链接**：`<禅道 Web 地址>/feedback-view-<反馈 ID>.html` 或 `<禅道 Web 地址>/bug-view-<缺陷 ID>.html`。
-- **安装脚本**：随技能包分发的脚本，一次执行即完成「登记禅道 MCP + 写入本人接入凭据」，并提示重启与验证。
-- **自助安装**：接入由安装脚本或 Agent 代办完成的接入过程（登记禅道 MCP、写入本人凭据）。
-- **安装入口**：业务用户开始安装的方式——在 Agent 里说 `/rh-product-feedback install`（Agent 代跑安装脚本），或自己跑一次安装脚本。
 
 ## 0. 会话第一步：环境自检与引导
 
@@ -43,31 +77,26 @@ metadata:
 
 先确认宿主里存在禅道 MCP 的工具（工具名带 `zentao` 前缀，或至少存在 `post_users_login` 与 `get_products`）。
 
-- **可用** → 继续 0.3。
+- **可用** → 直接进 0.4。
 - **不可用** → 走 0.2 的 A 路径（Agent 代跑安装脚本）。**不要**向用户索要禅道地址、IP、端口或账号密码。
 
-**不论工具是否可用，都要核对一次地址**（内网地址换过、装错包时，只有这一步能发现）：
+**地址核对按需触发**，不要每次会话都去读宿主配置（那里可能有凭据类文件）：
 
-1. 读宿主配置里 `zentao` 条目的 url（Claude Code：`~/.claude.json` 的 `mcpServers.zentao.url`；pi：`~/.pi/agent/mcp.json`）。
-2. 读技能包内 `config.local.json` 的 `mcpUrl`。
-3. 两者不一致（一边为空、或 url 不同）→ **以技能包里的 `config.local.json` 为准**，按 [references/setup.md](references/setup.md)「各宿主配置」的方式更新宿主配置里该条目的 url（只改 url，保留其他字段），写回前备份，并告诉用户「配置里的地址和技能包里的地址不一致，已更新，重开一次宿主生效」。
-4. 两者一致 → 什么都不用做。
-5. **不要为了让两边一致去改技能包里的 `config.local.json`**——那是分发下来的文件，用户没同意不要动（见硬约束 12）。
+- 工具可用且首调成功 → 不用核对，能连上就是事实。
+- 工具不可用、登录或首调失败、或走安装流程 → 核对一次：`node <技能目录>/scripts/zentao-query.mjs check` 只给结论（一致 / 不一致）；不一致就 `node <技能目录>/scripts/zentao-query.mjs sync` 修正（只改 `zentao` 条目的 `url`，写前备份），再告诉用户「配置里的地址和技能包里的地址不一致，已更新，重开一次宿主生效」。
+- **不要为了让两边一致去改技能包里的 `config.local.json`**——那是分发下来的文件，用户没同意不要动（见硬约束 12）。
+
+各宿主配置的位置与写法见 [references/setup.md](references/setup.md)「各宿主配置」。
 
 ### 0.2 安装（自助安装）
 
 **触发**：请求里带 `install` 参数（斜杠命令 `/rh-product-feedback install`，pi 是 `/skill:rh-product-feedback install`），或用户说「帮我装禅道 / 配置禅道 / 连不上禅道」。带 `install` 时**直接走 A 路径**，不必先做 0.1 的工具检测。
 
-共同要点：
+共同要点：地址来自技能包内的 `config.local.json`，脚本自己读，**不进对话、不回显**；凭据由用户本人输入并写入本机凭据文件，**不要在对话里索要或回显密码**；登记完要重启宿主（Claude Code 退出重开；pi 执行 `/reload`），**重启之后**再验证（0.4）。
 
-1. 地址来自技能包内的 `config.local.json`，脚本自己读，**不进对话、不回显**。
-2. 凭据由用户本人输入并写入本机凭据文件；**不要在对话里索要或回显密码**。
-3. 登记完要重启宿主（Claude Code 退出重开；pi 执行 `/reload`），**重启之后**再验证（0.3）。
-4. 跑完仍连不上、或 `zentao` 条目被宿主回写覆盖 → 按 0.1 的方式自己重写一次（只改 url），或再让用户跑一次脚本。
+**A 路径（默认）：Agent 代跑安装脚本。**
 
-#### A 路径：Agent 代跑安装脚本（默认）
-
-1. **定位技能目录**（安装脚本随技能包分发，两个候选路径取先命中的那个）：
+1. 定位技能目录（两个候选路径取先命中的那个）：
 
    ```bash
    for d in "$HOME/.claude/skills/rh-product-feedback" "$HOME/.agents/skills/rh-product-feedback"; do
@@ -77,38 +106,20 @@ metadata:
 
    两个都没命中 → 技能没装到宿主能发现的位置，按 [references/setup.md](references/setup.md) 的「装技能」处理。
 
-2. **跑安装脚本**（只做登记，不做交互输入；把上一步拿到的目录替进 `<技能目录>`）：
-
-   ```bash
-   bash <技能目录>/scripts/install.sh --skip-credentials --force
-   ```
-
-   Windows：`powershell -ExecutionPolicy Bypass -File <技能目录>\scripts\install.ps1 -SkipCredentials -Force`。
-
+2. 跑安装脚本（只做登记，不做交互输入）：`bash <技能目录>/scripts/install.sh --skip-credentials --force`。Windows 用 `install.ps1 -SkipCredentials -Force`。
    - `--skip-credentials`：凭据必须由本人输入，Agent 不代劳（硬约束 5）。
    - `--force`：Agent 就在宿主里，宿主必然「正在运行」，这时停下没有意义。
    - 脚本可以重复跑：已登记且地址一致就跳过，不会重复写。
 
-3. **回读复核**：按 [references/setup.md](references/setup.md)「各宿主配置」读宿主配置里的 `zentao` 条目，确认地址与 `config.local.json` 一致。脚本报告「已有 zentao 条目但地址与技能包不一致」时，**只改 url 这一个键**（先备份、保留其他字段），改完复核。
+3. 回读复核宿主配置里的 `zentao` 条目，确认地址与 `config.local.json` 一致；不一致就只改 `url` 这一个键（先备份、保留其他字段），改完复核。
 
-4. **凭据**：查本机凭据文件在不在（`bash <技能目录>/scripts/set-credentials.sh --path` 给出位置，`<技能目录>` 同上）。
+4. 凭据：查本机凭据文件在不在（`bash <技能目录>/scripts/set-credentials.sh --path` 给出位置）。在 → 跳到第 5 步；不在 → 请用户**在自己终端**跑一次 `bash <技能目录>/scripts/set-credentials.sh`（Agent 的命令环境没有可交互的输入，替用户输密码会把密码带进对话）。
 
-   - 在 → 跳到第 5 步。
-   - 不在 → Agent 的命令环境没有可交互的输入，替用户输密码会把密码带进对话。请用户**在自己终端**跑一条命令写入（验证连接要用它，见 0.3）：
+5. 提示重启宿主（Claude Code 退出重开；pi 执行 `/reload`），重启后再验证（0.4）。
 
-     ```bash
-     bash <技能目录>/scripts/set-credentials.sh
-     ```
+6. 如实汇报：分别说清「禅道 MCP 已登记」「凭据已写入 / 还没写入」「需要重开宿主」。没验证过不要说「装好了、能提反馈了」。
 
-     Windows：`powershell -ExecutionPolicy Bypass -File <技能目录>\scripts\set-credentials.ps1`。
-
-5. **提示重启宿主**：Claude Code 退出重开；pi 执行 `/reload`。重启后再验证（0.3）。
-
-6. **如实汇报**：分别说清「禅道 MCP 已登记」「凭据已写入 / 还没写入」「需要重开宿主」。没验证过不要说「装好了、能提反馈了」。
-
-#### B 路径：用户自己跑脚本
-
-Agent 没有命令工具、或脚本跑失败时，把这条命令给用户，让他自己在终端跑（脚本一次做完「登记禅道 MCP + 交互输入本人凭据」）：
+**B 路径：用户自己跑脚本。** Agent 没有命令工具、或脚本跑失败时，把这条命令给用户，让他自己在终端跑：
 
 ```bash
 bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
@@ -118,23 +129,20 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 
 安装过程只做这些；不要替用户编造地址，不要把凭据写进任何仓库文件。
 
-### 0.3 认证（需要禅道数据时才做）
+### 0.3 认证（要写禅道时才做）
 
 调用 `post_users_login`，参数包在 `payload` 内：`{"payload": {"account": "<账号>", "password": "<密码或令牌>"}}`。
 
-- **懒触发**：只在真要读写禅道数据时才登录（提单据、查单据，或用户明确说「连上禅道」）；无关问题不登录。
-- 只用 MCP 工具登录，**不要用 curl 或直连 HTTP 去调试登录接口**——那会把会话 token 打进终端日志。
-- 凭据从**本机接入凭据文件**读（位置见 `references/setup.md`）；不要在回复、日志、代码或文档里回显账号、密码、令牌。
-- 凭据文件不存在 → 给出写入凭据的命令让用户自己执行，等用户确认已写入后再登录；**不在对话里问密码**。
+- **懒触发**：只在真的要写入禅道时（建单、更新）才登录；只读查询由查询器自己登录，Agent 不用管。
+- 只用 MCP 工具登录，**不要用 curl 或直连 HTTP 去调试登录接口**——那会把会话 token 打进终端日志。查询器脚本是唯一例外（凭据与令牌只在它的进程内，不打印）。
+- 凭据从**本机接入凭据文件**读（位置见 `references/setup.md`）；不要在回复、日志、代码或文档里回显账号、密码、令牌。凭据文件不存在 → 给出写入凭据的命令让用户自己执行，等用户确认已写入后再登录；**不在对话里问密码**。
 - 收到 HTTP 401 → 重新登录一次，重试该调用一次；仍失败则停止并报告认证失败（连续失败可能触发禅道账号锁定，不要反复试）。
 - 登录成功后会话内沿用该账号的 token，后续调用自动带 token。会话登录下令牌会进入本次会话上下文，这是已知的暴露面——不要说成「Agent 看不到令牌」。
-- **实测提醒**：当前禅道 MCP 的 `post_users_login` 不校验传入的凭据，恒以服务端配置的身份返回成功（详见 `references/zentao-mcp.md`）。所以「登录失败」这一分支目前基本触发不了；一旦 MCP 改为按用户凭据登录，下面 401 的处理规则照旧。
-
-完成标准：拿到一次成功登录；或给出明确的认证失败结论与建议动作。
+- **实测提醒**：当前禅道 MCP 的 `post_users_login` 不校验传入的凭据，恒以服务端配置的身份返回成功（详见 `references/zentao-mcp.md`）。所以「登录失败」这一分支目前基本触发不了；一旦 MCP 改为按用户凭据登录，401 的处理规则照旧。
 
 ### 0.4 只读自检
 
-认证成功后调一次 `get_products`（只读）确认真的连上了，并用它列出**当前账号可见的产品**——这批产品就是后续选产品的候选范围。失败则按 [references/error-handling.md](references/error-handling.md) 处理。
+调一次查询器 `products`（只读，脚本内部完成登录）确认真的连上了，并用它列出**当前账号可见的产品**——这批产品就是后续选产品的候选范围。失败则按 [references/error-handling.md](references/error-handling.md) 处理。
 
 自检通过就**直接进入用户的诉求**（收集要素、查重、草稿），不要在中间插入「自检报告 → 等用户确认」的往返；只在认证失败、产品不可见时停下来给下一步。
 
@@ -190,9 +198,8 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 
 禅道 MCP 没有服务端关键词检索，查重靠客户端匹配：
 
-1. `get_products_productID_feedbacks`，`recPerPage=100`，最多取 3 页（上限 300 条）。
-2. 在客户端按标题关键词匹配（大小写与空格归一化，取标题中最有区分度的词）。
-3. 把候选连同 ID、标题、状态列给用户，再按 [references/feedback-templates.md](references/feedback-templates.md) 的「追问格式」让他选：a. 新建一条 / b. 在 <候选> 上补充 / c. 都不是，并给出建议答案与理由。
+1. 查询器 `bugs --product <产品ID> --match <关键词>` 与 `feedbacks --product <产品ID> --match <关键词>`（关键词取标题里有区分度的词），同一产品一次查完两处。
+2. 把候选连同 ID、标题、状态、负责人列给用户，再按 [references/feedback-templates.md](references/feedback-templates.md) 的「追问格式」让他选：a. 新建一条 / b. 在 <候选> 上补充 / c. 都不是，并给出建议答案与理由。
 
 这次扫描同时是本次写入的**基线**：结果不确定时，只有基线里没有的 ID 才可能是本次新建。
 
@@ -200,26 +207,24 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 
 ### 2.4 用户确认
 
-展示：类型、所属产品、标题、描述全文、查重结果。
-
-用户明确确认后才写入。只有「嗯」「行吧」而没看到草稿时，先把草稿给出来再问一次。
+展示：类型、所属产品、标题、描述全文、查重结果。用户明确确认后才写入。只有「嗯」「行吧」而没看到草稿时，先把草稿给出来再问一次。
 
 ### 2.5 创建
 
-`post_feedbacks`，全部字段放进 `payload`：
+先做 0.3 的会话登录（写操作才需要），再 `post_feedbacks`，全部字段放进 `payload`：
 
 ```json
 {"payload": {"product": 42, "title": "<标题>", "desc": "<描述全文>", "type": "bug"}}
 ```
 
 - `type` 映射：Bug → `bug`，需求 → `story`，建议 → `advice`。
-- `product` 是产品 ID（整数，示例里的 42 是占位），先从 `get_products` 确认；`product` 与 `title` 是禅道实际必填项。
+- `product` 是产品 ID（整数，示例里的 42 是占位），先从 `products` 确认；`product` 与 `title` 是禅道实际必填项。
 - `desc` / `source` / `module` / `feedbackBy` 保持不填：反馈者由禅道按当前登录账号自动记录，填了反而与实际留痕矛盾。
 - 只发一次调用。创建接口没有幂等键，同一份 payload 发两次会产生两条记录。
 
 ### 2.6 回读校验
 
-用返回的 `id` 调 `get_feedbacks_feedbackID`，核对**产品、标题、完整描述**（换行归一化后逐字比较），并确认 `actions` 里有 `opened`。
+用返回的 `id` 调查询器 `feedback --id <ID>`，核对**产品、标题、完整描述**（换行归一化后逐字比较），并确认 `actions` 里有 `opened`。
 
 - 一致 → 进入 2.7。
 - 不一致或读不到 → 按 [references/error-handling.md](references/error-handling.md) 处理：先查后报，不重复创建。
@@ -234,21 +239,11 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 
 **反馈链接**：`<禅道 Web 地址>/feedback-view-<反馈 ID>.html`。
 
-- 禅道 Web 地址读技能包内 `config.local.json` 的 `zentaoWebUrl`（与 SKILL.md 同目录；技能目录位置见 [references/setup.md](references/setup.md)，或用 0.2 A 路径里的定位片段）。
+- 禅道 Web 地址读技能包内 `config.local.json` 的 `zentaoWebUrl`（与 SKILL.md 同目录）。
 - 读不到、或该字段为空 → **不给链接**，只给反馈 ID，并如实说明「技能包里没有配置禅道 Web 地址，给不了直达链接」。不要拿 MCP 地址拼链接，也不要凭印象编一个。
 - 给完整 URL，用户点开就能看；不要只写「去禅道看 #421」。
 
-输出样例：
-
-```
-已提交反馈 #421（示例产品 A）
-- 标题：设备列表导出按钮点击后无响应
-- 类型：Bug
-- 当前状态：wait（待评审），未指派负责人
-- 提交人：<以回读到的反馈单提交人为准>
-- 链接：<禅道 Web 地址>/feedback-view-421.html
-下一步：等评审结果；要补充信息随时说「补充反馈 #421 ...」
-```
+输出样例见 [references/workflow.md](references/workflow.md)。
 
 ## 3. 提交缺陷单
 
@@ -267,39 +262,29 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 缺陷单的选品多一层**随包默认产品**（分发者预置，写在技能包 `config.local.json` 的 `defaultProduct`）：
 
 1. **用户这次明说的产品** → 直接用。
-2. **本机默认产品**（用户自己在本机设的，位置见 [references/setup.md](references/setup.md)）→ 直接用，不再问。
+2. **本机默认产品**（用户自己在本机设的，存在用户机器的偏好文件 `~/.config/rh-zentao/preferences.json`；位置与写法见 [references/setup.md](references/setup.md)）→ 直接用，不再问。
 3. **随包默认产品**（`config.local.json` 里预置的）→ **每次使用都要跟用户确认一句**「默认记到 <产品名> 对吗？」，因为它不是用户自己选的；用户说不是就按正常选品流程走（可见产品里挑或追问一次）。
 4. 都没有 → 追问一次，列出可见产品让用户选。
 
-随包默认产品当前**不可见**（不在 0.4 的列表里）→ 如实说明「随包默认的 <名字> 当前账号看不到」，并列出可见产品，**不要静默换一个产品建单**。
+随包默认产品当前**不可见** → 如实说明「随包默认的 <名字> 当前账号看不到」，并列出可见产品，**不要静默换一个产品建单**。
 
-**默认产品**（本机那个）：用户在本机设置过的默认产品，存放在用户机器上的偏好文件里（位置与写法见 [references/setup.md](references/setup.md)「默认产品」）。用法：
-
-- 用户明说「默认产品是 <产品名>」→ 先用 `get_products` 确认它可见，写进本机偏好文件（写入前把要写的内容给用户确认，写完回读复核），然后按它选品。
-- 选品时它只是默认值，用户这次说了别的产品就用用户说的。
-- 默认产品当前**不可见**（不在 0.4 的列表里）→ 如实说明「你设的默认产品 <名字> 当前账号看不到，请找管理员开权限或换一个」，并列出可见产品，**不要静默换一个产品建单**。
-- 默认产品不存在（文件里没写、写的 id 已不存在）→ 当作没有默认产品，按上面第 3、4 条继续。
+用户明说「默认产品是 <产品名>」→ 先用查询器 `products --match <产品名>` 确认它可见，写进本机偏好文件（写入前把要写的内容给用户确认，写完回读复核），然后按它选品。本机默认产品当前**不可见** → 如实说明「你设的默认产品 <名字> 当前账号看不到，请找管理员开权限或换一个」，**不要静默换一个产品建单**。默认产品不存在（文件里没写、写的 id 已不存在）→ 当作没有默认产品，按上面第 3、4 条继续。
 
 ### 3.2 字段默认值
 
-这些默认值来自线上真实缺陷的字段分布（见 [references/zentao-mcp.md](references/zentao-mcp.md)），**不要为此追问用户**：
+禅道字段（`severity` 3、`pri` 3、`openedBuild` ["trunk"]、`type` 按描述归类、`execution` 与 `module` 不填、`productID` 用选品结果）**不追问用户**，按 [references/bug-templates.md](references/bug-templates.md) 的「字段默认值」表填。用户明说的严重程度或优先级以用户说的为准，并在草稿里标出「用户指定」。
 
-| 字段 | 默认 | 说明 |
-| --- | --- | --- |
-| `productID` | 选品结果 | 整数产品 ID。**字段名是 `productID`，不是 `product`**（反馈单用 `product`，两处不同） |
-| `title` | 草稿标题 | 30 字以内，现象 + 场景 |
-| `openedBuild` | `["trunk"]` | 必填。用户给了版本名就匹配一次版本列表，匹配不上仍用 `trunk` 并在草稿里说明 |
-| `severity` | `3` | 严重程度，禅道默认值 |
-| `pri` | `3` | 优先级，禅道默认值 |
-| `type` | 按描述归类 | `codeerror`（代码错误）/ `config`（配置）/ `install` / `security` / `performance`（性能）/ `standard` / `automation` / `designdefect` / `others`；拿不准用 `others` |
-| `steps` | 草稿正文 | 唯一正文载体，写结构化 HTML（见 3.3） |
-| `project` | 见下 | 所属项目 |
-| `execution` | 不填 | 线上真实缺陷 99% 都不挂执行 |
-| `module` | 不填 | MCP 没有这个参数，模块信息写进正文 |
+两个容易写错的点：
 
-`project`：该产品下**只有一个进行中（doing）项目**时默认挂它；有多个时不挂，并在草稿里注明「未指定项目」；一个都没有就不挂。用户明说「这是 XX 项目的」就挂对应项目（先从 `get_projects` 确认存在）。
+- 缺陷单的字段名是 `productID`（整数），**不是** `product`（反馈单才用 `product`）。
+- `openedBuild` 是**字符串数组**，如 `["trunk"]`；写错会被服务端参数校验拦下。
 
-用户明说的严重程度或优先级与默认值冲突时，以用户说的为准，并在草稿里标出「用户指定」。
+`project`：**禅道 MCP 的项目列表不按产品过滤**（`get_projects` 传 `productID` 也返回全部可见项目），所以按下面的顺序选：
+
+1. **与产品同名的项目**（禅道里项目和产品常常同名，如「瑞辉智能报表平台」）→ 挂它。
+2. 没有同名项目、而可见项目里只有一个 `doing` 项目 → 挂它。
+3. 有多个 `doing` 项目且没有同名项目 → 不挂，并在草稿里注明「未指定项目」。
+4. 用户明说「这是 XX 项目的」→ 挂对应项目（先用查询器 `projects` 确认存在）。
 
 ### 3.3 生成草稿
 
@@ -328,10 +313,9 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 
 缺陷单量大（线上某产品有 1800+ 条缺陷），查重范围要如实说明：
 
-1. `get_products_productID_bugs`，`recPerPage=100`，最多取 3 页（上限 300 条）。
-2. 客户端按标题关键词匹配，列出候选（ID、标题、状态、负责人）。
-3. **同一批扫描顺带查反馈单**（`get_products_productID_feedbacks`，同样的分页范围），避免同一件事在两个模块各建一张。
-4. 按 [references/bug-templates.md](references/bug-templates.md) 的「追问格式」让用户选：a. 新建缺陷单 / b. 在 <候选> 上补充 / c. 都不是。
+1. 查询器 `bugs --product <产品ID> --match <关键词>`（最多 3 页、300 条），客户端按标题关键词匹配，列出候选（ID、标题、状态、负责人）。
+2. **同一产品顺带查反馈单**（`feedbacks --product <产品ID> --match <关键词>`），避免同一件事在两个模块各建一张。
+3. 按 [references/bug-templates.md](references/bug-templates.md) 的「追问格式」让用户选：a. 新建缺陷单 / b. 在 <候选> 上补充 / c. 都不是。
 
 这次扫描同时是本次写入的**基线**：结果不确定时，只有基线里没有的 ID 才可能是本次新建。
 
@@ -339,13 +323,13 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 
 ### 3.5 用户确认
 
-展示：所属产品、所属项目、标题、正文全文（纯文本版）、严重程度 / 优先级 / 类型 / 影响版本等默认值、查重结果，以及「即将创建的是禅道正式缺陷单（会进入开发流程）」的声明。
+展示：所属产品、所属项目、标题、正文全文（纯文本版）、查重结果、默认字段一行（严重程度/优先级/类型/影响版本，标明「默认值，要改说一声」），以及「即将创建的是禅道正式缺陷单（会进入开发流程）」的声明。
 
 用户明确确认后才写入。
 
 ### 3.6 创建
 
-`post_bugs`，全部字段放进 `payload`：
+先做 0.3 的会话登录（写操作才需要），再 `post_bugs`，全部字段放进 `payload`：
 
 ```json
 {"payload": {"productID": 42, "title": "<标题>", "openedBuild": ["trunk"], "severity": 3, "pri": 3, "type": "codeerror", "steps": "<正文 HTML>"}}
@@ -357,11 +341,11 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 
 ### 3.7 回读校验
 
-用返回的 `id` 调 `get_bugs_bugID`（**不要用 `get_issues_issueID`**——它解析不了缺陷 ID），核对：
+用返回的 `id` 调查询器 `bug --id <ID>`（**不要用 `get_issues_issueID`**——它解析不了缺陷 ID），核对：
 
 1. `product` 与本次写入的产品一致。
 2. `title` 与提交一致。
-3. `steps` 与本次预期正文一致：比较前先**剥掉 HTML 标签并归一化换行与空白**（禅道会存成 HTML，裸换行不会保留）。
+3. `steps` 与本次预期正文一致：比较前先**剥掉 HTML 标签并归一化换行与空白**（禅道会存成 HTML，裸换行不会保留；查询器已按这个规则剥好）。
 4. `openedBuild` 与提交一致（列表视图显示「主干」、详情显示 `trunk`，两者指同一个值，比较时归一化）。
 5. `severity` / `pri` 与提交一致。
 6. `actions` 里**本次新增**了 `opened`；历史上存在过不算。
@@ -377,19 +361,7 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 - **提交人必须核对** `openedBy`：不等于当前登录账号时，如实说明「禅道里这条缺陷单的提交人是 <另一个人>」，不要把服务端的提交人当成用户本人（见硬约束 4）。
 - **缺陷链接**：`<禅道 Web 地址>/bug-view-<缺陷 ID>.html`。禅道 Web 地址读法同 2.7；读不到就不给链接，只给 ID 并说明原因。
 
-输出样例：
-
-```
-已提交缺陷单 #1934（MOMV2.0）
-- 标题：设备列表导出按钮点击后无响应
-- 所属项目：MOMV2.0-RD（未指定则写「未指定项目」）
-- 严重程度/优先级：3 / 3
-- 影响版本：trunk
-- 当前状态：active，未指派负责人
-- 提交人：<以回读到的 openedBy 为准>
-- 链接：<禅道 Web 地址>/bug-view-1934.html
-下一步：等开发认领；要补充信息随时说「补充缺陷 #1934 ...」
-```
+输出样例见 [references/workflow.md](references/workflow.md)。
 
 ## 4. 查询与解释进度
 
@@ -397,12 +369,12 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 
 ### 4.1 定位单据
 
-- 用户给了数字 ID → 先看上下文判断是反馈还是缺陷：缺陷用 `get_bugs_bugID`，反馈用 `get_feedbacks_feedbackID`；用户说「缺陷/bug」就按缺陷读。
-- 用户描述产品或标题 → 对应模块的分页拉取（`get_products_productID_bugs` 或 `get_products_productID_feedbacks`）后客户端匹配，把候选列给用户，按 [references/feedback-templates.md](references/feedback-templates.md) 的「追问格式」让他选，并指出最相近的那条作为建议。
+- 用户给了数字 ID → 先看上下文判断是反馈还是缺陷：缺陷用 `bug --id <ID>`，反馈用 `feedback --id <ID>`；用户说「缺陷/bug」就按缺陷读。
+- 用户描述产品或标题 → 查询器 `bugs --product <ID> --match <关键词>` 或 `feedbacks --product <ID> --match <关键词>` 后客户端匹配，把候选列给用户，按 [references/feedback-templates.md](references/feedback-templates.md) 的「追问格式」让他选，并指出最相近的那条作为建议。
 
 ### 4.2 读事实
 
-从详情里取：`status`、`assignedTo`、`processedBy`、`processedDate`、`reviewedBy`、`reviewedDate`、`result`、`solution`、`faq`、`repeatFeedback`（反馈单），以及 `actions[]`（`action` / `actor` / `comment` / `date`）与其中的 `history[]`（字段级差异）。
+从详情里取状态、负责人、处理人/处理时间、评审人/评审时间、结论、解决方案等字段，以及 `actions[]`（`action` / `actor` / `comment` / `date`）与其中的 `history[]`（字段级差异）。字段清单见 [references/zentao-mcp.md](references/zentao-mcp.md)。
 
 `actions[]` 与 `actions[].history[]` 运行时才返回，工具的 Schema 里没有声明——按运行时数据读。缺陷单详情同样返回顶层 `actions[]`。
 
@@ -422,14 +394,12 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 
 ## 5. 补充说明
 
-补充说明走「更新正文」这条可靠路径：读取原文 → 生成追加草稿 → 用户确认 → 写前复核 → 更新 → 回读。
+补充说明走「更新正文」这条可靠路径：读取原文 → 生成追加草稿 → 用户确认 → 写前复核 → 更新 → 回读。反馈单改 `desc`，缺陷单改 `steps`（追加 HTML 段落）。逐步话术与草稿样例见 [references/workflow.md](references/workflow.md) 的 F4。
 
-反馈单改 `desc`，缺陷单改 `steps`（追加 HTML 段落）。
-
-1. **读原文**：反馈用 `get_feedbacks_feedbackID` 取 `desc`；缺陷用 `get_bugs_bugID` 取 `steps`。
-2. **生成追加草稿**：原文完整保留，下方追加分隔行与追加段落（复现步骤 / 业务场景 / 预期结果 / 实际结果 / 其他说明），标注追加时间与「用户口述，AI 整理」。
+1. **读原文**：查询器 `feedback --id <ID>` 取 `desc`；`bug --id <ID>` 取 `steps`。
+2. **生成追加草稿**：原文完整保留，下方追加分隔行与追加段落，标注追加时间与「用户口述，AI 整理」。
 3. **用户确认**：展示完整的新正文（原文 + 追加段）。
-4. **写前复核**：确认之后、写入之前再读一次同一条单据，核对产品、标题、原始正文是否仍与生成草稿时一致。被别人改过 → 停止写入，把当前原文与重新合并后的草稿交给用户确认，不自己合并后继续写。
+4. **写前复核**：确认之后、写入之前再读一次同一条单据，核对产品、标题、原始正文是否仍与生成草稿时一致。被别人改过 → 停止写入，把当前原文与重新合并后的草稿交给用户确认。
 5. **更新**：反馈用 `put_feedbacks_feedbackID`（`payload` 带 `product` 数字、`title` 沿用原值、`desc` 新值；`product` 传字符串会被服务端静默忽略）；缺陷用 `put_bugs_bugID`（`payload` 带 `productID` 数字、`title` 沿用原值、`steps` 新值）。只发一次更新请求。
 6. **回读**：回读的正文与**完整预期正文**归一化后逐字比较（缺陷单要先剥标签），并确认 `actions` 这次**新增**了 `edited`——历史上存在过 `edited` 不算证据。
 7. **结果不明**：更新超时或返回无法解析时只读核实，不重放更新；核实不了就报未确认，交回用户。
@@ -442,8 +412,7 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 2. **写入后回读**：按 ID 重新读取并核对内容，「保存成功」的文本不作为落库证据；补充说明还要确认本次**新增**了 `edited` 流水。
 3. **不确定先查**：超时、连接中断、返回与预期不符时，先查询核实再决定下一步；同一份内容不重复创建。禅道创建无幂等，盲目重试会造重复单。写入前保留已扫描单据的 ID 基线，结果不确定时只认「基线之外、唯一、回读完全一致」的新记录；认不准或复查不完整就报未确认交回用户，不把「没查到」说成「没创建」。
 4. **身份**：所有操作都以**当前登录账号**（用户本人的禅道账号）进行。说「这是你提交的」只在回读确认提交人是当前登录账号时才能说；提交人不是本人时（如实说「禅道里这条单据的提交人是 <另一个人>」），不要把服务端的提交人当成用户本人。`openedbyme` 指的是当前登录账号本人提交的记录。缺陷单的提交人字段是 `openedBy`，同样要核对。
-   - 写完回读时核对反馈单的 `feedbackBy`、缺陷单的 `openedBy` 是不是当前登录账号；不是就如实告诉用户，不要把服务端的提交人当成用户本人。
-5. **凭据**：账号、密码、令牌由用户自己在本机写入接入凭据文件；**不在对话里索要、不在回复里回显、不写进任何仓库文件**。Agent 代跑安装脚本时一律加 `--skip-credentials`：凭据必须由本人在自己的终端输入。地址同理：只从 `config.local.json` 读，**不在回复里写出地址的具体值**——汇报连接状态时说「已登记、已连接」即可，不要把 URL 贴给用户。唯一的例外是 2.7 / 3.8 交付单据链接：用户要的就是能点开的地址，那一次给完整 URL。
+5. **凭据**：账号、密码、令牌由用户自己在本机写入接入凭据文件；**不在对话里索要、不在回复里回显、不写进任何仓库文件**。Agent 代跑安装脚本时一律加 `--skip-credentials`：凭据必须由本人在自己的终端输入。地址同理：只从 `config.local.json` 读，**不在回复里写出地址的具体值**——汇报连接状态时说「已登记、已连接」即可。唯一的例外是 2.7 / 3.8 交付单据链接：用户要的就是能点开的地址，那一次给完整 URL。
 6. **权限边界**：当前账号看不到的产品与单据就是看不到。不要绕过禅道权限去达成写入目的；用户看不到时如实说明并指出该找谁开权限。默认产品不可见时同样如实说明，不要静默换产品建单。
 7. **附件与图片**：MCP 的附件上传实测不可用（`post_files` 只接受文件名、不接受内容）。用户要传截图时，明确说明当前能力不支持，请其贴文字说明或走禅道 Web 端上传后再补充描述。**不要**编造能上传的路径。
 8. **不做人的决定**：关闭、删除、解决、重新打开单据，以及指派负责人，都由人来做；Agent 只提交内容与读取状态。缺陷单也不做流转。
@@ -454,15 +423,16 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 13. **不改技能包自身的文件**：未经用户明确要求修改技能，不动 `SKILL.md`、`references/`、`scripts/`、`config.local.json` 里的任何文件。用户把“希望这里能记住上次的筛选条件”这类话说成对产品的期望时，按**给产品的建议**处理（类型 `advice`），不是给技能加功能；真要改技能，请他到仓库提 issue。
 14. **默认落点是缺陷单**：用户明确说 Bug / 缺陷 / 报错 / 复现步骤时走缺陷单；语义不清时追问一次，不替用户猜。缺陷单草稿必须带「会进入开发流程」的声明。
 15. **缺陷单不附带建反馈单**：禅道没有「反馈转缺陷」的关联字段，一次诉求只建一张单。
-16. **缺陷单字段用默认值**：禅道字段（严重程度、优先级、版本、执行、模块）不追问，按 3.2 的默认值填；用户明说的以用户说的为准。
+16. **缺陷单字段用默认值**：禅道字段（严重程度、优先级、版本、执行、模块）不追问，按 [references/bug-templates.md](references/bug-templates.md) 的默认值填；用户明说的以用户说的为准。
 17. **默认产品分两层**：随包默认产品在技能包 `config.local.json`（**只读不改**，由管理员预置、随包分发，每次使用跟用户确认）；本机默认产品写在用户自己机器的偏好文件里（**绝不写进技能包**，那会随包分发给别人）。两者都只是默认值，用户明说的产品永远优先。
 18. **图片不支持就说清楚**：禅道 MCP 没有可用的文件内容通道，正文放不了图片；不要用 base64 内联等未经验证的办法绕过。
+19. **读数据走查询器**：产品、项目、缺陷/反馈列表与单据详情都用 `scripts/zentao-query.mjs` 取，原始 JSON 不进上下文；也**不要**用调小 `recPerPage` 的方式反复试错去绕开截断。写操作与回读用 MCP 工具。
 
 ## 参考文件
 
-- [references/setup.md](references/setup.md)：连接禅道 MCP、写入接入凭据、默认产品、自检（首次连接或连不上时读）
+- [references/setup.md](references/setup.md)：连接禅道 MCP、写入接入凭据、默认产品、各宿主配置（首次连接、连不上、或要改默认产品时读）
 - [references/feedback-templates.md](references/feedback-templates.md)：反馈单的起草与追问模板（写反馈单草稿时读）
 - [references/bug-templates.md](references/bug-templates.md)：缺陷单的模板、字段默认值与正文结构（写缺陷单草稿时读）
-- [references/zentao-mcp.md](references/zentao-mcp.md)：工具映射、`payload` 包装、字段与枚举（调 MCP 前读）
-- [references/workflow.md](references/workflow.md)：各流程的完整话术与示例（拿不准输出格式时读）
+- [references/zentao-mcp.md](references/zentao-mcp.md)：工具映射、`payload` 包装、字段与枚举、实测坑（调 MCP 前读）
+- [references/workflow.md](references/workflow.md)：各流程的完整话术与输出样例（拿不准输出格式时读）
 - [references/error-handling.md](references/error-handling.md)：错误分类、恢复动作与话术（出现报错、超时或结果不一致时读）
