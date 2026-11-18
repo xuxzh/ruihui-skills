@@ -3,7 +3,7 @@ name: rh-product-feedback
 description: 把自然语言产品反馈（Bug、需求、优化建议）提交到禅道 ZenTao 生成反馈单并回读校验；也支持查询反馈单、解释处理进度（当前状态、负责人、处理历史、是否排期）、补充说明；还能在禅道 MCP 未配置时引导用户完成安装与认证。触发场景：用户要「提 Bug / 报问题 / 提需求 / 提建议 / 提交反馈 / 查反馈 / 看反馈到哪了 / 为什么还没排期 / 补充反馈信息」「帮我装禅道 MCP / 配置禅道 / 连不上禅道」，或提到 report a bug、file a feature request、check feedback status、add a comment to my feedback、connect zentao；用户输入斜杠命令 `/rh-product-feedback install`（pi 是 `/skill:rh-product-feedback install`）时走安装模式——Agent 代跑随包的安装脚本登记禅道 MCP，账号密码仍由本人写入。
 compatibility: 需要连接禅道 MCP（工具名前缀 zentao，至少含 post_users_login、post_feedbacks、put_feedbacks_feedbackID、get_feedbacks_feedbackID、get_products_productID_feedbacks）并能访问该服务；首次使用需要本机已有自己的禅道账号凭据（见 references/setup.md）。
 metadata:
-  rh-version: "0.5.0"
+  rh-version: "0.6.0"
   rh-mcp-server: zentao
 ---
 
@@ -153,6 +153,7 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 - 需求追加：期望能力、使用场景。
 - 建议追加：现状痛点、期望改进。
 - 只追问真正影响分类、复现或验收的信息，一次问全；用户没说的版本号、模块、负责人一律不补写，缺什么就在草稿里写「用户未提供」。
+- 追问按 [references/feedback-templates.md](references/feedback-templates.md) 的「追问格式」呈现：编号、选项字母、建议与理由的写法都在那里。
 
 **所属产品**只能从 0.4 列出的**当前账号可见产品**里选。用户说的产品不在其中时，如实说明「你的账号看不到 <产品>，这条反馈暂时无法提交到该产品，请找管理员开权限或换一个产品」，不要报「产品不存在」。
 
@@ -168,7 +169,7 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 
 1. `get_products_productID_feedbacks`，`recPerPage=100`，最多取 3 页（上限 300 条）。
 2. 在客户端按标题关键词匹配（大小写与空格归一化，取标题中最有区分度的词）。
-3. 把候选连同 ID、标题、状态列给用户，让用户选：新建 / 复用候选 / 都不是。
+3. 把候选连同 ID、标题、状态列给用户，再按 [references/feedback-templates.md](references/feedback-templates.md) 的「追问格式」让他选：a. 新建一条 / b. 在 <候选> 上补充 / c. 都不是，并给出建议答案与理由。
 
 这次扫描同时是本次写入的**基线**：结果不确定时，只有基线里没有的 ID 才可能是本次新建。
 
@@ -213,7 +214,7 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 ### 3.1 定位反馈单
 
 - 用户给了数字 ID → `get_feedbacks_feedbackID`。
-- 用户描述产品或标题 → `get_products_productID_feedbacks` 分页拉取后客户端匹配，把候选列给用户确认。
+- 用户描述产品或标题 → `get_products_productID_feedbacks` 分页拉取后客户端匹配，把候选列给用户，按 [references/feedback-templates.md](references/feedback-templates.md) 的「追问格式」让他选，并指出最相近的那条作为建议。
 
 ### 3.2 读事实
 
