@@ -80,7 +80,7 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 - 凭据放在你自己的机器上（**不写进本仓库**），优先用禅道个人令牌而不是密码。
 - 本仓库不包含任何内网地址、账号或凭据。
 - 技能会在需要禅道数据时登录一次，失效后补登一次。**实测当前 MCP 的登录接口不校验凭据、恒以服务端固定身份对外服务**，所以「每用户独立账号」暂时由客户端保证不了（见 [zentao-mcp.md](skills/rh-product-feedback/references/zentao-mcp.md) 的「实测偏差」）。
-- 每个用户用自己的禅道账号登录，反馈单留痕在本人名下。
+- 每个用户用自己的禅道账号登录，反馈单留痕在本人名下（实测当前 MCP 恒以服务端身份提交，见 #7）。
 
 详见 [`skills/rh-product-feedback/references/setup.md`](skills/rh-product-feedback/references/setup.md) 与 [`references/zentao-mcp.md`](skills/rh-product-feedback/references/zentao-mcp.md)。
 
@@ -89,7 +89,7 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 当前版本（v0.4.0）的能力与限制：
 
 - **反馈优先**：新反馈统一落在禅道的反馈单（`feedback`）上，正式 Bug / 需求由人工评审后再建。
-- **每用户独立账号**：用你自己的禅道账号登录，反馈留痕在本人名下；代价是**你只能看到有权限的产品与反馈**，查重只覆盖可见范围（话术里会写明「在你可见的 N 条中」）。
+- **每用户独立账号**：设计上是「用你自己的禅道账号登录，反馈留痕在本人名下」；但**实测当前 MCP 的登录接口不校验凭据、恒以服务端固定身份对外服务**，所以反馈单上的提交人暂时不是你本人（见 [#7](https://github.com/xuxzh/ruihui-skills/issues/7)）。你能看到的产品与反馈仍按账号权限走，查重只覆盖可见范围（话术里会写明「在你可见的 N 条中」）。
 - **无服务端关键词检索**：查重靠分页拉取 + 客户端标题匹配，只覆盖扫描到的范围。
 - **附件上传不可用**：请用文字描述，或走禅道 Web 端上传后再补充描述。
 - **没有「只评论不改状态」的接口**：补充说明走「更新描述」路径；关闭 / 解决 / 删除等流转由人来做。
