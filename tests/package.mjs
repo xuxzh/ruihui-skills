@@ -42,6 +42,7 @@ test('打包产物是一个顶层自洽的技能目录', () => {
   for (const script of ['install.sh', 'install.ps1', 'set-credentials.sh', 'set-credentials.ps1', 'zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1']) {
     assert.ok(fs.existsSync(path.join(pkg, 'scripts', script)), `缺 scripts/${script}`);
   }
+  assert.ok(fs.existsSync(path.join(pkg, 'scripts', 'zentao-upload.mjs')), '缺 scripts/zentao-upload.mjs');
 
   // 技能文件与仓库里的一致
   assert.equal(
@@ -108,7 +109,7 @@ test('地址为空时打包失败，并给出可执行的提示', () => {
 });
 
 test('技能目录随包分发安装脚本（skills.sh 装的就是这个目录）', () => {
-  for (const script of ['install.sh', 'install.ps1', 'set-credentials.sh', 'set-credentials.ps1', 'zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1']) {
+  for (const script of ['install.sh', 'install.ps1', 'set-credentials.sh', 'set-credentials.ps1', 'zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1', 'zentao-upload.mjs']) {
     assert.ok(fs.existsSync(path.join(SCRIPTS_DIR, script)), `技能目录缺 scripts/${script}`);
   }
 });

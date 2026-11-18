@@ -3,7 +3,7 @@ name: rh-product-feedback
 description: 把自然语言产品反馈提交到禅道 ZenTao：明确要 Bug 时直接创建**正式缺陷单**（bug 对象，进开发流程），其余走**反馈单**（feedback 对象）；两条路径都支持查询、进度解释与补充说明。也能在禅道 MCP 未配置时引导用户完成安装与认证。触发场景：用户要「提 Bug / 报缺陷 / 页面报错 / 复现步骤是…」「提需求 / 提建议 / 提交反馈」「查反馈 / 查缺陷 / 看反馈到哪了 / 为什么还没排期 / 补充反馈信息」「帮我装禅道 MCP / 配置禅道 / 连不上禅道」，或提到 report a bug、file a feature request、check feedback status、connect zentao；用户输入斜杠命令 `/rh-product-feedback install`（pi 是 `/skill:rh-product-feedback install`）时走安装模式——Agent 代跑随包的安装脚本登记禅道 MCP，账号密码仍由本人写入。
 compatibility: 需要连接禅道 MCP（工具名前缀 zentao，至少含 post_users_login、post_feedbacks、post_bugs、put_feedbacks_feedbackID、get_feedbacks_feedbackID、get_products_productID_feedbacks）并能访问该服务；首次使用需要本机已有自己的禅道账号凭据（见 references/setup.md）。
 metadata:
-  rh-version: "0.9.0"
+  rh-version: "0.10.0"
   rh-mcp-server: zentao
 ---
 
@@ -70,6 +70,8 @@ node <技能目录>/scripts/zentao-query.mjs prep --product 瑞辉智能报表�
 - **可见范围**：当前登录账号在禅道里能看到的产品的集合；单据只能落在这里面，查重也只覆盖这里面。
 - **禅道 Web 地址**：技能包内 `config.local.json` 的 `zentaoWebUrl`（与 `mcpUrl` 同一个文件）。
 - **单据链接**：`<禅道 Web 地址>/feedback-view-<反馈 ID>.html` 或 `<禅道 Web 地址>/bug-view-<缺陷 ID>.html`。
+- **图片附件**：禅道里的图片文件记录，有自己的文件 ID，只能挂在已存在的单据上。
+- **图片引用**：正文里指向图片附件的标签，形如 `<img src="/index.php?m=file&f=read&t=<扩展名>&fileID=<文件 ID>" />`。
 
 ## 0. 会话第一步：环境自检与引导
 
@@ -178,6 +180,7 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 - 需求追加：期望能力、使用场景。
 - 建议追加：现状痛点、期望改进。
 - 只追问真正影响分类、复现或验收的信息，一次问全；用户没说的版本号、模块、负责人一律不补写，缺什么就在草稿里写「用户未提供」。
+- 用户给了截图 → 记下图片文件路径，正文按 [6. 正文带图片](#6-正文带图片) 处理。
 - 追问按 [references/feedback-templates.md](references/feedback-templates.md) 的「追问格式」呈现：编号、选项字母、建议与理由的写法都在那里。
 
 **所属产品**只能从 0.4 列出的**当前账号可见产品**里选。选取优先级：
@@ -221,6 +224,7 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 - `product` 是产品 ID（整数，示例里的 42 是占位），先从 `products` 确认；`product` 与 `title` 是禅道实际必填项。
 - `desc` / `source` / `module` / `feedbackBy` 保持不填：反馈者由禅道按当前登录账号自动记录，填了反而与实际留痕矛盾。
 - 只发一次调用。创建接口没有幂等键，同一份 payload 发两次会产生两条记录。
+- 用户给了截图 → 建单成功后按 [6](#6-正文带图片) 传图并更新正文。
 
 ### 2.6 回读校验
 
@@ -338,6 +342,7 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 - `productID` 是整数；`openedBuild` 是字符串数组。这两个字段名写错或漏传，会被服务端参数校验拦下（JSON-RPC `-32602`），请求不会执行——按失败处理，不要重试。
 - 不填 `assignedTo`：指派由人决定（硬约束 8）。
 - 只发一次调用。创建接口没有幂等键，同一份 payload 发两次会产生两条记录。
+- 用户给了截图 → 建单成功后按 [6](#6-正文带图片) 传图并更新正文。
 
 ### 3.7 回读校验
 
@@ -406,6 +411,47 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 
 禅道没有「只评论不改状态」的接口。关闭、激活、解决等流转会改变单据状态，因此不适合承载补充说明。
 
+## 6. 正文带图片
+
+禅道正文里的图片是**禅道里的文件记录**：先把图片上传到禅道拿到文件 ID，再在正文里放一个引用标签。禅道 MCP 没有上传通道（`post_files` 只接受文件名，见 [references/zentao-mcp.md](references/zentao-mcp.md)），所以走随包的上传脚本，它直连禅道 REST v2 上传。
+
+### 6.1 拿到图片
+
+- 宿主把用户粘贴的图片存成本机文件，并把路径贴进消息（pi 粘贴图片会写进临时目录并把路径贴出来）；用户也会直接给图片路径。
+- 先 `read` 这个图片文件，确认内容与要写进正文的那段描述对得上（模型要看得见这张图）。
+- 拿不到路径（用户只说「我截图了」、图片在别的机器上）→ 按 [references/workflow.md](references/workflow.md) 的「图片拿不到时」话术处理，**不要**编造路径，也不要把图片描述当成图片。
+
+### 6.2 顺序固定：先建单 → 再传图 → 再更新正文
+
+禅道上传必须带 `objectType` 与 `objectID`，图片只能挂在**已经存在**的单据上。
+
+1. 按 [2](#2-提交反馈) / [3](#3-提交缺陷单) 建单，正文先写文字，拿到单据 ID。
+2. 上传图片：
+
+   ```bash
+   node <技能目录>/scripts/zentao-upload.mjs --file <图片路径> --object-type feedback --object-id <反馈 ID>
+   ```
+
+   缺陷单把 `--object-type` 换成 `bug`。脚本输出文件 ID 与图片引用标签，并自己回读字节核对过。
+3. 更新正文：把脚本给出的 `<img ...>` 放进正文对应位置，按 [5](#5-补充说明) 的可靠路径走（读原文 → 草稿 → 用户确认 → 写前复核 → 更新 → 回读）。反馈单改 `desc`，缺陷单改 `steps`。
+4. 回读校验：正文里含这条图片引用，且引用里的文件 ID 与上传返回的一致。
+
+### 6.3 图片引用标签（固定形态）
+
+```html
+<img src="/index.php?m=file&f=read&t=<扩展名>&fileID=<文件 ID>" alt="file-read-<文件 ID>.<扩展名>" />
+```
+
+- 用**相对路径**，不要写绝对地址（禅道地址随部署变，写死会在别的环境失效）。
+- `t` 是扩展名（小写、不带点），`fileID` 是上传返回的文件 ID。
+- 不要用 base64 内联（`data:` 开头的 src）：禅道与消费端都不认这种写法。
+
+### 6.4 边界
+
+- 上传失败 → 按 [references/error-handling.md](references/error-handling.md) 处理；不要改用文字描述假装图片已经放上去。
+- 一次诉求挂几张图就传几张，各自带一个标签；不要把多张图拼成一张。
+- 删除单据时图片是否一并清理由禅道决定，技能不承诺。
+
 ## 硬约束
 
 1. **写入前确认**：所有业务写入都要用户明确确认后执行。
@@ -414,7 +460,7 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 4. **身份**：所有操作都以**当前登录账号**（用户本人的禅道账号）进行。说「这是你提交的」只在回读确认提交人是当前登录账号时才能说；提交人不是本人时（如实说「禅道里这条单据的提交人是 <另一个人>」），不要把服务端的提交人当成用户本人。`openedbyme` 指的是当前登录账号本人提交的记录。缺陷单的提交人字段是 `openedBy`，同样要核对。
 5. **凭据**：账号、密码、令牌由用户自己在本机写入接入凭据文件；**不在对话里索要、不在回复里回显、不写进任何仓库文件**。Agent 代跑安装脚本时一律加 `--skip-credentials`：凭据必须由本人在自己的终端输入。地址同理：只从 `config.local.json` 读，**不在回复里写出地址的具体值**——汇报连接状态时说「已登记、已连接」即可。唯一的例外是 2.7 / 3.8 交付单据链接：用户要的就是能点开的地址，那一次给完整 URL。
 6. **权限边界**：当前账号看不到的产品与单据就是看不到。不要绕过禅道权限去达成写入目的；用户看不到时如实说明并指出该找谁开权限。默认产品不可见时同样如实说明，不要静默换产品建单。
-7. **附件与图片**：MCP 的附件上传实测不可用（`post_files` 只接受文件名、不接受内容）。用户要传截图时，明确说明当前能力不支持，请其贴文字说明或走禅道 Web 端上传后再补充描述。**不要**编造能上传的路径。
+7. **图片走上传脚本**：正文里的图片必须用 `scripts/zentao-upload.mjs` 上传，拿到文件 ID 后在正文里放固定形态的引用（见 6.3）。上传失败就如实说失败，不改用文字描述假装图片已放上去。
 8. **不做人的决定**：关闭、删除、解决、重新打开单据，以及指派负责人，都由人来做；Agent 只提交内容与读取状态。缺陷单也不做流转。
 9. **不写凭据**：账号、密码、令牌不进回复、不进代码、不进文档、不进提交记录。禅道地址随技能包进版本库（ADR-0005），可以读取，但不要主动回显地址的具体值（2.7 / 3.8 的单据链接除外）。
 10. **不编造链接**：单据链接里的 Web 地址只能来自技能包 `config.local.json` 的 `zentaoWebUrl`。读不到就不给链接，不用 MCP 地址拼、不凭印象写；宁可只给单据 ID，并说明为什么给不了链接。
@@ -425,7 +471,7 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 15. **缺陷单不附带建反馈单**：禅道没有「反馈转缺陷」的关联字段，一次诉求只建一张单。
 16. **缺陷单字段用默认值**：禅道字段（严重程度、优先级、版本、执行、模块）不追问，按 [references/bug-templates.md](references/bug-templates.md) 的默认值填；用户明说的以用户说的为准。
 17. **默认产品分两层**：随包默认产品在技能包 `config.local.json`（**只读不改**，由管理员预置、随包分发，每次使用跟用户确认）；本机默认产品写在用户自己机器的偏好文件里（**绝不写进技能包**，那会随包分发给别人）。两者都只是默认值，用户明说的产品永远优先。
-18. **图片不支持就说清楚**：禅道 MCP 没有可用的文件内容通道，正文放不了图片；不要用 base64 内联等未经验证的办法绕过。
+18. **不用 base64 内联**：禅道富文本不认 `data:` 内联的图片，消费端也会把这种标签整条剔除；图片只能走文件通道（见 6）。
 19. **读数据走查询器**：产品、项目、缺陷/反馈列表与单据详情都用 `scripts/zentao-query.mjs` 取，原始 JSON 不进上下文；也**不要**用调小 `recPerPage` 的方式反复试错去绕开截断。写操作与回读用 MCP 工具。
 
 ## 参考文件

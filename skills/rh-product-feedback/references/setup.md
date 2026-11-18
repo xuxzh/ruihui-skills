@@ -223,6 +223,20 @@ node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao �
 
 Windows 用 `scripts\zentao-query.ps1`（PowerShell）。
 
+## 禅道上传脚本（图片）
+
+随包的 `scripts/zentao-upload.mjs` 负责**传图片**：把本机图片传到禅道，返回文件 ID 与正文里要用的引用标签。禅道 MCP 没有上传通道（`post_files` 只接受文件名），所以这个脚本直连禅道 REST v2（见 [zentao-mcp.md](zentao-mcp.md) 的「图片上传」）。
+
+```bash
+node <技能目录>/scripts/zentao-upload.mjs --file <图片路径> --object-type feedback --object-id <反馈 ID>
+node <技能目录>/scripts/zentao-upload.mjs --file <图片路径> --object-type bug --object-id <缺陷 ID>
+```
+
+- **前置**：Node.js 18+（用 `fetch` 与 `FormData`）。凭据与地址的读法与查询器一致：本机凭据文件 + 技能包 `config.local.json`；令牌只在进程内使用，不打印。
+- **只能挂在已存在的单据上**：禅道上传要带单据类型与单据 ID，所以顺序是「先建单 → 再传图 → 再更新正文」。
+- **上传后自己核对**：脚本会回读文件字节并比对大小，还会读禅道的文件元数据确认挂在目标单据上；输出「字节核对：一致」才算传上去。
+- **失败怎么办**：见 [error-handling.md](error-handling.md) 的「图片上传失败」。上传失败不影响已建好的单据。
+
 ## 自检
 
 只做只读调用，不写任何反馈单。

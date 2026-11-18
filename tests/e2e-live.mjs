@@ -35,8 +35,10 @@ const stamp = () => new Date().toISOString().slice(0, 10);
 const log = (line) => console.log(line);
 
 // 两条写入闭环共用同一套闸门与唯一标识；各自清理各自创建的记录。
-const feedbackRun = await runLiveE2E({ client, env, credentials, stamp, log });
-const bugRun = await runLiveBugE2E({ client, env, credentials, stamp, log });
+// 图片闭环要直连禅道 REST v2，只有配了真实禅道端点时才跑。
+const image = Boolean(env.ZENTAO_BASE_URL && env.ZENTAO_MCP_URL);
+const feedbackRun = await runLiveE2E({ client, env, credentials, stamp, log, image });
+const bugRun = await runLiveBugE2E({ client, env, credentials, stamp, log, image });
 const steps = [...feedbackRun.steps, ...bugRun.steps];
 const failed = steps.filter((s) => !s.ok);
 console.log(`\n合计 ${steps.length} 项，通过 ${steps.length - failed.length}，失败 ${failed.length}`);

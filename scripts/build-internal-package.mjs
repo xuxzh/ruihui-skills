@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL_DIR = path.join(ROOT, 'skills', 'rh-product-feedback');
 const SCRIPTS_DIR = path.join(SKILL_DIR, 'scripts');
-const PACKAGE_SCRIPTS = ['install.sh', 'install.ps1', 'set-credentials.sh', 'set-credentials.ps1', 'zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1'];
+const PACKAGE_SCRIPTS = ['install.sh', 'install.ps1', 'set-credentials.sh', 'set-credentials.ps1', 'zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1', 'zentao-upload.mjs'];
 
 function parseArgs(argv) {
   const args = { out: path.join(ROOT, 'dist'), mcpUrl: undefined, webUrl: undefined };

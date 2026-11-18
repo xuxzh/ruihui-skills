@@ -131,7 +131,7 @@
 | `result` / `solution` / `faq` | 处理结论、解决方案、常见问题 |
 | `repeatFeedback` | 是否重复反馈 |
 | `keywords` | 关键词（查重时可一并匹配） |
-| `files` | 附件（只读；上传不可用） |
+| `files` | 附件列表（实测恒为空数组，不能用它判断图片有没有挂上） |
 
 **`actions[]`（运行时才返回，Schema 未声明）**：操作流水，每条含 `action`（`opened` / `edited` / `closed` / `resolved` 等）、`actor`、`comment`、`date`。它与 `feedback` 同级出现在响应顶层。用它在时间线上还原「谁在何时做了什么」。
 
@@ -152,13 +152,41 @@
 
 `get_products_productID_feedbacks` 的 `browseType` 可选：`wait`、`doing`、`toclosed`、`review`、`assigntome`、`openedbyme`。查重时用默认范围（不传）以覆盖全部反馈；`openedbyme` 指的是**当前登录账号**本人提交的记录。
 
+## 图片上传：MCP 没有通道，走禅道 REST v2 直连
+
+禅道 MCP 的 `post_files` 只有 `fileName` 一个入参，没有内容字段，调用一律返回「文件上传失败，文件格式不在规定范围内」——它对应的是禅道 v2 的「编辑附件名称」操作，不是上传。禅道 **v1 API 没有上传接口**；能传内容的是禅道 **REST v2**（禅道 22.0+）：
+
+```
+POST <禅道 Web 地址>/api.php/v2/files
+Content-Type: multipart/form-data
+Token: <禅道 API 令牌>
+
+file       = 图片字节（必填）
+objectType = feedback | bug（必填）
+objectID   = 单据 ID（必填）
+```
+
+成功返回 `{"status":"success","id":<文件 ID>,"url":...}`。随包的上传脚本 `scripts/zentao-upload.mjs` 封装了这条链路：
+
+```bash
+node <技能目录>/scripts/zentao-upload.mjs --file <图片路径> --object-type feedback --object-id <反馈 ID>
+```
+
+实测坑：
+
+1. **必须带 `objectType` 与 `objectID`**：只带 `file` 时禅道返回 HTTP 200 但**正文为空**，文件也没建（静默失败）。图片只能挂在**已经存在**的单据上，所以顺序是「先建单 → 再传图 → 再更新正文」。
+2. **令牌从禅道 MCP 的登录结果里取**：`post_users_login` 的响应里有 `token`；这个令牌对 v2 无效时，脚本改用本机凭据直连 `POST /api.php/v1/tokens` 换一个。
+3. **v1 的 `files` 字段不可信**：反馈单与缺陷单详情里 `files` 都是空数组，即使单据上确实挂着图片。确认图片挂没挂上，看 `GET /api.php/v2/files/<文件 ID>` 返回的 `objectType` / `objectID`。
+4. **两个读取接口给的形态不同**：列表接口返回占位符形态（`<img src="{<文件 ID>.<扩展名>}" />`），详情接口返回展开后的相对路径（`<img src="/index.php?m=file&f=read&t=<扩展名>&fileID=<文件 ID>" />`）。写入用后者，禅道保存时会自己补上 `onload="setImageSize(this,0)"`。
+5. **v1 能取回字节**：`GET /api.php/v1/files/<文件 ID>` 带 `Token` 头返回文件原始字节——上传后回读字节数，是判断「真的写进去了」最硬的证据。
+
 ## 已知限制（实测结论）
 
 | 限制 | 影响 | 本技能的处理 |
 | --- | --- | --- |
 | 无服务端关键词检索 | 121 个工具入参没有 `keyword` / `search` / `query`；传入会被静默忽略 | 查重改为查询器分页拉取 + 客户端匹配，并如实说明覆盖范围 |
 | 创建接口无幂等 | 同一 payload 连续两次产生两个不同 id、两条记录 | 写前查重；结果不确定时先查再决定，不盲目重试 |
-| 附件上传不可用 | `post_files` 以不同扩展名调用均返回「文件上传失败，文件格式不在规定范围内」 | 明确告知不支持，请用户走禅道 Web 端上传 |
+| 附件上传不可用 | `post_files` 以不同扩展名调用均返回「文件上传失败，文件格式不在规定范围内」 | 图片改走禅道 REST v2 直连，由随包上传脚本完成（见上文「图片上传」） |
 | 没有「只评论不改状态」的工具 | 只能改字段或走状态流转 | 补充说明走 `put_feedbacks_feedbackID` 改 `desc` |
 | 状态流转可能静默 no-op | 反馈 `activate` 返回「保存成功」但状态与 `actions` 无变化 | 补充说明不使用流转接口；任何写入都回读校验 |
 | 枚举几乎不校验 | `openedBuild`、`resolution` 传任意字符串都「保存成功」并入库 | 本技能不写这两类字段；需要归属字段时先与用户确认 |
@@ -166,7 +194,7 @@
 | 权限随账号 | 每个用户用自己的账号登录，能看到的产品、项目、反馈都不同；看不见不等于不存在 | 只在可见范围内选品与查重，如实说明覆盖范围；用户提到的产品不可见时提示找管理员开权限 |
 | 登录失败会锁号 | 连续登录失败可能触发禅道账号锁定 | 登录失败只重试一次就停，不反复试；提示用户去禅道解锁 |
 | 无「反馈转 Bug/需求」工具 | `post_bugs` 的 `payload` 不接收来源反馈 ID | 缺陷单与反馈单之间没有自动转换：用户明确要缺陷单时直接建缺陷单，不附带建反馈单（见 ADR-0008） |
-| 附件上传没有内容通道 | `post_files` 的 payload 只有 `fileName`，没有内容字段；`delete_files_fileID` 存在但没有对应的上传通道 | 明确告知不支持图片，请用户贴文字或走禅道 Web 端（仓库 issue #8 跟踪） |
+| 图片只能挂在已存在的单据上 | v2 上传必须带 `objectType` 与 `objectID`，缺了就静默失败 | 先建单 → 再传图 → 再更新正文 |
 
 ## Bug 不要用统一 issue 视图
 

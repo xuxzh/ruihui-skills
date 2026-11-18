@@ -10,6 +10,11 @@
 // 三项之外还要通过写入前置自检（认证成功、目标产品存在且在白名单内、反馈读取成功）。
 // 任一项不满足就停止，不写入。
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { FeedbackAssistant, DefectAssistant } from './skill-flow.mjs';
 
 export const E2E_MARKER_PREFIX = '[rh-skill-e2e]';
@@ -102,10 +107,87 @@ export async function runPreflight({ client, assistant, productId, allowedProduc
 }
 
 /**
+ * 图片上传：真实禅道上的闭环（传图 → 正文内联 → 清理附件）。
+ * 上传走随包脚本（直连禅道 REST v2），正文更新走 MCP 工具——与技能实际路径一致。
+ */
+const PROBE_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+const SKILL_SCRIPTS = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'rh-product-feedback', 'scripts',
+);
+
+function writeProbeImage() {
+  const file = path.join(os.tmpdir(), `rh-skill-e2e-${randomUUID().slice(0, 8)}.png`);
+  fs.writeFileSync(file, PROBE_PNG);
+  return file;
+}
+
+/** 跑随包上传脚本，把图片挂到指定单据上。 */
+function uploadImage({ objectType, objectId, filePath, env }) {
+  return new Promise((resolve) => {
+    const child = spawn(
+      'node',
+      [path.join(SKILL_SCRIPTS, 'zentao-upload.mjs'), '--file', filePath, '--object-type', objectType, '--object-id', String(objectId)],
+      { env: { ...process.env, ...env } },
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('close', (code) => resolve({
+      code,
+      stdout,
+      stderr,
+      fileId: stdout.match(/文件 ID：(\d+)/)?.[1] || null,
+      imgTag: stdout.match(/图片引用：(<img[^>]*>)/)?.[1] || null,
+    }));
+  });
+}
+
+/** 传图 → 正文内联 → 回读核对 → 清理附件。 */
+async function attachImage({ client, objectType, objectId, productId, title, bodyField, currentBody, env, record }) {
+  const probe = writeProbeImage();
+  try {
+    const uploaded = await uploadImage({ objectType, objectId, filePath: probe, env });
+    const okUpload = uploaded.code === 0 && !!uploaded.fileId && !!uploaded.imgTag;
+    record('图片上传成功', okUpload, okUpload ? `文件 #${uploaded.fileId}` : (uploaded.stderr || '上传失败').trim());
+    if (!okUpload) return null;
+
+    const nextBody = `${currentBody}\n【截图】\n${uploaded.imgTag}`;
+    const payload = { title, [bodyField]: nextBody };
+    if (objectType === 'feedback') payload.product = Number(productId);
+    else payload.productID = Number(productId);
+    const tool = objectType === 'feedback' ? 'put_feedbacks_feedbackID' : 'put_bugs_bugID';
+    const args = objectType === 'feedback'
+      ? { feedbackID: String(objectId), payload }
+      : { bugID: String(objectId), payload };
+    const upd = await client.callTool(tool, args);
+    const detail = objectType === 'feedback'
+      ? await client.callTool('get_feedbacks_feedbackID', { feedbackID: String(objectId) })
+      : await client.callTool('get_bugs_bugID', { bugID: String(objectId) });
+    const body = String(detail.data?.[objectType === 'feedback' ? 'feedback' : 'bug']?.[bodyField] || '');
+    const embedded = body.includes(`fileID=${uploaded.fileId}`);
+    record('正文内联图片引用', upd.status !== 'fail' && embedded, embedded ? `fileID=${uploaded.fileId}` : '回读正文里没有这条图片引用');
+
+    const del = await client.callTool('delete_files_fileID', { fileID: String(uploaded.fileId) });
+    record('清理图片附件', del.status === 'success', `文件 #${uploaded.fileId} status=${del.status}`);
+    return uploaded.fileId;
+  } finally {
+    try {
+      fs.unlinkSync(probe);
+    } catch {
+      // 临时文件删不掉不影响结论
+    }
+  }
+}
+
+/**
  * 端到端流程。返回 { steps, exitCode, gate, marker }。
  * exitCode 非 0 表示整体没有通过（含残留风险）。
  */
-export async function runLiveE2E({ client, env = {}, credentials, stamp, log = () => {} }) {
+export async function runLiveE2E({ client, env = {}, credentials, stamp, log = () => {}, image = false }) {
   const steps = [];
   const record = (name, ok, detail = '') => {
     steps.push({ name, ok, detail });
@@ -191,6 +273,21 @@ export async function runLiveE2E({ client, env = {}, credentials, stamp, log = (
     const after = await assistant.readBack(createdId);
     const kept = after.found && (after.feedback.desc || '').includes('【业务场景】');
     record('补充后保留原文', kept);
+    if (image) {
+      await attachImage({
+        client,
+        objectType: 'feedback',
+        objectId: createdId,
+        productId: gate.productId,
+        title,
+        bodyField: 'desc',
+        currentBody: String((after.feedback || {}).desc || ''),
+        env,
+        record,
+      });
+    } else {
+      record('图片上传（本轮跳过）', true, '没有真实禅道端点，图片闭环只在真实端到端测试里跑');
+    }
   }
 
   // 创建没拿到原始确认（含超时后靠查询恢复的情况）：按唯一标识复查，报告残留风险。
@@ -227,7 +324,7 @@ export async function runLiveE2E({ client, env = {}, credentials, stamp, log = (
  * 缺陷单的真实写入闭环：与反馈单同一套闸门、前置自检、唯一标识与清理纪律。
  * 缺陷单会进开发流程，所以写入前的自检与清理的复核一项都不能省。
  */
-export async function runLiveBugE2E({ client, env = {}, credentials, stamp, log = () => {} }) {
+export async function runLiveBugE2E({ client, env = {}, credentials, stamp, log = () => {}, image = false }) {
   const steps = [];
   const record = (name, ok, detail = '') => {
     steps.push({ name, ok, detail });
@@ -311,6 +408,21 @@ export async function runLiveBugE2E({ client, env = {}, credentials, stamp, log 
     const after = await assistant.readBackBug(createdId);
     const kept = after.found && String(after.bug.steps || '').includes('[步骤]');
     record('补充后保留原文', kept);
+    if (image) {
+      await attachImage({
+        client,
+        objectType: 'bug',
+        objectId: createdId,
+        productId: gate.productId,
+        title,
+        bodyField: 'steps',
+        currentBody: String((after.bug || {}).steps || ''),
+        env,
+        record,
+      });
+    } else {
+      record('图片上传（本轮跳过）', true, '没有真实禅道端点，图片闭环只在真实端到端测试里跑');
+    }
   }
 
   const uncertain = !createdId || created.recovered === true;
