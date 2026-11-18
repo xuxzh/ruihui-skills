@@ -22,6 +22,8 @@
 
 **你用的是哪个 Agent，禅道 MCP 就登记在哪个 Agent 里**——不用挑、不用配。技能装到 `~/.agents/skills/rh-product-feedback/`，skills CLI 会按你的 Agent 建好入口（Claude Code 得到软链，pi 直接用 `~/.agents/skills/`）。
 
+已经装过这个技能的，也可以跳过第 1 步，直接在 Agent 里说 `/rh-product-feedback install`（pi 是 `/skill:rh-product-feedback install`），它会走同一套接入流程。
+
 不想让技能常驻、只想试一次，用 skills CLI 的 `use`（技能落在临时目录）：
 
 ```
@@ -110,8 +112,7 @@ Agent 会依次做这些事：判断要建哪种单据 → 补齐缺的信息 �
 | --- | --- | --- |
 | Agent 说没有 rh-product-feedback 这个技能 | 技能目录没放对，或装完没重开 | 问一句「你的技能列表里有没有 rh-product-feedback」确认；装完重开一次 Agent |
 | Agent 说找不到 `SKILL.md` | 技能没装到宿主能发现的位置 | 让 Agent 跑 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`，或把技能包解压到宿主技能目录 |
-| Agent 登记完了，但重启后连不上 | 运行中的宿主回写覆盖了配置 | 重开会话后说一句「更新禅道地址」，它只改这一个键 |
-| 装完连不上禅道 | 宿主回写覆盖了配置 | 在 Agent 里说「更新禅道地址」，它只改一个键 |
+| 登记完了，但重启后连不上 | 运行中的宿主回写覆盖了配置 | 在 Agent 里说「更新禅道地址」，它只改 `zentao` 这一个键 |
 | 凭据命令跑完没生效 | 终端里没输完，或文件没写成 | 重跑一次 `set-credentials.sh` |
 | 登录失败 | 账号或密码不对 | 核对后重跑凭据脚本；不要反复试，连续失败可能锁号 |
 | 装完 Agent 没反应 | 技能刚装上，宿主还没加载 | Claude Code 退出重开；pi 执行 `/reload` |
