@@ -1,84 +1,71 @@
 # 连接禅道 MCP
 
-业务用户只需要三步；管理员看「内网地址从哪来」与「打包分发」。
+业务用户跑一条安装命令；管理员看「禅道地址从哪来」与「分发」。
 
-## 业务用户：三步
+## 业务用户：一条命令
 
-### 1. 把技能包放进你用的宿主的技能目录
+### 1. 装技能
 
-各宿主的技能目录不一样，先看你用哪个：
+```bash
+npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
+```
 
-| 宿主 | 技能目录（macOS / Linux） | Windows |
+Claude Code 装到 `~/.claude/skills/`，pi 装到 `~/.agents/skills/`。也可以直接从 GitHub 下载技能包、解压后按下面的路径跑脚本。
+
+### 2. 跑安装脚本
+
+```bash
+# Claude Code（主宿主）
+bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
+```
+
+```powershell
+# Windows（PowerShell）
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-product-feedback\scripts\install.ps1"
+```
+
+用 pi 把路径里的 `.claude` 换成 `.agents`。
+
+脚本一次做完三件事：
+
+1. 从技能包里的 `config.local.json` 读禅道地址（地址不回显，也不出现在对话里）。
+2. 把禅道 MCP 登记到检测到的宿主（Claude Code / pi）。
+3. 让你输入**自己的**禅道账号和密码，写进本机凭据文件——密码不回显，文件只有你能读。
+
+脚本可以重复跑：已装好的部分会跳过，地址一致就什么都不改。
+
+### 3. 重启 Agent，然后验证
+
+- Claude Code：退出重开。运行中的 Claude Code 会回写 `~/.claude.json`，所以**先把宿主退出再跑脚本**；脚本检测到宿主还在跑会直接停下提示你。
+- pi：执行 `/reload`，不用重启。
+
+重开后，在 Agent 里说：
+
+> 验证一下禅道连接
+
+它会登录禅道、读一次产品列表（这就是你的可见范围），并如实告诉你凭据此刻起没起作用——当前禅道 MCP 恒以服务端固定身份服务（见「实测补充」），所以它会说明「凭据已写入，但提交人暂时是服务端账号」。
+
+之后直接说要提什么就行。
+
+### 装不上时
+
+| 你看到的 | 原因 | 怎么办 |
 | --- | --- | --- |
-| Claude Code（主宿主） | `~/.claude/skills/` | `%USERPROFILE%\.claude\skills\` |
-| pi（次宿主） | `~/.agents/skills/` | `%USERPROFILE%\.agents\skills\` |
-
-同一个 `rh-product-feedback` 目录在两处都能用，区别只在放哪里。**装错了宿主就发现不了技能。**
-
-管理员分发的是一个自洽的 `rh-product-feedback` 目录，**整个目录**复制进去。
-
-Claude Code：
-
-```bash
-mkdir -p ~/.claude/skills && cp -R <解压目录>/rh-product-feedback ~/.claude/skills/
-```
-
-```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills" | Out-Null
-Copy-Item -Recurse "<解压目录>\rh-product-feedback" "$env:USERPROFILE\.claude\skills\"
-```
-
-pi：
-
-```bash
-mkdir -p ~/.agents/skills && cp -R <解压目录>/rh-product-feedback ~/.agents/skills/
-```
-
-复制完目录里应该有 `SKILL.md`、`references/`、`config.local.json`、`scripts/`。少了 `config.local.json` 说明包不完整（版本不对或复制不全），重新装一次。
-
-装完先确认宿主能发现它：在 Agent 里问一句「你的技能列表里有没有 rh-product-feedback」，**有**才继续下一步；没有就是目录放错了（或宿主还没重载）。
-
-### 2. 对 Agent 说「帮我连上禅道」
-
-Agent 会读技能包里的 `config.local.json`（内网地址写死在里面），把禅道 MCP 登记到你的宿主，然后告诉你需要重开宿主。地址不回显，你也不用填 IP。
-
-宿主不让 Agent 改配置时，改用随包脚本——它自己从 `config.local.json` 读地址，地址不会出现在对话里（路径按你装的宿主换）：
-
-```bash
-# Claude Code
-bash ~/.claude/skills/rh-product-feedback/scripts/connect.sh
-```
-
-```powershell
-# Windows（PowerShell）
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-product-feedback\scripts\connect.ps1"
-```
-
-### 3. 写入你自己的禅道凭据
-
-Agent 会给你一条命令，**你自己在终端执行**，输入禅道账号和令牌（禅道「个人 → 令牌」生成；没有就用密码）。
-
-```bash
-# Claude Code
-bash ~/.claude/skills/rh-product-feedback/scripts/set-credentials.sh
-```
-
-```powershell
-# Windows（PowerShell）
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-product-feedback\scripts\set-credentials.ps1"
-```
-
-脚本交互式输入、令牌不回显，凭据落在你自己机器上、只有你能读。
-
-**写完不用再回来说「好了」**：直接说要提什么，Agent 会自己登录、自检，然后开始收集反馈内容。
-
-> 凭据由你写入，Agent 不会主动展示或回显它；但会话登录模式下 Agent 需要**读取**这个文件去登录，令牌会进入本次会话上下文——所以优先用可单独撤销的禅道令牌，不要用账号密码。
+| 脚本说没有检测到宿主 | Claude Code 和 pi 都没装 | 先装其中一个宿主再跑 |
+| 脚本说 Claude Code 正在运行 | 运行中的宿主会覆盖配置 | 退出 Claude Code 再跑（或加 `--force`） |
+| 装完连不上 | 地址不一致或条目被覆盖 | 在 Agent 里说「更新禅道地址」，它只改 `zentao` 这一个键；或再跑一次脚本 |
+| 登录失败 | 账号或密码不对 | 核对后重跑脚本的凭据步骤；不要反复试，连续失败可能锁号 |
+| 装完没反应 | 技能刚装上，宿主还没加载 | Claude Code 退出重开；pi 执行 `/reload` |
 
 ## 接入凭据
 
 ### 用密码为主，令牌可选
 
-默认用禅道账号 + 密码：业务用户不必先去禅道生成令牌，少一个操作。令牌也支持——禅道「个人 → 令牌」里生成，可单独撤销、可设有效期，误贴出去不影响账号密码；愿意用令牌的人可以用。
+默认用禅道账号 + 密码：业务用户不必先去禅道生成令牌，少一个操作。令牌也支持——禅道「个人 → 令牌」里生成，可单独撤销、可设有效期，误贴出去不影响账号密码；愿意用令牌的人可以跑：
+
+```bash
+bash ~/.claude/skills/rh-product-feedback/scripts/set-credentials.sh --token
+```
 
 ### 存放位置与格式
 
@@ -91,10 +78,10 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-pro
 
 ```
 ZENTAO_ACCOUNT=<你的禅道账号>
-ZENTAO_TOKEN=<你的禅道令牌>
+ZENTAO_PASSWORD=<你的禅道密码>
 ```
 
-用密码时把第二行换成 `ZENTAO_PASSWORD=<你的禅道密码>`。
+用令牌时把第二行换成 `ZENTAO_TOKEN=<你的禅道令牌>`。
 
 文件权限：macOS / Linux 用 `chmod 600`；Windows 依赖用户目录本身的 ACL，不要放到共享盘。
 
@@ -102,7 +89,7 @@ ZENTAO_TOKEN=<你的禅道令牌>
 
 | 模式 | 凭据是否进入 Agent 上下文 | 说明 |
 | --- | --- | --- |
-| **会话登录**（当前默认） | 会 | Agent 读本机凭据文件 → 调 `post_users_login` 换会话令牌 → 后续调用沿用。优先用令牌，泄露面小且可撤销 |
+| **会话登录**（当前默认） | 会 | Agent 读本机凭据文件 → 调 `post_users_login` 换会话令牌 → 后续调用沿用。优先用可单独撤销的令牌，泄露面小 |
 | **请求头令牌** | 不会 | 若禅道 MCP 支持 `Authorization: Bearer <令牌>`，凭据由宿主客户端从环境变量注入，Agent 全程不碰凭据文件。当前 MCP 是否支持，见「管理员」一节 |
 
 「Agent 完全看不到你的令牌」是**不准确**的说法：会话登录模式下 Agent 会读取凭据文件。准确的说法是——凭据由你自己写入，Agent 不会主动展示、回显或外传它。
@@ -111,7 +98,7 @@ ZENTAO_TOKEN=<你的禅道令牌>
 
 ## 各宿主配置
 
-MCP server 名为 `zentao`，类型是 Streamable HTTP，地址取自 `config.local.json` 的 `mcpUrl`。
+MCP server 名为 `zentao`，类型是 Streamable HTTP，地址取自 `config.local.json` 的 `mcpUrl`。安装脚本按下面的规则登记。
 
 ### Claude Code（主宿主）
 
@@ -126,13 +113,7 @@ MCP server 名为 `zentao`，类型是 Streamable HTTP，地址取自 `config.lo
 
 **不要用 `claude mcp add` 覆盖**：它遇到同名条目会直接拒绝（`already exists in user config`，地址变了也不更新），也保留不了条目上的其他字段。
 
-改完需要**重开 Claude Code** 才生效。重开后第一件事是复核 `mcpServers.zentao` 还在不在：不在说明被运行中的 Claude Code 回写覆盖，重写一次；仍然不行就走 `connect.sh` 降级路径。
-
-手工命令（地址从 `config.local.json` 取，不在对话里出现）：
-
-```bash
-bash ~/.claude/skills/rh-product-feedback/scripts/connect.sh
-```
+改完需要**重开 Claude Code** 才生效。重开后第一件事是复核 `mcpServers.zentao` 还在不在：不在说明被运行中的 Claude Code 回写覆盖，重写一次；仍然不行就让用户再跑一次安装脚本。
 
 ### pi（次宿主）
 

@@ -15,8 +15,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL_DIR = path.join(ROOT, 'skills', 'rh-product-feedback');
-const SCRIPTS_DIR = path.join(ROOT, 'scripts');
-const CREDENTIAL_SCRIPTS = ['set-credentials.sh', 'set-credentials.ps1', 'connect.sh', 'connect.ps1'];
+const SCRIPTS_DIR = path.join(SKILL_DIR, 'scripts');
+const PACKAGE_SCRIPTS = ['install.sh', 'install.ps1', 'set-credentials.sh', 'set-credentials.ps1'];
 
 function parseArgs(argv) {
   const args = { out: path.join(ROOT, 'dist'), mcpUrl: undefined, webUrl: undefined };
@@ -114,7 +114,7 @@ function buildPackage(args) {
     copyFile(path.join(refsDir, name), path.join(pkgDir, 'references', name));
   }
 
-  for (const name of CREDENTIAL_SCRIPTS) {
+  for (const name of PACKAGE_SCRIPTS) {
     const from = path.join(SCRIPTS_DIR, name);
     if (!fs.existsSync(from)) throw new Error(`缺少随包脚本：${name}`);
     const to = path.join(pkgDir, 'scripts', name);
@@ -156,9 +156,10 @@ function main() {
   if (!hasWebUrl) process.stdout.write('提示：没有禅道 Web 地址，反馈链接会缺省\n');
   process.stdout.write('包含：\n');
   for (const file of files) process.stdout.write(`  ${file}\n`);
-  process.stdout.write('\n下一步：把 rh-product-feedback 整个目录复制进通用技能目录。\n');
+  process.stdout.write('\n下一步：把 rh-product-feedback 整个目录复制进宿主技能目录，然后跑一次安装脚本：\n');
   process.stdout.write('  macOS / Linux: mkdir -p ~/.agents/skills && cp -R <本目录>/rh-product-feedback ~/.agents/skills/\n');
   process.stdout.write('  Windows: Copy-Item -Recurse <本目录>\\rh-product-feedback "$env:USERPROFILE\\.agents\\skills\\"\n');
+  process.stdout.write('  装完目录后运行 scripts/install.sh（登记禅道 MCP + 写入本人凭据）。\n');
 }
 
 try {
