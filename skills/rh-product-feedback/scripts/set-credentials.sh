@@ -52,6 +52,13 @@ main() {
     printf '禅道%s（输入不回显）: ' "$label" >&2
     IFS= read -r -s secret || true
     printf '\n' >&2
+  elif ( : < /dev/tty ) 2>/dev/null; then
+    # 脚本是从管道里来的（curl | bash）：输入要走终端，不能读脚本自己的 stdin
+    printf '禅道账号: ' >&2
+    IFS= read -r account < /dev/tty || true
+    printf '禅道%s（输入不回显）: ' "$label" >&2
+    IFS= read -r -s secret < /dev/tty || true
+    printf '\n' >&2
   else
     IFS= read -r account || true
     IFS= read -r secret || true
@@ -59,6 +66,7 @@ main() {
 
   if [ -z "$account" ]; then
     printf '账号为空，未写入。\n' >&2
+    printf '提示：管道方式（curl … | bash）读不到终端输入时，请改为下载脚本后运行，或单独运行本脚本写入凭据。\n' >&2
     exit 1
   fi
   if [ -z "$secret" ]; then

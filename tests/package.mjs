@@ -284,3 +284,24 @@ exit 0
   assert.match(calls, /claude mcp add --transport http zentao /);
   assert.match(stdout, /技能已安装/);
 });
+
+test('安装脚本：子进程读 stdin 也不会把脚本本身吃掉（管道模式回归）', { skip: process.platform === 'win32' }, () => {
+  const home = tmpDir('rh-home-');
+  const { bin, log } = fakeHostBin(home);
+
+  // 假的 npx：故意把 stdin 读干净，模拟会吞掉脚本内容的子进程
+  const npx = path.join(bin, 'npx');
+  fs.writeFileSync(npx, `#!/usr/bin/env bash\necho "npx $*" >> "${log}"\ncat > /dev/null\nexit 0\n`, { mode: 0o755 });
+
+  const stdout = execFileSync(
+    'bash',
+    ['-c', 'cat "$1" | bash -s -- "$2"', 'bash', INSTALL_SH, '--skip-credentials'],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+    },
+  );
+
+  assert.match(stdout, /装好了/, '脚本被提前吃掉了');
+  assert.match(fs.readFileSync(log, 'utf8'), /claude mcp add --transport http zentao /);
+});

@@ -73,7 +73,7 @@ else
   WORKDIR=$(mktemp -d)
   config_file="$WORKDIR/config.local.json"
   command -v curl >/dev/null 2>&1 || die "没有 curl：改用下载技能包后运行本脚本"
-  curl -fsSL "$raw_base/config.local.json" -o "$config_file" ||
+  curl -fsSL "$raw_base/config.local.json" -o "$config_file" </dev/null ||
     die "拉取接入配置失败：检查网络，或下载技能包后运行本脚本"
 fi
 
@@ -137,14 +137,16 @@ elif [ -n "$skill_dir" ]; then
 else
   command -v npx >/dev/null 2>&1 || die "没有 npx：改用下载技能包后运行本脚本"
   note "正在用 skills CLI 安装技能…"
-  npx --yes skills add "$REPO" --skill "$SKILL_NAME" --global --yes >/dev/null ||
+  # 子进程不读 stdin：管道模式（curl | bash）下 bash 是从 stdin 增量读脚本的，
+  # 子进程一旦读 stdin 就会把剩下的脚本吃掉。
+  npx --yes skills add "$REPO" --skill "$SKILL_NAME" --global --yes </dev/null >/dev/null ||
     die "技能安装失败：检查网络后重试"
   note "技能已安装（${REPO}）"
 fi
 
 # --- 登记禅道 MCP -------------------------------------------------------
 register_claude() {
-  current=$(claude mcp get zentao 2>/dev/null || true)
+  current=$(claude mcp get zentao 2>/dev/null </dev/null || true)
   if printf '%s' "$current" | grep -qF "$mcp_url"; then
     note "Claude Code：禅道 MCP 已是最新，跳过登记"
     return 0
@@ -153,13 +155,13 @@ register_claude() {
     note "Claude Code：已有 zentao 条目但地址与技能包不一致——在 Agent 里说「更新禅道地址」，它只改这一个键"
     return 0
   fi
-  claude mcp add --transport http zentao "$mcp_url" --scope user >/dev/null ||
+  claude mcp add --transport http zentao "$mcp_url" --scope user >/dev/null </dev/null ||
     die "Claude Code：登记禅道 MCP 失败"
   note "Claude Code：已登记禅道 MCP（地址不回显）"
 }
 
 register_pi() {
-  current=$(pi mcp list 2>/dev/null || true)
+  current=$(pi mcp list 2>/dev/null </dev/null || true)
   if printf '%s' "$current" | grep -qF "$mcp_url"; then
     note "pi：禅道 MCP 已是最新，跳过登记"
     return 0
@@ -168,7 +170,7 @@ register_pi() {
     note "pi：已有 zentao 条目但地址与技能包不一致——在 Agent 里说「更新禅道地址」，它只改这一个键"
     return 0
   fi
-  pi mcp add zentao --url "$mcp_url" >/dev/null || die "pi：登记禅道 MCP 失败"
+  pi mcp add zentao --url "$mcp_url" >/dev/null </dev/null || die "pi：登记禅道 MCP 失败"
   note "pi：已登记禅道 MCP（地址不回显）"
 }
 
@@ -194,7 +196,7 @@ else
   else
     WORKDIR="${WORKDIR:-$(mktemp -d)}"
     cred_script="$WORKDIR/set-credentials.sh"
-    curl -fsSL "$raw_base/scripts/set-credentials.sh" -o "$cred_script" ||
+    curl -fsSL "$raw_base/scripts/set-credentials.sh" -o "$cred_script" </dev/null ||
       die "拉取凭据脚本失败：检查网络，或下载技能包后运行本脚本"
   fi
   note "接下来输入你自己的禅道账号和密码（密码不回显，只写在你自己的机器上）"
