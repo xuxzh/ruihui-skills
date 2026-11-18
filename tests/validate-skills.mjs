@@ -124,6 +124,8 @@ if (!parsed) {
     ['事实 / 推断 / 无法确定三段式', /推断/],
     ['技能触发的安装入口', /\/rh-product-feedback install/],
     ['Agent 代跑安装脚本时不代输凭据', /--skip-credentials/],
+    ['交付时给出禅道直达链接', /feedback-view-/],
+    ['链接地址取自 config.local.json 的 zentaoWebUrl', /zentaoWebUrl/],
   ];
   for (const [label, re] of rules) check(`rh-product-feedback: ${label}`, re.test(all));
 
