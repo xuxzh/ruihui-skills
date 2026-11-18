@@ -482,24 +482,49 @@ async function cmdPrep(ctx, opts) {
 
 // ---------------------------------------------------------------- 宿主地址一致性
 
-function hostConfigPaths() {
+// 宿主 MCP 配置位置。默认覆盖 Claude Code 与 pi；Agent 可以用 --config/--pointer 指向当前宿主。
+function hostConfigPaths(opts = {}) {
+  const pointer = String(opts.pointer || 'mcpServers.zentao');
+  if (typeof opts.config === 'string' && opts.config.trim()) {
+    return [{ host: String(opts.host || '当前宿主'), file: path.resolve(opts.config.trim()), pointer }];
+  }
   const home = os.homedir();
   const paths = [];
   if (process.platform === 'win32') {
     const base = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
-    paths.push({ host: 'pi', file: path.join(base, 'pi', 'agent', 'mcp.json') });
+    paths.push({ host: 'pi', file: path.join(base, 'pi', 'agent', 'mcp.json'), pointer });
   } else {
-    paths.push({ host: 'Claude Code', file: path.join(home, '.claude.json') });
-    paths.push({ host: 'pi', file: path.join(home, '.pi', 'agent', 'mcp.json') });
+    paths.push({ host: 'Claude Code', file: path.join(home, '.claude.json'), pointer });
+    paths.push({ host: 'pi', file: path.join(home, '.pi', 'agent', 'mcp.json'), pointer });
   }
   return paths;
 }
 
-function readHostEntry(file) {
+// 指针形如 mcpServers.zentao：逐段下钻
+function getAtPath(obj, parts) {
+  let cur = obj;
+  for (const p of parts) {
+    if (cur === null || typeof cur !== 'object') return undefined;
+    cur = cur[p];
+  }
+  return cur;
+}
+
+function setAtPath(obj, parts, value) {
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const p = parts[i];
+    if (typeof cur[p] !== 'object' || cur[p] === null) cur[p] = {};
+    cur = cur[p];
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+
+function readHostEntry(file, pointer) {
   if (!fs.existsSync(file)) return { exists: false, entry: null };
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const entry = data?.mcpServers?.zentao || null;
+    const entry = getAtPath(data, String(pointer || 'mcpServers.zentao').split('.').filter(Boolean)) || null;
     return { exists: true, entry };
   } catch {
     return { exists: true, entry: null, broken: true };
@@ -507,12 +532,12 @@ function readHostEntry(file) {
 }
 
 // 只给结论，不回显地址
-function cmdCheck() {
+function cmdCheck(opts = {}) {
   const pkgUrl = loadPackageConfig().mcpUrl || '';
   const lines = [];
   let found = 0;
-  for (const { host, file } of hostConfigPaths()) {
-    const { exists, entry } = readHostEntry(file);
+  for (const { host, file, pointer } of hostConfigPaths(opts)) {
+    const { exists, entry } = readHostEntry(file, pointer);
     if (!exists) {
       lines.push(`${host}：没有配置文件`);
       continue;
@@ -527,19 +552,19 @@ function cmdCheck() {
   }
   out('# 宿主 MCP 地址检查');
   for (const line of lines) out(line);
-  if (!found) out('结论：宿主里没有 zentao 条目，跑一次安装脚本登记。');
+  if (!found) out('结论：宿主里没有 zentao 条目，按 setup.md 的「各宿主配置」登记禅道 MCP。');
   else if (lines.some((l) => l.includes('不一致'))) out('结论：有不一致，跑 `zentao-query.mjs sync` 修正（只改 zentao 条目的 url，写前备份）。');
   else out('结论：一致，不用改。');
 }
 
 // 只改 zentao 条目的 url，保留其他字段；写前备份
-function cmdSync() {
+function cmdSync(opts = {}) {
   const pkgUrl = loadPackageConfig().mcpUrl || '';
   if (!pkgUrl) throw new Error('技能包里没有配置禅道 MCP 地址');
   out('# 同步宿主 MCP 地址');
   let changed = 0;
-  for (const { host, file } of hostConfigPaths()) {
-    const { exists, entry, broken } = readHostEntry(file);
+  for (const { host, file, pointer } of hostConfigPaths(opts)) {
+    const { exists, entry, broken } = readHostEntry(file, pointer);
     if (!exists) {
       out(`${host}：没有配置文件，跳过`);
       continue;
@@ -549,7 +574,7 @@ function cmdSync() {
       continue;
     }
     if (!entry) {
-      out(`${host}：没有 zentao 条目，跳过（跑安装脚本登记）`);
+      out(`${host}：没有 zentao 条目，跳过（按 setup.md 的「各宿主配置」登记）`);
       continue;
     }
     if (entry.url === pkgUrl) {
@@ -559,7 +584,7 @@ function cmdSync() {
     const backup = `${file}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     fs.copyFileSync(file, backup);
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    data.mcpServers.zentao.url = pkgUrl;
+    setAtPath(data, String(pointer).split('.').filter(Boolean), { ...entry, url: pkgUrl });
     fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
     changed++;
     out(`${host}：已更新 zentao 条目的 url（备份：${path.basename(backup)}）`);
@@ -579,10 +604,12 @@ const HELP = `禅道只读查询器（rh-product-feedback）
   bug       --id <ID>                  缺陷详情（字段 + 正文 + 流水）
   feedback  --id <ID>                  反馈单详情（字段 + 正文 + 流水）
   prep      --product <名称或ID> [--match 关键词]   产品 + 项目 + 查重候选，一次拿全
-  check                                宿主 MCP 地址与技能包是否一致（只给结论）
-  sync                                  把宿主里的 zentao 地址改成技能包的（只改 url）
+  check     [--config <文件> [--pointer <路径>]]   宿主 MCP 地址与技能包是否一致（只给结论）
+  sync      [--config <文件> [--pointer <路径>]]   把宿主里的 zentao 地址改成技能包的（只改 url）
 
 选项：--match 关键词（查重/选品用，中英文都支持）  --limit 条数  --no-body（详情里不打印正文）
+check/sync 选项：--config 宿主 MCP 配置文件（不给则查内置的 Claude Code 与 pi 两处）
+                 --pointer 条目在文件里的位置（默认 mcpServers.zentao）  --host 宿主名（只影响输出）
 环境变量：ZENTAO_MCP_URL 覆盖禅道地址（测试用）  ZENTAO_CREDENTIALS_FILE 覆盖凭据文件路径`;
 
 async function main() {
@@ -591,8 +618,8 @@ async function main() {
     out(HELP);
     return;
   }
-  if (cmd === 'check') return cmdCheck();
-  if (cmd === 'sync') return cmdSync();
+  if (cmd === 'check') return cmdCheck(opts);
+  if (cmd === 'sync') return cmdSync(opts);
 
   const ctx = await connect();
   switch (cmd) {

@@ -1,61 +1,40 @@
 # 连接禅道 MCP
 
-业务用户装完技能后，在 Agent 里说一句就能接上；管理员看「禅道地址从哪来」与「分发」。
+业务用户粘一段提示词给当前的 Agent 就能接上；管理员看「禅道地址从哪来」与「分发」。
 
-## 业务用户：装技能 + 一句话安装
+## 业务用户：粘一段提示词
 
-### 1. 装技能
+### 1. 安装提示词
+
+把下面这段发给你正在用的 Agent：
+
+```
+帮我装上 ruihui 的产品反馈助手（rh-product-feedback），并接上禅道：
+1. 技能没装的话，先运行 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`（它会按你所在的宿主建好入口），然后读它输出的路径下的 `SKILL.md`。
+2. 按这份 `SKILL.md` 的「0.2 安装」，把禅道 MCP 登记到**你这个宿主**的配置里：地址在技能包的 `config.local.json`，优先用宿主自己的 MCP 命令；已有条目就只改它的 `url`，其它字段别动；写前备份、写后复核。
+3. 告诉我怎么写入我自己的禅道账号密码——密码必须由我在自己的终端里输入，别替我输、也别写进对话。
+4. 告诉我怎么让配置生效（重启你，还是执行 `/reload`）。
+```
+
+你用的是 pi、Claude Code、Codex 还是别的 Agent 都一样——**登记做在哪个宿主，取决于你在哪个宿主里问**。
+
+### 2. 写账号密码
+
+Agent 会把这条命令原样贴给你，复制到**自己的终端**跑：
 
 ```bash
-npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
+bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
 ```
 
-skills CLI 把技能装到 `~/.agents/skills/rh-product-feedback/`，再按宿主建入口：Claude Code 得到 `~/.claude/skills/rh-product-feedback`（软链），pi 直接用 `~/.agents/skills/`。也可以直接从 GitHub 下载技能包、解压后放到上面任一路径。
+（Windows 用 `scripts\set-credentials.ps1`。）密码不回显，只写在你自己的机器上。
 
-### 2. 在 Agent 里说一句
+### 3. 让配置生效，然后验证
 
-```
-/rh-product-feedback install
-```
+- Claude Code：退出重开。
+- pi：执行 `/reload`。
+- 其它宿主：按 Agent 给的提示（见下面「各宿主配置」）。
 
-pi 用 `/skill:rh-product-feedback install`。Agent 接到这句会：
-
-1. 代跑随包的安装脚本（`install.sh --skip-credentials --force`），把禅道 MCP 登记到宿主——地址从技能包的 `config.local.json` 读，不回显、不进对话。
-2. 给你一条写**本人**账号密码的命令。密码必须由你在自己的终端输入：Agent 的命令环境没有可交互的输入，替你输就会把密码带进对话。
-3. 提示你重启宿主。
-
-登记发生在宿主运行期间（Agent 就在宿主里），宿主退出时可能回写配置覆盖刚登记的条目。Agent 登记后会回读复核；重开会话时若条目不见了，会话自检会自动把地址按技能包里的 `config.local.json` 补回去（只改 `zentao` 这一个键）。
-
-### 3. 手动跑安装脚本（备选）
-
-技能没被加载、或 Agent 用不了命令时，在终端跑：
-
-```bash
-# Claude Code（主宿主）
-bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
-```
-
-```powershell
-# Windows（PowerShell）
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-product-feedback\scripts\install.ps1"
-```
-
-用 pi 把路径里的 `.claude` 换成 `.agents`。
-
-脚本一次做完三件事：
-
-1. 从技能包里的 `config.local.json` 读禅道地址（地址不回显，也不出现在对话里）。
-2. 把禅道 MCP 登记到检测到的宿主（Claude Code / pi）。
-3. 让你输入**自己的**禅道账号和密码，写进本机凭据文件——密码不回显，文件只有你能读。
-
-脚本可以重复跑：已装好的部分会跳过，地址一致就什么都不改。
-
-### 4. 重启 Agent，然后验证
-
-- Claude Code：退出重开。运行中的 Claude Code 会回写 `~/.claude.json`，所以**手动跑脚本时先把宿主退出**；脚本检测到宿主还在跑会直接停下提示你。（Agent 代跑时不用退出：登记后回读复核，重启后如连不上，在会话里说「更新禅道地址」即可。）
-- pi：执行 `/reload`，不用重启。
-
-重开后，在 Agent 里说：
+生效后，在 Agent 里说：
 
 > 验证一下禅道连接
 
@@ -63,16 +42,22 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-pro
 
 之后直接说要提什么就行。提交成功后会给你一条可点的禅道直达链接，想自己核对时点开即可。
 
+### 不装技能、只想试一次
+
+不想让技能常驻，用 skills CLI 的 `use`（技能落在临时目录，不写进宿主）：
+
+```
+用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback` 拿到这个技能的说明并照着做：把它输出的完整内容先存到临时文件再读；它给的 supporting-files 目录就是技能目录，`SKILL.md` 里的相对路径都从那里解析。然后按其中「0.2 安装」把禅道 MCP 登记到你这个宿主的配置里，并告诉我怎么写入我自己的账号密码。
+```
+
 ### 装不上时
 
 | 你看到的 | 原因 | 怎么办 |
 | --- | --- | --- |
-| `/rh-product-feedback install` 没反应 | 技能没被加载，或宿主不认这个斜杠命令 | 先确认技能在列表里；不认就手动跑安装脚本 |
-| 脚本说没有检测到宿主 | Claude Code 和 pi 都没装 | 先装其中一个宿主再跑 |
-| 脚本说 Claude Code 正在运行 | 运行中的宿主会覆盖配置 | 退出 Claude Code 再跑（或加 `--force`） |
-| 装完连不上 | 地址不一致或条目被覆盖 | 在 Agent 里说「更新禅道地址」，它只改 `zentao` 这一个键；或再跑一次脚本 |
-| 登录失败 | 账号或密码不对 | 核对后重跑脚本的凭据步骤；不要反复试，连续失败可能锁号 |
-| 装完没反应 | 技能刚装上，宿主还没加载 | Claude Code 退出重开；pi 执行 `/reload` |
+| Agent 说找不到技能 / 读不到 `SKILL.md` | 技能没装到宿主能发现的位置 | 让 Agent 跑 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`，或把技能包解压到宿主技能目录 |
+| Agent 说装好了但连不上 | 地址不一致，或条目被运行中的宿主回写覆盖 | 在 Agent 里说「更新禅道地址」，它只改 `zentao` 这一个键 |
+| 登录失败 | 账号或密码不对 | 核对后重跑凭据脚本；不要反复试，连续失败可能锁号 |
+| 装完没反应 | 宿主还没加载新配置 | Claude Code 退出重开；pi 执行 `/reload`；其它宿主按上面的对照表 |
 
 ## 接入凭据
 
@@ -81,7 +66,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-pro
 默认用禅道账号 + 密码：业务用户不必先去禅道生成令牌，少一个操作。令牌也支持——禅道「个人 → 令牌」里生成，可单独撤销、可设有效期，误贴出去不影响账号密码；愿意用令牌的人可以跑：
 
 ```bash
-bash ~/.claude/skills/rh-product-feedback/scripts/set-credentials.sh --token
+bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh --token
 ```
 
 ### 存放位置与格式
@@ -174,30 +159,43 @@ ZENTAO_PASSWORD=<你的禅道密码>
 
 ## 各宿主配置
 
-MCP server 名为 `zentao`，类型是 Streamable HTTP，地址取自 `config.local.json` 的 `mcpUrl`。安装脚本按下面的规则登记。
+MCP server 名为 `zentao`，类型是 Streamable HTTP，地址取自 `config.local.json` 的 `mcpUrl`。
 
-### Claude Code（主宿主）
+**登记做在「当前宿主」——也就是正在跟用户对话的那个 Agent 客户端。** 技能包里不写死宿主清单：Agent 自己知道它在哪个宿主里，照下表对号入座即可。
 
-配置文件是用户级 `~/.claude.json` 的 `mcpServers`（项目级 `.mcp.json` 需要逐项目批准，不走这条路）。
+| 宿主 | MCP 配置文件 | `zentao` 条目 | 登记命令 | 生效方式 |
+| --- | --- | --- | --- | --- |
+| Claude Code | `~/.claude.json` 的 `mcpServers.zentao` | `{"type":"http","url":"<mcpUrl>"}` | `claude mcp add --transport http zentao <mcpUrl> --scope user` | 退出重开 |
+| pi | `~/.pi/agent/mcp.json` 的 `mcpServers.zentao` | `{"url":"<mcpUrl>"}`（`type` 可选） | `pi mcp add zentao --url <mcpUrl>` | `/reload` |
+| Codex | `~/.codex/config.toml` 的 `[mcp_servers.zentao]` | `url = "<mcpUrl>"` | `codex mcp add zentao --url <mcpUrl>` | 重开会话 |
+| OpenCode | `opencode.json` 的 `mcp.zentao` | `{"type":"remote","url":"<mcpUrl>","enabled":true}`（字段名按宿主文档核对） | 无 CLI，改配置文件 | 重开 |
+| 其它宿主 | 宿主自己的 MCP 配置 | 通用约定：`mcpServers.zentao` + `url` | 按宿主文档 | 按宿主文档 |
 
-登记方式——**只改一个键**：
+`mcpServers.<name>` + `url` 是 pi、Claude Code、Cursor 等客户端的通用约定（pi 官方文档的迁移表即以此为准），Codex 用 TOML、OpenCode 用自己的键名——**对不上就按宿主文档来，不要硬套**。
 
-1. 读 `~/.claude.json`（不存在就当空对象）。
-2. 只动 `mcpServers.zentao`：不存在就新增 `{"type":"http","url":"<mcpUrl>"}`；已存在就只更新 `url`，保留 `headers` 等其他字段。
-3. 写回前先备份一份 `~/.claude.json.bak-<时间戳>`。
-4. 写回后复核：`claude mcp get zentao` 能查到、地址与 `config.local.json` 一致。
+### 登记的两条路
 
-**不要用 `claude mcp add` 覆盖**：它遇到同名条目会直接拒绝（`already exists in user config`，地址变了也不更新），也保留不了条目上的其他字段。
+1. **优先用宿主自己的 MCP 命令**（上表第 4 列）。它最不容易写坏宿主配置。
+2. **条目已存在但地址变了、或宿主没有这类命令** → 改配置文件，按「只改一个键」来：
+   1. 读该配置文件（不存在就当空对象）。
+   2. 只动 `zentao` 这一个条目：不存在就新增，已存在就只更新 `url`，保留 `headers` 等其他字段。
+   3. 写回前先备份一份 `<文件名>.bak-<时间戳>`。
+   4. 写回后复核：条目还在、地址与 `config.local.json` 一致。
 
-改完需要**重开 Claude Code** 才生效。重开后第一件事是复核 `mcpServers.zentao` 还在不在：不在说明被运行中的 Claude Code 回写覆盖，重写一次；仍然不行就让用户再跑一次安装脚本。
+**不要用 `claude mcp add` 覆盖**：它遇到同名条目会直接拒绝（`already exists in user config`，地址变了也不更新），也保留不了条目上的其他字段。同理 `pi mcp add` 是**整条替换**，会丢掉该条目上已有的其他字段（例如将来加的请求头令牌）。
 
-### pi（次宿主）
+### 登记发生在宿主运行期间
 
-配置文件是用户级 `~/.pi/agent/mcp.json`（项目级 `.pi/mcp.json` 需要项目信任）。
+Agent 就在宿主里，宿主退出时可能回写配置、覆盖刚登记的条目。所以登记后必须**回读复核**；重开会话时若条目不见了，会话自检会自动按 `config.local.json` 把地址补回去（只改 `zentao` 这一个键）。Claude Code 尤其如此——改完需要**重开**才生效。
 
-`pi mcp add zentao --url <地址>` 是**整条替换**，会丢掉该条目上已有的其他字段（例如将来加的请求头令牌）；要保留就同样按「只改一个键」的方式合并写。
+### 核对地址
 
-pi 支持 `/reload`：改完配置在会话里执行 `/reload` 就生效，不必重启宿主。
+```bash
+node <技能目录>/scripts/zentao-query.mjs check    # 只给结论（一致 / 不一致）
+node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao 地址改成技能包的（只改 url）
+```
+
+不传参数时查内置的 Claude Code 与 pi 两处；当前宿主是别的客户端时加 `--config <宿主 MCP 配置文件>`（必要时再加 `--pointer <条目路径>`，默认 `mcpServers.zentao`）。
 
 ## 禅道查询器（只读）
 
@@ -217,7 +215,7 @@ node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao �
 
 - **前置**：Node.js 18+（用 `fetch`）。没有 node 时改用 MCP 工具分小页取，只把需要的字段抄下来。
 - **凭据**：脚本自己读本机凭据文件并登录，密码与令牌不打印、不进上下文。没写凭据时它会提示去跑 `set-credentials.sh`。
-- **地址**：从技能包的 `config.local.json` 读；`check` / `sync` **只输出结论**，不回显地址。`sync` 只改宿主配置里 `zentao` 条目的 `url`，写前备份。
+- **地址**：从技能包的 `config.local.json` 读；`check` / `sync` **只输出结论**，不回显地址。`sync` 只改宿主配置里 `zentao` 条目的 `url`，写前备份。宿主不是 Claude Code / pi 时加 `--config <宿主 MCP 配置文件>`（必要时 `--pointer <条目路径>`）。
 - **环境变量**（测试用）：`ZENTAO_MCP_URL` 覆盖禅道地址，`ZENTAO_CREDENTIALS_FILE` 覆盖凭据文件路径。
 - **写操作不走它**：建单、更新、流转一律用 MCP 工具，保留用户确认链路。
 

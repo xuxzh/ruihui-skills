@@ -123,7 +123,7 @@ if (!parsed) {
     ['查重降级方案（分页 + 客户端匹配）', /客户端匹配|分页/],
     ['事实 / 推断 / 无法确定三段式', /推断/],
     ['技能触发的安装入口', /\/rh-product-feedback install/],
-    ['Agent 代跑安装脚本时不代输凭据', /--skip-credentials/],
+    ['凭据必须由本人写入、Agent 不代劳', /凭据必须由本人/],
     ['交付时给出禅道直达链接', /feedback-view-/],
     ['链接地址取自 config.local.json 的 zentaoWebUrl', /zentaoWebUrl/],
     ['列表与详情读取走随包查询器', /zentao-query/],
@@ -145,8 +145,9 @@ console.log('\n[3] 文档与技能一致');
 const quickStart = path.join(ROOT, 'docs', 'quick-start.md');
 if (fs.existsSync(quickStart)) {
   const quickText = fs.readFileSync(quickStart, 'utf8');
-  check('快速上手写了技能触发的安装入口', quickText.includes('/rh-product-feedback install'));
-  check('快速上手写了手动安装脚本作为备选', quickText.includes('install.sh'));
+  check('快速上手写了粘贴给当前 Agent 的安装提示词', quickText.includes('npx skills add xuxzh/ruihui-skills'));
+  check('快速上手写了写凭据的命令（留在用户自己的终端）', quickText.includes('set-credentials.sh'));
+  check('快速上手不再让用户跑安装脚本', !quickText.includes('install.sh'));
 } else {
   check('存在 docs/quick-start.md', false);
 }

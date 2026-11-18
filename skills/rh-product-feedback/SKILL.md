@@ -1,6 +1,6 @@
 ---
 name: rh-product-feedback
-description: 把自然语言产品反馈提交到禅道 ZenTao：明确要 Bug 时直接创建**正式缺陷单**（bug 对象，进开发流程），其余走**反馈单**（feedback 对象）；两条路径都支持查询、进度解释与补充说明。也能在禅道 MCP 未配置时引导用户完成安装与认证。触发场景：用户要「提 Bug / 报缺陷 / 页面报错 / 复现步骤是…」「提需求 / 提建议 / 提交反馈」「查反馈 / 查缺陷 / 看反馈到哪了 / 为什么还没排期 / 补充反馈信息」「帮我装禅道 MCP / 配置禅道 / 连不上禅道」，或提到 report a bug、file a feature request、check feedback status、connect zentao；用户输入斜杠命令 `/rh-product-feedback install`（pi 是 `/skill:rh-product-feedback install`）时走安装模式——Agent 代跑随包的安装脚本登记禅道 MCP，账号密码仍由本人写入。
+description: 把自然语言产品反馈提交到禅道 ZenTao：明确要 Bug 时直接创建**正式缺陷单**（bug 对象，进开发流程），其余走**反馈单**（feedback 对象）；两条路径都支持查询、进度解释与补充说明。也能在禅道 MCP 未配置时引导你在当前宿主里完成登记与认证。触发场景：用户要「提 Bug / 报缺陷 / 页面报错 / 复现步骤是…」「提需求 / 提建议 / 提交反馈」「查反馈 / 查缺陷 / 看反馈到哪了 / 为什么还没排期 / 补充反馈信息」「帮我装禅道 MCP / 配置禅道 / 连不上禅道」，或提到 report a bug、file a feature request、check feedback status、connect zentao；用户输入斜杠命令 `/rh-product-feedback install`（pi 是 `/skill:rh-product-feedback install`）或粘来安装提示词（见 references/setup.md）时走安装模式——Agent 自己在当前宿主里登记禅道 MCP，账号密码仍由本人写入。
 compatibility: 需要连接禅道 MCP（工具名前缀 zentao，至少含 post_users_login、post_feedbacks、post_bugs、put_feedbacks_feedbackID、get_feedbacks_feedbackID、get_products_productID_feedbacks）并能访问该服务；首次使用需要本机已有自己的禅道账号凭据（见 references/setup.md）。
 metadata:
   rh-version: "0.10.0"
@@ -50,7 +50,7 @@ node <技能目录>/scripts/zentao-query.mjs prep --product 瑞辉智能报表�
 - **读**（产品、项目、缺陷/反馈列表、单据详情）→ 查询器。
 - **写**（建单、更新、流转）→ MCP 工具（`post_bugs` / `post_feedbacks` / `put_*`），保留用户确认链路。
 - 查询器自己读本机凭据并登录，**密码与令牌不进上下文**。
-- `<技能目录>` 是技能包根目录：pi 在 `~/.agents/skills/rh-product-feedback`，Claude Code 在 `~/.claude/skills/rh-product-feedback`。
+- `<技能目录>` 是技能包根目录：pi 在 `~/.agents/skills/rh-product-feedback`，Claude Code 在 `~/.claude/skills/rh-product-feedback`；用 `skills use` 临时跑时是它给的 supporting-files 目录。
 - 环境里没有 `node` 时改用 MCP 工具分小页取（如 `recPerPage=20`），**只把需要的字段抄下来**，不要把原始 JSON 整段贴进上下文。
 
 `prep` 一次给全「产品 + 项目 + 缺陷/反馈查重候选」，用它替代串行的四轮查询。
@@ -63,6 +63,7 @@ node <技能目录>/scripts/zentao-query.mjs prep --product 瑞辉智能报表�
 - **查询器**：随包的只读查询脚本（`scripts/zentao-query.mjs`）。在进程内过滤禅道数据，只把结果表格交给 Agent。
 - **草稿**：写库前展示给用户确认的结构化内容。
 - **回读**：写入后用返回的 ID 重新读取，核对内容与操作流水。
+- **当前宿主**：正在跟你对话的这个 Agent 客户端（pi、Claude Code、Codex 等）。技能装在哪、禅道 MCP 登记在哪、怎么让它生效，都按当前宿主来。
 - **当前登录账号**：本会话登录禅道用的那个账号，就是对话里的用户本人；禅道里的单据留痕在它名下。
 - **接入凭据**：当前登录账号的账号名与密码（或令牌），存在用户自己机器的凭据文件里，由用户本人写入。
 - **默认产品**：用户在本机设置的、默认用于提交单据的禅道产品，存在用户自己的机器上（偏好文件），不在技能包里。
@@ -80,54 +81,41 @@ node <技能目录>/scripts/zentao-query.mjs prep --product 瑞辉智能报表�
 先确认宿主里存在禅道 MCP 的工具（工具名带 `zentao` 前缀，或至少存在 `post_users_login` 与 `get_products`）。
 
 - **可用** → 直接进 0.4。
-- **不可用** → 走 0.2 的 A 路径（Agent 代跑安装脚本）。**不要**向用户索要禅道地址、IP、端口或账号密码。
+- **不可用** → 走 0.2 的 A 路径（Agent 在当前宿主里登记禅道 MCP）。**不要**向用户索要禅道地址、IP、端口或账号密码。
 
 **地址核对按需触发**，不要每次会话都去读宿主配置（那里可能有凭据类文件）：
 
 - 工具可用且首调成功 → 不用核对，能连上就是事实。
-- 工具不可用、登录或首调失败、或走安装流程 → 核对一次：`node <技能目录>/scripts/zentao-query.mjs check` 只给结论（一致 / 不一致）；不一致就 `node <技能目录>/scripts/zentao-query.mjs sync` 修正（只改 `zentao` 条目的 `url`，写前备份），再告诉用户「配置里的地址和技能包里的地址不一致，已更新，重开一次宿主生效」。
+- 工具不可用、登录或首调失败、或走安装流程 → 核对一次：`node <技能目录>/scripts/zentao-query.mjs check` 只给结论（一致 / 不一致）；不一致就 `node <技能目录>/scripts/zentao-query.mjs sync` 修正（只改 `zentao` 条目的 `url`，写前备份），再告诉用户「配置里的地址和技能包里的地址不一致，已更新，重开一次宿主生效」。当前宿主不是 Claude Code / pi 时，给这两个命令加上 `--config <宿主 MCP 配置文件>`（位置见 [references/setup.md](references/setup.md)「各宿主配置」）。
 - **不要为了让两边一致去改技能包里的 `config.local.json`**——那是分发下来的文件，用户没同意不要动（见硬约束 12）。
 
 各宿主配置的位置与写法见 [references/setup.md](references/setup.md)「各宿主配置」。
 
 ### 0.2 安装（自助安装）
 
-**触发**：请求里带 `install` 参数（斜杠命令 `/rh-product-feedback install`，pi 是 `/skill:rh-product-feedback install`），或用户说「帮我装禅道 / 配置禅道 / 连不上禅道」。带 `install` 时**直接走 A 路径**，不必先做 0.1 的工具检测。
+**触发**：请求里带 `install` 参数（斜杠命令 `/rh-product-feedback install`，pi 是 `/skill:rh-product-feedback install`），或用户说「帮我装禅道 / 配置禅道 / 连不上禅道」，或用户粘来安装提示词（见 [references/setup.md](references/setup.md)「安装提示词」）。触发后**直接走 A 路径**，不必先做 0.1 的工具检测。
 
-共同要点：地址来自技能包内的 `config.local.json`，脚本自己读，**不进对话、不回显**；凭据由用户本人输入并写入本机凭据文件，**不要在对话里索要或回显密码**；登记完要重启宿主（Claude Code 退出重开；pi 执行 `/reload`），**重启之后**再验证（0.4）。
+共同要点：地址来自技能包内的 `config.local.json`（`mcpUrl`）；**你在当前宿主里自己登记**——程序不认识宿主，宿主配置在哪、怎么写，见 [references/setup.md](references/setup.md)「各宿主配置」；凭据由用户本人输入并写入本机凭据文件，**不要在对话里索要或回显密码**；登记完要按宿主要求让它生效（Claude Code 退出重开；pi 执行 `/reload`），**生效之后**再验证（0.4）。
 
-**A 路径（默认）：Agent 代跑安装脚本。**
+**A 路径（默认）：你在当前宿主里登记禅道 MCP。**
 
-1. 定位技能目录（两个候选路径取先命中的那个）：
+1. 确认技能目录 `<技能目录>`：全局安装时是 `~/.agents/skills/rh-product-feedback`（Claude Code 是软链 `~/.claude/skills/rh-product-feedback`）；用 `skills use` 临时跑时是它给的 supporting-files 目录。下面的脚本都在 `<技能目录>/scripts/` 下。
 
-   ```bash
-   for d in "$HOME/.claude/skills/rh-product-feedback" "$HOME/.agents/skills/rh-product-feedback"; do
-     [ -f "$d/scripts/install.sh" ] && { echo "$d"; break; }
-   done
-   ```
+2. 读地址：技能包内 `config.local.json` 的 `mcpUrl`。地址随仓库公开（ADR-0005），可以读、可以出现在命令里，但**不要在给用户的回复里回显具体值**——汇报时说「已登记、地址一致」即可。
 
-   两个都没命中 → 技能没装到宿主能发现的位置，按 [references/setup.md](references/setup.md) 的「装技能」处理。
+3. 登记（按当前宿主那一行做，见 setup.md「各宿主配置」）：
+   - **优先用宿主自己的 MCP 命令**（如 `claude mcp add --transport http zentao <地址> --scope user`、`pi mcp add zentao --url <地址>`、`codex mcp add zentao --url <地址>`）。
+   - **条目已存在但地址不同、或宿主没有这类命令**：改宿主配置文件——只动 `zentao` 这一个条目：不存在就新增，已存在就只改 `url`，**保留该条目上的其他字段**（如 `headers`）；**写回前先备份**，写回后复核。
 
-2. 跑安装脚本（只做登记，不做交互输入）：`bash <技能目录>/scripts/install.sh --skip-credentials --force`。Windows 用 `install.ps1 -SkipCredentials -Force`。
-   - `--skip-credentials`：凭据必须由本人输入，Agent 不代劳（硬约束 5）。
-   - `--force`：Agent 就在宿主里，宿主必然「正在运行」，这时停下没有意义。
-   - 脚本可以重复跑：已登记且地址一致就跳过，不会重复写。
+4. 回读复核：读回宿主配置里的 `zentao` 条目，确认地址与 `config.local.json` 一致；不一致就只改 `url`——`node <技能目录>/scripts/zentao-query.mjs check` 给结论、`sync` 修正（非 Claude Code / pi 的宿主加 `--config <宿主 MCP 配置文件>`）。
 
-3. 回读复核宿主配置里的 `zentao` 条目，确认地址与 `config.local.json` 一致；不一致就只改 `url` 这一个键（先备份、保留其他字段），改完复核。
+5. 凭据：查本机凭据文件在不在（`bash <技能目录>/scripts/set-credentials.sh --path` 给出位置）。在 → 跳到第 6 步；不在 → 请用户**在自己终端**跑一次 `bash <技能目录>/scripts/set-credentials.sh`（Agent 的命令环境没有可交互的输入，替用户输密码会把密码带进对话）。Windows 用 `scripts\set-credentials.ps1`。
 
-4. 凭据：查本机凭据文件在不在（`bash <技能目录>/scripts/set-credentials.sh --path` 给出位置）。在 → 跳到第 5 步；不在 → 请用户**在自己终端**跑一次 `bash <技能目录>/scripts/set-credentials.sh`（Agent 的命令环境没有可交互的输入，替用户输密码会把密码带进对话）。
+6. 提示生效方式（Claude Code 退出重开；pi 执行 `/reload`；其它宿主按 setup.md 对照表），生效后再验证（0.4）。
 
-5. 提示重启宿主（Claude Code 退出重开；pi 执行 `/reload`），重启后再验证（0.4）。
+7. 如实汇报：分别说清「禅道 MCP 已登记」「凭据已写入 / 还没写入」「需要让宿主重载」。没验证过不要说「装好了、能提反馈了」。
 
-6. 如实汇报：分别说清「禅道 MCP 已登记」「凭据已写入 / 还没写入」「需要重开宿主」。没验证过不要说「装好了、能提反馈了」。
-
-**B 路径：用户自己跑脚本。** Agent 没有命令工具、或脚本跑失败时，把这条命令给用户，让他自己在终端跑：
-
-```bash
-bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
-```
-
-用 pi 把路径里的 `.claude` 换成 `.agents`；Windows 用 `install.ps1`（见 [references/setup.md](references/setup.md)）。
+**B 路径：用户自己动手。** Agent 没有命令工具、或文件工具时，把 setup.md「各宿主配置」里当前宿主那一段（配置文件路径 + `zentao` 条目该长什么样）给用户，让他自己改；凭据仍然由他自己跑 `set-credentials.sh` 写。
 
 安装过程只做这些；不要替用户编造地址，不要把凭据写进任何仓库文件。
 
@@ -458,14 +446,14 @@ bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
 2. **写入后回读**：按 ID 重新读取并核对内容，「保存成功」的文本不作为落库证据；补充说明还要确认本次**新增**了 `edited` 流水。
 3. **不确定先查**：超时、连接中断、返回与预期不符时，先查询核实再决定下一步；同一份内容不重复创建。禅道创建无幂等，盲目重试会造重复单。写入前保留已扫描单据的 ID 基线，结果不确定时只认「基线之外、唯一、回读完全一致」的新记录；认不准或复查不完整就报未确认交回用户，不把「没查到」说成「没创建」。
 4. **身份**：所有操作都以**当前登录账号**（用户本人的禅道账号）进行。说「这是你提交的」只在回读确认提交人是当前登录账号时才能说；提交人不是本人时（如实说「禅道里这条单据的提交人是 <另一个人>」），不要把服务端的提交人当成用户本人。`openedbyme` 指的是当前登录账号本人提交的记录。缺陷单的提交人字段是 `openedBy`，同样要核对。
-5. **凭据**：账号、密码、令牌由用户自己在本机写入接入凭据文件；**不在对话里索要、不在回复里回显、不写进任何仓库文件**。Agent 代跑安装脚本时一律加 `--skip-credentials`：凭据必须由本人在自己的终端输入。地址同理：只从 `config.local.json` 读，**不在回复里写出地址的具体值**——汇报连接状态时说「已登记、已连接」即可。唯一的例外是 2.7 / 3.8 交付单据链接：用户要的就是能点开的地址，那一次给完整 URL。
+5. **凭据**：账号、密码、令牌由用户自己在本机写入接入凭据文件；**不在对话里索要、不在回复里回显、不写进任何仓库文件**。凭据必须由本人在自己的终端输入，Agent 不代劳。地址同理：只从 `config.local.json` 读，**不在回复里写出地址的具体值**——汇报连接状态时说「已登记、已连接」即可（登记用的命令里出现地址无妨）。唯一的例外是 2.7 / 3.8 交付单据链接：用户要的就是能点开的地址，那一次给完整 URL。
 6. **权限边界**：当前账号看不到的产品与单据就是看不到。不要绕过禅道权限去达成写入目的；用户看不到时如实说明并指出该找谁开权限。默认产品不可见时同样如实说明，不要静默换产品建单。
 7. **图片走上传脚本**：正文里的图片必须用 `scripts/zentao-upload.mjs` 上传，拿到文件 ID 后在正文里放固定形态的引用（见 6.3）。上传失败就如实说失败，不改用文字描述假装图片已放上去。
 8. **不做人的决定**：关闭、删除、解决、重新打开单据，以及指派负责人，都由人来做；Agent 只提交内容与读取状态。缺陷单也不做流转。
 9. **不写凭据**：账号、密码、令牌不进回复、不进代码、不进文档、不进提交记录。禅道地址随技能包进版本库（ADR-0005），可以读取，但不要主动回显地址的具体值（2.7 / 3.8 的单据链接除外）。
 10. **不编造链接**：单据链接里的 Web 地址只能来自技能包 `config.local.json` 的 `zentaoWebUrl`。读不到就不给链接，不用 MCP 地址拼、不凭印象写；宁可只给单据 ID，并说明为什么给不了链接。
 11. **并发边界**：禅道更新接口无条件覆盖，没有版本号 CAS。写前二次回读能显著降低覆盖他人内容的风险，但复核与写入之间仍可能有别人改过——发现原文变了就停手，把重新合并后的草稿交回用户确认。
-12. **不覆盖宿主配置**：登记禅道 MCP 时只动宿主配置里的 `zentao` 条目，保留别的 server 与该条目上的其他字段；写回前先备份，改完复核条目还在不在。
+12. **不覆盖宿主配置**：登记禅道 MCP 时只动宿主配置里的 `zentao` 条目，保留别的 server 与该条目上的其他字段；写回前先备份，改完复核条目还在不在。当前宿主是哪台客户端由它自己判断，不要按写死的宿主清单逐个写。
 13. **不改技能包自身的文件**：未经用户明确要求修改技能，不动 `SKILL.md`、`references/`、`scripts/`、`config.local.json` 里的任何文件。用户把“希望这里能记住上次的筛选条件”这类话说成对产品的期望时，按**给产品的建议**处理（类型 `advice`），不是给技能加功能；真要改技能，请他到仓库提 issue。
 14. **默认落点是缺陷单**：用户明确说 Bug / 缺陷 / 报错 / 复现步骤时走缺陷单；语义不清时追问一次，不替用户猜。缺陷单草稿必须带「会进入开发流程」的声明。
 15. **缺陷单不附带建反馈单**：禅道没有「反馈转缺陷」的关联字段，一次诉求只建一张单。

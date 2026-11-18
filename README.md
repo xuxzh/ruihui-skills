@@ -10,13 +10,13 @@
 
 > 面向不用懂 MCP、只要能把话说清楚的同事。技能包里已含禅道 MCP 地址，装完直接用。
 
-完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的命令、三个示例和常见问题。概览：
+完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的提示词、三个示例和常见问题。概览：
 
-1. **装技能**：`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`——装到 `~/.agents/skills/rh-product-feedback/`，Claude Code 在 `~/.claude/skills/` 下得到软链，pi 直接用 `~/.agents/skills/`。
-2. **在 Agent 里说一句**：`/rh-product-feedback install`（pi 是 `/skill:rh-product-feedback install`）——Agent 代跑安装脚本完成「登记禅道 MCP」，并给你一条写账号密码的命令。**你不用填 IP，也不用改配置文件**；密码只在你自己的终端里输入，不进对话。
-3. **重启 Agent 后验证**：Claude Code 退出重开，pi 执行 `/reload`；在 Agent 里说「验证一下禅道连接」。
+1. **粘一段提示词给你正在用的 Agent**（pi、Claude Code、Codex 都行）：它会装好技能（`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`），再按自己的宿主登记禅道 MCP——**登记做在你在用的那个 Agent 里，不用挑、不用填 IP、不用改配置文件**。
+2. **在你的终端里写账号密码**：Agent 会把 `set-credentials.sh` 那条命令原样贴给你，密码只在你自己的机器上输入，不进对话。
+3. **让 Agent 重载后验证**：Claude Code 退出重开，pi 执行 `/reload`；在 Agent 里说「验证一下禅道连接」。
 
-> 技能没被加载、或 Agent 用不了命令时，手动跑一次安装脚本：`bash ~/.claude/skills/rh-product-feedback/scripts/install.sh`（pi 把 `.claude` 换成 `.agents`）。
+> 不想让技能常驻、只想试一次：用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback`（技能落在临时目录），提示词见 quick-start。
 
 之后就能直接用：
 
@@ -89,7 +89,7 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 
 当前版本（v0.10.0）的能力与限制：
 
-- **两种安装入口**：在 Agent 里说 `/rh-product-feedback install`（Agent 代跑安装脚本登记禅道 MCP），或自己跑一次随包的安装脚本。凭据始终由本人写入，密码不进对话。
+- **安装交给当前的 Agent**：装技能用 skills CLI，登记禅道 MCP 由你在用的那个 Agent 自己做（它知道自己的宿主配置在哪），技能包里不写死宿主清单。凭据始终由本人写入，密码不进对话。
 
 - **读数据走随包查询器**：产品、项目、缺陷/反馈列表与单据详情都由 `scripts/zentao-query.mjs` 取——它在进程内过滤禅道数据，只把十几行表格交给 Agent，原始 JSON 不进上下文，查询器自己登录，凭据与令牌也不进上下文。写入仍走 MCP 工具，保留「等你确认再写」的链路。
 
@@ -156,6 +156,14 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 - [ADR-0002](docs/adr/0002-业务用户接入形态.md) — Agent 自装 MCP、地址随包分发、凭据由本人写入
 - [ADR-0003](docs/adr/0003-真实端到端测试的写入闸门.md) — 真实端到端测试默认只读，写入要过三道闸门
 - [ADR-0004](docs/adr/0004-主宿主与首次接入链路.md) — 主宿主 Claude Code、首次接入三阶段 ≤4 次交互、会话登录是唯一凭据路径
+- [ADR-0005](docs/adr/0005-禅道地址进版本库.md) — 禅道地址进版本库、技能走公网分发、凭据默认账号密码
+- [ADR-0006](docs/adr/0006-安装脚本与首次接入.md) — 安装脚本与首次接入：一条命令装好
+- [ADR-0007](docs/adr/0007-技能触发的安装入口.md) — 技能触发的安装入口：业务用户不再手敲长命令
+- [ADR-0008](docs/adr/0008-反馈路径与缺陷路径并存.md) — 反馈路径与缺陷路径并存
+- [ADR-0009](docs/adr/0009-默认产品分两层.md) — 默认产品分两层
+- [ADR-0010](docs/adr/0010-读走随包查询器写走MCP工具.md) — 读走随包查询器，写走 MCP 工具
+- [ADR-0011](docs/adr/0011-图片上传直连禅道RESTv2.md) — 图片上传直连禅道 REST v2
+- [ADR-0012](docs/adr/0012-安装与登记交给当前Agent.md) — 安装与登记交给当前 Agent：程序不写死宿主清单
 
 ## License
 
