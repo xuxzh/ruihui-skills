@@ -88,7 +88,7 @@ for (const dirName of skillDirs) {
   check(`${dirName}: compatibility ≤500 字符`, data.compatibility === undefined || data.compatibility.length <= 500);
   const metaValues = Object.values(data.metadata || {});
   check(`${dirName}: metadata 的值均为字符串`, metaValues.every((v) => typeof v === 'string'));
-  check(`${dirName}: SKILL.md 正文 ≤500 行`, body.split('\n').length <= 500, `${body.split('\n').length} 行`);
+  check(`${dirName}: SKILL.md 正文 ≤220 行`, body.split('\n').length <= 220, `${body.split('\n').length} 行`);
 
   // 引用链接可达
   const links = [...raw.matchAll(/\]\(([^)#][^)]*\.md)\)/g)].map((m) => m[1]);
@@ -113,7 +113,7 @@ if (!parsed) {
     ['写入后必须回读校验', /回读/],
     ['写入前需要用户确认', /确认/],
     ['结果不确定时先查核实、不重复创建', /不重复创建|先查后报|不盲目重试/],
-    ['当前登录账号的身份边界', /当前登录账号/],
+    ['禅道账号的身份边界', /禅道账号/],
     ['接入凭据由用户本机写入', /接入凭据/],
     ['未注册时指向引导安装', /references\/setup\.md/],
     ['附件上传不可用的说明', /附件/],
@@ -137,6 +137,12 @@ if (!parsed) {
   const refs = ['feedback-templates.md', 'zentao-mcp.md', 'workflow.md', 'error-handling.md', 'setup.md'];
   for (const ref of refs) {
     check(`rh-product-feedback: SKILL.md 引用 references/${ref}`, parsed.body.includes(`references/${ref}`));
+  }
+
+  // 渐进披露：references/ 下每个 .md 都必须被 SKILL.md 指向，否则就是建了没人读的死文件。
+  const refDir = path.join(SKILLS_DIR, 'rh-product-feedback', 'references');
+  for (const file of fs.readdirSync(refDir).filter((f) => f.endsWith('.md'))) {
+    check(`rh-product-feedback: references/${file} 被 SKILL.md 指向`, parsed.body.includes(`references/${file}`));
   }
 }
 

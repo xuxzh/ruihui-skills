@@ -164,6 +164,7 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 - [ADR-0010](docs/adr/0010-读走随包查询器写走MCP工具.md) — 读走随包查询器，写走 MCP 工具
 - [ADR-0011](docs/adr/0011-图片上传直连禅道RESTv2.md) — 图片上传直连禅道 REST v2
 - [ADR-0012](docs/adr/0012-安装与登记交给当前Agent.md) — 安装与登记交给当前 Agent：程序不写死宿主清单
+- [ADR-0013](docs/adr/0013-SKILL.md只留主干与护栏.md) — SKILL.md 只留主干与护栏：安装、图片、话术下沉到第二入口
 
 ## License
 

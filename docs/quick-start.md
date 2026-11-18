@@ -15,7 +15,7 @@
 ```
 帮我装上 ruihui 的产品反馈助手（rh-product-feedback），并接上禅道：
 1. 技能没装的话，先运行 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`（它会按你所在的宿主建好入口），然后读它输出的路径下的 `SKILL.md`。
-2. 按这份 `SKILL.md` 的「0.2 安装」，把禅道 MCP 登记到**你这个宿主**的配置里：地址在技能包的 `config.local.json`，优先用宿主自己的 MCP 命令；已有条目就只改它的 `url`，其它字段别动；写前备份、写后复核。
+2. 按这份 `SKILL.md` 的「0. 环境自检」，把禅道 MCP 登记到**你这个宿主**的配置里：地址在技能包的 `config.local.json`，优先用宿主自己的 MCP 命令；已有条目就只改它的 `url`，其它字段别动；写前备份、写后复核。
 3. 告诉我怎么写入我自己的禅道账号密码——密码必须由我在自己的终端里输入，别替我输、也别写进对话。
 4. 告诉我怎么让配置生效（重启你，还是执行 `/reload`）。
 ```
@@ -27,7 +27,7 @@
 不想让技能常驻、只想试一次，用 skills CLI 的 `use`（技能落在临时目录）：
 
 ```
-用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback` 拿到这个技能的说明并照着做：把它输出的完整内容先存到临时文件再读；它给的 supporting-files 目录就是技能目录，`SKILL.md` 里的相对路径都从那里解析。然后按其中「0.2 安装」把禅道 MCP 登记到你这个宿主的配置里，并告诉我怎么写入我自己的账号密码。
+用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback` 拿到这个技能的说明并照着做：把它输出的完整内容先存到临时文件再读；它给的 supporting-files 目录就是技能目录，`SKILL.md` 里的相对路径都从那里解析。然后按其中「0. 环境自检」把禅道 MCP 登记到你这个宿主的配置里，并告诉我怎么写入我自己的账号密码。
 ```
 
 ## 第 2 步：在自己的终端写账号密码

@@ -30,7 +30,7 @@
 - 「登录失败」这个分支目前**触发不了**：认证失败、账号被锁定这些错误不会以登录失败的形式出现。
 - 技能侧仍然会读取本机凭据文件并发起登录（凭据暴露面照旧存在），但那一步并不决定操作身份。
 
-这是禅道 MCP 侧的问题，已另开 issue 跟踪；技能侧的对策是：回读时核对 `feedbackBy`，与当前登录账号不一致就如实告诉用户「这条反馈的提交人是 <另一个人>」，不要把服务端的提交人当成用户本人。
+这是禅道 MCP 侧的问题，已另开 issue 跟踪；技能侧的对策是：回读时核对 `feedbackBy`，与当前禅道账号不一致就如实告诉用户「这条反馈的提交人是 <另一个人>」，不要把服务端的提交人当成用户本人。
 
 ## 参数包装：`payload` 不可省
 
@@ -124,7 +124,7 @@
 | `id` / `title` / `desc` | 编号、标题、描述正文（`desc` 回读时换行是 `\r\n`） |
 | `product` | 所属产品 ID（回读是字符串形式，更新时要转成数字） |
 | `status` / `subStatus` | 状态与子状态（新建反馈为 `wait`） |
-| `feedbackBy` | 反馈者：当前登录账号本人 |
+| `feedbackBy` | 反馈者：当前禅道账号本人 |
 | `assignedTo` | 负责人（未指派时为空） |
 | `processedBy` / `processedDate` | 处理人、处理时间 |
 | `reviewedBy` / `reviewedDate` | 评审人、评审时间 |
@@ -150,7 +150,7 @@
 
 本技能只使用三个：`bug`（Bug）、`story`（需求）、`advice`（建议）。
 
-`get_products_productID_feedbacks` 的 `browseType` 可选：`wait`、`doing`、`toclosed`、`review`、`assigntome`、`openedbyme`。查重时用默认范围（不传）以覆盖全部反馈；`openedbyme` 指的是**当前登录账号**本人提交的记录。
+`get_products_productID_feedbacks` 的 `browseType` 可选：`wait`、`doing`、`toclosed`、`review`、`assigntome`、`openedbyme`。查重时用默认范围（不传）以覆盖全部反馈；`openedbyme` 指的是**当前禅道账号**本人提交的记录。
 
 ## 图片上传：MCP 没有通道，走禅道 REST v2 直连
 
