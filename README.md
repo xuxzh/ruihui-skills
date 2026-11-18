@@ -8,7 +8,7 @@
 
 ## 业务用户：三步接入
 
-> 面向不用懂 MCP、只要能把话说清楚的同事。前提是拿到**内网版技能包**（含禅道 MCP 地址）。
+> 面向不用懂 MCP、只要能把话说清楚的同事。技能包里已含禅道 MCP 地址，装完直接用。
 
 完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的命令、三个示例和常见问题。三步概览：
 
@@ -30,11 +30,10 @@
 
 ## 管理员：内网地址与分发
 
-- **地址从哪来**：写死在技能包内的 `config.local.json`（`mcpUrl` = 禅道 MCP 的 Streamable HTTP 地址，`zentaoWebUrl` = 禅道 Web 端地址）。该文件**不进仓库**，随内部分发包发出；仓库里只有 `config.example.json` 占位符。
-- **优先用内网域名而不是 IP**：IP 随网络调整失效，也更容易被误贴到外部。
-- **分发渠道**：技能包内容与渠道解耦，选一个现成的即可——内网 Git（`git clone` 后复制目录）、NAS / 对象存储（下载压缩包后解压）、公司软件中心（点安装）、终端管理（推到用户机器）。
-- **分发包内容**：`node scripts/build-internal-package.mjs` 打包，产物是 `dist/rh-product-feedback/`——顶层自洽的一个目录（技能文件 + `config.local.json` + 凭据与连接脚本），用户复制这一个目录即完成安装。地址来源：`.env` 里的 `ZENTAO_MCP_URL` / `ZENTAO_BASE_URL`，或命令行参数。
-- **本仓库不包含任何内网地址、账号或凭据**；扫描器会跳过被 `.gitignore` 忽略的文件，但被提交的文件一律扫描。
+- **地址从哪来**：写死在技能包内的 `config.local.json`（`mcpUrl` = 禅道 MCP 的 Streamable HTTP 地址，`zentaoWebUrl` = 禅道 Web 端地址）。该文件**进仓库**、随技能包一起分发（见 [ADR-0005](docs/adr/0005-禅道地址进版本库.md)）：地址本身不是凭据，内网 IP 也不从公网可达。
+- **地址用 IP 而不是域名**：公司没有内网 DNS 域名可指禅道 MCP；地址随网络调整时改 `config.local.json` 再分发一次。
+- **分发渠道**：公网 `skills.sh` 为主——`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`；备用：内网 Git（`git clone` 后复制目录）、NAS / 对象存储（下载压缩包后解压）、公司软件中心（点安装）、终端管理（推到用户机器）。
+- **本仓库不包含任何账号或凭据**；扫描器允许内网地址出现在 `config.local.json`，出现在别处一律 fail。
 - **禅道 MCP 侧可改进的两点**：支持 `Authorization: Bearer <令牌>` 请求头鉴权（凭据就能完全不进 Agent 上下文）；登录失败时可区分「密码错」与「账号被锁定」（避免连续重试触发锁定）。
 
 ## 开发与安装
@@ -77,8 +76,8 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 
 `rh-product-feedback` 通过禅道（ZenTao）MCP 工作，需要在你的 Agent 宿主里注册一个名为 `zentao` 的 MCP server（Streamable HTTP），并能访问禅道实例。
 
-- 凭据放在你自己的机器上（**不写进本仓库**），优先用禅道个人令牌而不是密码。
-- 本仓库不包含任何内网地址、账号或凭据。
+- 凭据放在你自己的机器上（**不写进本仓库**）：默认用禅道账号 + 密码，业务用户不必先去生成令牌。
+- 本仓库不包含任何账号或凭据；禅道地址在 `config.local.json` 里，随包分发。
 - 技能会在需要禅道数据时登录一次，失效后补登一次。**实测当前 MCP 的登录接口不校验凭据、恒以服务端固定身份对外服务**，所以「每用户独立账号」暂时由客户端保证不了（见 [zentao-mcp.md](skills/rh-product-feedback/references/zentao-mcp.md) 的「实测偏差」）。
 - 每个用户用自己的禅道账号登录，反馈单留痕在本人名下（实测当前 MCP 恒以服务端身份提交，见 #7）。
 
@@ -136,7 +135,7 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 - [Issue #1](https://github.com/xuxzh/ruihui-skills/issues/1) — 禅道 MCP 能力盘点（`rh-product-feedback` 的前置调研）
 - [Issue #2](https://github.com/xuxzh/ruihui-skills/issues/2) — `rh-product-feedback` v0.1.0 实施
 
-改动请遵守仓库约定：技能目录只放技能本身、按需加载的参考文档与接入配置（`config.example.json` 与不进仓库的 `config.local.json`）；不要提交任何内网地址、账号、凭据或真实业务数据。
+改动请遵守仓库约定：技能目录只放技能本身、按需加载的参考文档与接入配置（`config.local.json` 存禅道地址，随包分发）；不要提交任何账号、凭据或真实业务数据。
 
 ## 决策记录
 

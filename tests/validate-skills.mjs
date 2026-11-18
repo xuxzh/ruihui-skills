@@ -136,7 +136,7 @@ console.log('\n[3] 敏感信息扫描（公开仓库）');
 const tracked = walk(ROOT);
 const textFiles = tracked.filter((f) => /\.(md|mjs|js|json|yml|yaml|txt|example)$/.test(f) && !f.includes(`${path.sep}.git${path.sep}`));
 
-// 被 .gitignore 忽略的文件不进公开仓库（如技能包内的 config.local.json），不参与扫描。
+// 被 .gitignore 忽略的文件不进公开仓库（如 dist/、.env），不参与扫描。
 function isIgnored(rel) {
   const r = spawnSync('git', ['check-ignore', '-q', '--', rel], { cwd: ROOT });
   return r.status === 0;
@@ -154,20 +154,29 @@ if (fs.existsSync(envFile)) {
 
 const PLACEHOLDER = /^(?:\{\{.*\}\}|<.*>|\$\{.*\}|xxx+|\.\.\.|changeme|placeholder)$/i;
 
-const PATTERNS = [
+// 禅道地址随技能包分发，内网地址只允许出现在接入配置文件里；出现在别处即为泄露。
+const ADDRESS_ALLOWED = /^skills\/[^/]+\/config\.local\.json$/;
+
+const ADDRESS_PATTERNS = [
   [/\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/, '私网 IP（10.x）'],
   [/\b(?:192\.168\.\d{1,3}\.\d{1,3})\b/, '私网 IP（192.168.x）'],
   [/\b(?:172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/, '私网 IP（172.16-31.x）'],
-  [/\bBearer\s+[A-Za-z0-9._-]{16,}/, 'Bearer token'],
-  [/(?:password|passwd|token|secret|api[_-]?key)\s*[:=]\s*["']([^"'\s]{6,})["']/i, '疑似硬编码凭据'],
   [/\bhttps?:\/\/[a-z0-9-]+\.(?:internal|local|lan|corp)\b/i, '内网域名'],
 ];
+
+const SECRET_PATTERNS = [
+  [/\bBearer\s+[A-Za-z0-9._-]{16,}/, 'Bearer token'],
+  [/(?:password|passwd|token|secret|api[_-]?key)\s*[:=]\s*["']([^"'\s]{6,})["']/i, '疑似硬编码凭据'],
+];
+
+const PATTERNS = [...ADDRESS_PATTERNS, ...SECRET_PATTERNS];
 
 let leaks = 0;
 for (const file of scannedFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const rel = path.relative(ROOT, file);
-  for (const [re, label] of PATTERNS) {
+  const patterns = ADDRESS_ALLOWED.test(rel) ? SECRET_PATTERNS : PATTERNS;
+  for (const [re, label] of patterns) {
     const m = content.match(re);
     if (!m) continue;
     const value = m[1] ?? m[0];
@@ -182,12 +191,14 @@ for (const file of scannedFiles) {
     }
   }
 }
-check('未发现内网地址 / 凭据 / 真实业务数据', leaks === 0, leaks ? `${leaks} 处命中` : '');
+check('未发现凭据 / 真实业务数据（内网地址只允许在 config.local.json）', leaks === 0, leaks ? `${leaks} 处命中` : '');
 
 // .env 必须被忽略
 const gitignore = fs.existsSync(path.join(ROOT, '.gitignore')) ? fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8') : '';
 check('.env 在 .gitignore 中', /^\s*\.env\s*$/m.test(gitignore));
-check('技能包内的 config.local.json 在 .gitignore 中', /^\s*skills\/\*\/config\.local\.json\s*$/m.test(gitignore));
+// 地址随技能包分发：接入配置必须进版本库，否则装到的技能没有地址可用。
+const configTracked = spawnSync('git', ['ls-files', '--error-unmatch', 'skills/rh-product-feedback/config.local.json'], { cwd: ROOT });
+check('技能包内的 config.local.json 已纳入版本库', configTracked.status === 0);
 
 // ---- 汇总 --------------------------------------------------------------
 const failed = results.filter((r) => !r.ok);

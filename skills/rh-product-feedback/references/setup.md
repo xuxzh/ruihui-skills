@@ -34,7 +34,7 @@ pi：
 mkdir -p ~/.agents/skills && cp -R <解压目录>/rh-product-feedback ~/.agents/skills/
 ```
 
-复制完目录里应该有 `SKILL.md`、`references/`、`config.local.json`、`scripts/`。少了 `config.local.json` 说明拿到的是不含内网配置的公开版，找管理员要内网版。
+复制完目录里应该有 `SKILL.md`、`references/`、`config.local.json`、`scripts/`。少了 `config.local.json` 说明包不完整（版本不对或复制不全），重新装一次。
 
 装完先确认宿主能发现它：在 Agent 里问一句「你的技能列表里有没有 rh-product-feedback」，**有**才继续下一步；没有就是目录放错了（或宿主还没重载）。
 
@@ -76,9 +76,9 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-pro
 
 ## 接入凭据
 
-### 用令牌，不要用密码
+### 用密码为主，令牌可选
 
-禅道「个人 → 令牌」里生成 API token。优先用令牌：可单独撤销、可设有效期，误贴出去不影响账号密码。令牌与密码都支持，令牌优先。
+默认用禅道账号 + 密码：业务用户不必先去禅道生成令牌，少一个操作。令牌也支持——禅道「个人 → 令牌」里生成，可单独撤销、可设有效期，误贴出去不影响账号密码；愿意用令牌的人可以用。
 
 ### 存放位置与格式
 
@@ -152,7 +152,7 @@ pi 支持 `/reload`：改完配置在会话里执行 `/reload` 就生效，不�
 
 ## 管理员
 
-### 内网地址从哪来
+### 禅道地址从哪来
 
 地址写在技能包内的 `config.local.json`：
 
@@ -163,21 +163,19 @@ pi 支持 `/reload`：改完配置在会话里执行 `/reload` 就生效，不�
 }
 ```
 
-- `config.local.json` **不进仓库**（已在 `.gitignore` 里），随内部分发包一起发出。
-- 仓库里的 `config.example.json` 只有占位符。
-- 优先用内网域名而不是 IP：IP 会随网络调整失效，也更容易被误贴到外部。
+- `config.local.json` **进仓库**、随技能包一起分发（见 ADR-0005）。地址本身不是凭据，内网 IP 也不从公网可达。
+- 仓库里的 `config.example.json` 只有占位符，供他人 fork 时替换用。
+- 地址用 IP：公司没有内网 DNS 域名可指禅道 MCP。IP 随网络调整时改这个文件再分发一次。
 
-### 打包分发
+### 分发
 
-在仓库里打包，产物是顶层自洽的 `rh-product-feedback/` 目录，用户复制这一个目录即完成安装：
+主渠道是公网 `skills.sh`，一条命令装好（装到所有检测到的 Agent）：
 
 ```bash
-node scripts/build-internal-package.mjs
+npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
 ```
 
-地址来源优先级：命令行参数 > 仓库根 `.env`（`ZENTAO_MCP_URL`、`ZENTAO_BASE_URL`）> 技能目录里的 `config.local.json`。产物默认在 `dist/`（已 gitignore）。
-
-分发渠道与技能内容解耦，下面几种都能用，按现有 IT 条件选一个：
+备用渠道与技能内容解耦，按现有 IT 条件选一个：
 
 | 渠道 | 用户侧动作 |
 | --- | --- |
@@ -185,6 +183,8 @@ node scripts/build-internal-package.mjs
 | NAS / 内网对象存储 / 共享盘 | 下载压缩包 → 解压进对应宿主的技能目录 |
 | 公司软件中心 / 应用市场 | 在软件中心点安装 |
 | 终端管理（Intune / 域策略 / MDM） | 无需操作，机器上已有 |
+
+`node scripts/build-internal-package.mjs` 仍能打出自洽的目录（`dist/rh-product-feedback/`），供压缩包分发使用；地址取自仓库里的 `config.local.json`。
 
 ### 禅道 MCP 侧可改进的两点
 
