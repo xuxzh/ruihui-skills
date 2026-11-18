@@ -122,6 +122,8 @@ if (!parsed) {
     ['建议类型映射 advice', /`advice`/],
     ['查重降级方案（分页 + 客户端匹配）', /客户端匹配|分页/],
     ['事实 / 推断 / 无法确定三段式', /推断/],
+    ['技能触发的安装入口', /\/rh-product-feedback install/],
+    ['Agent 代跑安装脚本时不代输凭据', /--skip-credentials/],
   ];
   for (const [label, re] of rules) check(`rh-product-feedback: ${label}`, re.test(all));
 
@@ -131,8 +133,19 @@ if (!parsed) {
   }
 }
 
-// ---- 3. 敏感信息扫描 ---------------------------------------------------
-console.log('\n[3] 敏感信息扫描（公开仓库）');
+// ---- 3. 文档与技能一致 -------------------------------------------------
+console.log('\n[3] 文档与技能一致');
+const quickStart = path.join(ROOT, 'docs', 'quick-start.md');
+if (fs.existsSync(quickStart)) {
+  const quickText = fs.readFileSync(quickStart, 'utf8');
+  check('快速上手写了技能触发的安装入口', quickText.includes('/rh-product-feedback install'));
+  check('快速上手写了手动安装脚本作为备选', quickText.includes('install.sh'));
+} else {
+  check('存在 docs/quick-start.md', false);
+}
+
+// ---- 4. 敏感信息扫描 ---------------------------------------------------
+console.log('\n[4] 敏感信息扫描（公开仓库）');
 const tracked = walk(ROOT);
 const textFiles = tracked.filter((f) => /\.(md|mjs|js|json|yml|yaml|txt|example)$/.test(f) && !f.includes(`${path.sep}.git${path.sep}`));
 

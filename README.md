@@ -4,17 +4,19 @@
 
 | 技能 | 版本 | 说明 |
 | --- | --- | --- |
-| [`rh-product-feedback`](skills/rh-product-feedback) | 0.4.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交成禅道反馈单，并支持查询反馈单、解释处理进度、补充说明；禅道 MCP 没配好时，能引导你完成安装与认证 |
+| [`rh-product-feedback`](skills/rh-product-feedback) | 0.5.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交成禅道反馈单，并支持查询反馈单、解释处理进度、补充说明；禅道 MCP 没配好时，能引导你完成安装与认证 |
 
-## 业务用户：一条命令接入
+## 业务用户：装完技能，一句话接入
 
 > 面向不用懂 MCP、只要能把话说清楚的同事。技能包里已含禅道 MCP 地址，装完直接用。
 
 完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的命令、三个示例和常见问题。概览：
 
 1. **装技能**：`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`——装到 `~/.agents/skills/rh-product-feedback/`，Claude Code 在 `~/.claude/skills/` 下得到软链，pi 直接用 `~/.agents/skills/`。
-2. **跑安装脚本**：`bash ~/.claude/skills/rh-product-feedback/scripts/install.sh`——一次做完「登记禅道 MCP + 让你输入自己的账号密码」。**你不用填 IP，也不用改配置文件**；密码不回显，只写在你自己的机器上。
+2. **在 Agent 里说一句**：`/rh-product-feedback install`（pi 是 `/skill:rh-product-feedback install`）——Agent 代跑安装脚本完成「登记禅道 MCP」，并给你一条写账号密码的命令。**你不用填 IP，也不用改配置文件**；密码只在你自己的终端里输入，不进对话。
 3. **重启 Agent 后验证**：Claude Code 退出重开，pi 执行 `/reload`；在 Agent 里说「验证一下禅道连接」。
+
+> 技能没被加载、或 Agent 用不了命令时，手动跑一次安装脚本：`bash ~/.claude/skills/rh-product-feedback/scripts/install.sh`（pi 把 `.claude` 换成 `.agents`）。
 
 之后就能直接用：
 
@@ -85,7 +87,9 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 
 ## 能力边界
 
-当前版本（v0.4.0）的能力与限制：
+当前版本（v0.5.0）的能力与限制：
+
+- **两种安装入口**：在 Agent 里说 `/rh-product-feedback install`（Agent 代跑安装脚本登记禅道 MCP），或自己跑一次随包的安装脚本。凭据始终由本人写入，密码不进对话。
 
 - **反馈优先**：新反馈统一落在禅道的反馈单（`feedback`）上，正式 Bug / 需求由人工评审后再建。
 - **每用户独立账号**：设计上是「用你自己的禅道账号登录，反馈留痕在本人名下」；但**实测当前 MCP 的登录接口不校验凭据、恒以服务端固定身份对外服务**，所以反馈单上的提交人暂时不是你本人（见 [#7](https://github.com/xuxzh/ruihui-skills/issues/7)）。你能看到的产品与反馈仍按账号权限走，查重只覆盖可见范围（话术里会写明「在你可见的 N 条中」）。

@@ -1,11 +1,11 @@
 # 快速上手：把 Bug、需求、建议提到禅道
 
-面向**业务用户**。装法是**一条命令**，装完不用记命令，直接说话就行。
+面向**业务用户**。装法是**一句话**：在 Agent 里说一句 `/rh-product-feedback install`，之后不用记命令，直接说话就行。
 
 > 三步速查
 >
 > 1. 装技能：`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`
-> 2. 跑安装脚本：`bash ~/.claude/skills/rh-product-feedback/scripts/install.sh`（它会登记禅道 MCP，并让你输入自己的禅道账号和密码）
+> 2. 在 Agent 里说一句：`/rh-product-feedback install`（它会登记禅道 MCP，并给你一条写账号密码的命令）
 > 3. 退出重开一次 Agent，说「验证一下禅道连接」；之后直接说要提什么。
 
 ---
@@ -18,7 +18,7 @@ npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
 
 它把技能装到 `~/.agents/skills/rh-product-feedback/`，并按你用的 Agent 建入口：Claude Code 得到 `~/.claude/skills/rh-product-feedback`（软链），pi 直接用 `~/.agents/skills/`。两个路径都指向同一份文件。
 
-不想用命令行，也可以从 GitHub 下载技能包、解压后放到上面任一路径——第 2 步的脚本就在包里。
+不想用命令行，也可以从 GitHub 下载技能包、解压后放到上面任一路径——第 2 步用的安装脚本就在包里。
 
 装完确认一下：在 Agent 里问一句「你的技能列表里有没有 rh-product-feedback」。**没有**就是路径没放对（Claude Code 要在 `~/.claude/skills/` 下，或让 skills CLI 装），改完重开一次 Agent。
 
@@ -30,29 +30,39 @@ npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
 >
 > 这种方式读不到终端输入，脚本会打印「再跑这条命令写入凭据」，照着跑那一条即可（见第 2 步）。仓库刚更新过时 raw 可能短暂给到旧脚本，缓一会儿再试。
 
-## 第 2 步：跑安装脚本
+## 第 2 步：在 Agent 里装禅道
 
-```bash
-# Claude Code
-bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
+技能装好后，Agent 里就有它了。**在对话框里输入这一句**：
+
+```
+/rh-product-feedback install
 ```
 
-```powershell
-# Windows（PowerShell）
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-product-feedback\scripts\install.ps1"
-```
+用 pi 的话是 `/skill:rh-product-feedback install`。
 
-用 pi 的话，把路径里的 `.claude` 换成 `.agents`。
-
-脚本一次做完三件事：
+Agent 会把能替它做的都做完：
 
 1. **登记禅道 MCP**：从技能包里读地址，登记到你的 Agent。**你不用填 IP，也不用改任何配置文件。** 已经登记过、地址一致就跳过，不会重复写。
-2. **让你输入自己的禅道账号和密码**：密码不回显，写在你自己的机器上，只有你能读。
+2. **给你一条写账号密码的命令**：密码必须由你自己在终端里输——不进对话、不进聊天记录。Agent 会把那条命令原样贴给你，复制到终端跑一下就行。
 3. **提示你重启 Agent**：Claude Code 退出重开；pi 执行 `/reload`。
 
-> **先退出 Claude Code 再跑这条命令。** 运行中的 Claude Code 会回写 `~/.claude.json`，可能把你刚登记的条目覆盖掉。脚本发现宿主还在跑会直接停下提示你。
+跑完那条写账号密码的命令后，在 Agent 里说「验证一下禅道连接」，它会登录禅道、读一次产品列表，并如实告诉你凭据此刻起没起作用。
 
-脚本可以重复跑：装好的部分会跳过，地址一致就什么都不改。跑完第一行会打印脚本所在位置——如果你的技能不是装在默认路径，用它打印出来的路径。
+> 技能没被加载、或 Agent 用不了命令时，用手动方式：在终端跑
+>
+> ```bash
+> # Claude Code
+> bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
+> ```
+>
+> ```powershell
+> # Windows（PowerShell）
+> powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-product-feedback\scripts\install.ps1"
+> ```
+>
+> 用 pi 把路径里的 `.claude` 换成 `.agents`。这条命令一次做完「登记禅道 MCP + 交互输入账号密码」（密码不回显，只写在你自己的机器上），并提示你重启。
+>
+> **手动跑之前先退出 Claude Code。** 运行中的 Claude Code 会回写 `~/.claude.json`，可能把你刚登记的条目覆盖掉；脚本发现宿主还在跑会直接停下提示你。（Agent 代跑时不用退出：Agent 登记后会回读复核，重启后如果连不上，它会自动把地址补回去。）
 
 ## 第 3 步：重启 Agent，验证连接
 
@@ -118,6 +128,8 @@ Agent 会依次做这些事：补齐缺的信息 → 确认属于哪个产品 �
 | 你看到的 | 原因 | 怎么办 |
 | --- | --- | --- |
 | Agent 说没有 rh-product-feedback 这个技能 | 技能目录没放对，或装完没重开 | 问一句「你的技能列表里有没有 rh-product-feedback」确认；装完重开一次 Agent |
+| 在 Agent 里敲 `/rh-product-feedback install` 没反应 | 技能没被加载，或宿主不认这个斜杠命令 | 先确认技能在列表里；不认就用手动方式跑安装脚本（见第 2 步） |
+| Agent 登记完了，但重启后连不上 | 运行中的宿主回写覆盖了配置 | 重开会话后说一句「更新禅道地址」，它只改这一个键 |
 | 脚本说没有检测到宿主 | Claude Code 和 pi 都没装 | 先装好其中一个再跑脚本 |
 | 一条命令装完，但凭据没写进去 | 管道方式读不到终端输入 | 按脚本打印的那条命令跑一次 `set-credentials.sh` |
 | 脚本说 Claude Code 正在运行 | 运行中的宿主会覆盖配置 | 退出 Claude Code 再跑（或加 `--force`） |

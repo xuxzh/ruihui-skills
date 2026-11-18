@@ -1,9 +1,9 @@
 ---
 name: rh-product-feedback
-description: 把自然语言产品反馈（Bug、需求、优化建议）提交到禅道 ZenTao 生成反馈单并回读校验；也支持查询反馈单、解释处理进度（当前状态、负责人、处理历史、是否排期）、补充说明；还能在禅道 MCP 未配置时引导用户完成安装与认证。触发场景：用户要「提 Bug / 报问题 / 提需求 / 提建议 / 提交反馈 / 查反馈 / 看反馈到哪了 / 为什么还没排期 / 补充反馈信息」「帮我装禅道 MCP / 配置禅道 / 连不上禅道」，或提到 report a bug、file a feature request、check feedback status、add a comment to my feedback、connect zentao。
+description: 把自然语言产品反馈（Bug、需求、优化建议）提交到禅道 ZenTao 生成反馈单并回读校验；也支持查询反馈单、解释处理进度（当前状态、负责人、处理历史、是否排期）、补充说明；还能在禅道 MCP 未配置时引导用户完成安装与认证。触发场景：用户要「提 Bug / 报问题 / 提需求 / 提建议 / 提交反馈 / 查反馈 / 看反馈到哪了 / 为什么还没排期 / 补充反馈信息」「帮我装禅道 MCP / 配置禅道 / 连不上禅道」，或提到 report a bug、file a feature request、check feedback status、add a comment to my feedback、connect zentao；用户输入斜杠命令 `/rh-product-feedback install`（pi 是 `/skill:rh-product-feedback install`）时走安装模式——Agent 代跑随包的安装脚本登记禅道 MCP，账号密码仍由本人写入。
 compatibility: 需要连接禅道 MCP（工具名前缀 zentao，至少含 post_users_login、post_feedbacks、put_feedbacks_feedbackID、get_feedbacks_feedbackID、get_products_productID_feedbacks）并能访问该服务；首次使用需要本机已有自己的禅道账号凭据（见 references/setup.md）。
 metadata:
-  rh-version: "0.4.0"
+  rh-version: "0.5.0"
   rh-mcp-server: zentao
 ---
 
@@ -24,6 +24,7 @@ metadata:
 - **可见范围**：当前登录账号在禅道里能看到的产品的集合；反馈只能落在这里面，查重也只覆盖这里面。
 - **安装脚本**：随技能包分发的脚本，一次执行即完成「登记禅道 MCP + 写入本人接入凭据」，并提示重启与验证。
 - **自助安装**：接入由安装脚本或 Agent 代办完成的接入过程（登记禅道 MCP、写入本人凭据）。
+- **安装入口**：业务用户开始安装的方式——在 Agent 里说 `/rh-product-feedback install`（Agent 代跑安装脚本），或自己跑一次安装脚本。
 
 ## 0. 会话第一步：环境自检与引导
 
@@ -32,34 +33,77 @@ metadata:
 先确认宿主里存在禅道 MCP 的工具（工具名带 `zentao` 前缀，或至少存在 `post_users_login` 与 `get_products`）。
 
 - **可用** → 继续 0.3。
-- **不可用** → 走 0.2 引导安装。**不要**向用户索要禅道地址、IP、端口或账号密码。
+- **不可用** → 走 0.2 的 A 路径（Agent 代跑安装脚本）。**不要**向用户索要禅道地址、IP、端口或账号密码。
 
 **不论工具是否可用，都要核对一次地址**（内网地址换过、装错包时，只有这一步能发现）：
 
 1. 读宿主配置里 `zentao` 条目的 url（Claude Code：`~/.claude.json` 的 `mcpServers.zentao.url`；pi：`~/.pi/agent/mcp.json`）。
 2. 读技能包内 `config.local.json` 的 `mcpUrl`。
-3. 两者不一致（一边为空、或 url 不同）→ **以技能包里的 `config.local.json` 为准**，按 0.2 第 2 条更新宿主配置里该条目的 url（只改 url，保留其他字段），写回前备份，并告诉用户「配置里的地址和技能包里的地址不一致，已更新，重开一次宿主生效」。
+3. 两者不一致（一边为空、或 url 不同）→ **以技能包里的 `config.local.json` 为准**，按 [references/setup.md](references/setup.md)「各宿主配置」的方式更新宿主配置里该条目的 url（只改 url，保留其他字段），写回前备份，并告诉用户「配置里的地址和技能包里的地址不一致，已更新，重开一次宿主生效」。
 4. 两者一致 → 什么都不用做。
 5. **不要为了让两边一致去改技能包里的 `config.local.json`**——那是分发下来的文件，用户没同意不要动（见硬约束 12）。
 
-### 0.2 引导安装（自助安装）
+### 0.2 安装（自助安装）
 
-**优先让用户跑随包的安装脚本**：它一次做完「登记禅道 MCP + 写入本人凭据」，不需要 Agent 去改宿主配置。
+**触发**：请求里带 `install` 参数（斜杠命令 `/rh-product-feedback install`，pi 是 `/skill:rh-product-feedback install`），或用户说「帮我装禅道 / 配置禅道 / 连不上禅道」。带 `install` 时**直接走 A 路径**，不必先做 0.1 的工具检测。
 
-> 禅道反馈助手还没装好。请在终端跑这条命令，它会登记禅道 MCP，并让你输入自己的禅道账号和密码（密码不回显，只写在你自己的机器上）：
->
-> ```bash
-> bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
-> ```
->
-> 用 pi 把路径里的 `.claude` 换成 `.agents`；Windows 用 `install.ps1`（见 [references/setup.md](references/setup.md)）。
-
-要点：
+共同要点：
 
 1. 地址来自技能包内的 `config.local.json`，脚本自己读，**不进对话、不回显**。
 2. 凭据由用户本人输入并写入本机凭据文件；**不要在对话里索要或回显密码**。
-3. 脚本跑完会提示重启宿主（Claude Code 退出重开；pi 执行 `/reload`）。**重启之后**再验证（0.3）。
+3. 登记完要重启宿主（Claude Code 退出重开；pi 执行 `/reload`），**重启之后**再验证（0.3）。
 4. 跑完仍连不上、或 `zentao` 条目被宿主回写覆盖 → 按 0.1 的方式自己重写一次（只改 url），或再让用户跑一次脚本。
+
+#### A 路径：Agent 代跑安装脚本（默认）
+
+1. **定位技能目录**（安装脚本随技能包分发，两个候选路径取先命中的那个）：
+
+   ```bash
+   for d in "$HOME/.claude/skills/rh-product-feedback" "$HOME/.agents/skills/rh-product-feedback"; do
+     [ -f "$d/scripts/install.sh" ] && { echo "$d"; break; }
+   done
+   ```
+
+   两个都没命中 → 技能没装到宿主能发现的位置，按 [references/setup.md](references/setup.md) 的「装技能」处理。
+
+2. **跑安装脚本**（只做登记，不做交互输入；把上一步拿到的目录替进 `<技能目录>`）：
+
+   ```bash
+   bash <技能目录>/scripts/install.sh --skip-credentials --force
+   ```
+
+   Windows：`powershell -ExecutionPolicy Bypass -File <技能目录>\scripts\install.ps1 -SkipCredentials -Force`。
+
+   - `--skip-credentials`：凭据必须由本人输入，Agent 不代劳（硬约束 5）。
+   - `--force`：Agent 就在宿主里，宿主必然「正在运行」，这时停下没有意义。
+   - 脚本可以重复跑：已登记且地址一致就跳过，不会重复写。
+
+3. **回读复核**：按 [references/setup.md](references/setup.md)「各宿主配置」读宿主配置里的 `zentao` 条目，确认地址与 `config.local.json` 一致。脚本报告「已有 zentao 条目但地址与技能包不一致」时，**只改 url 这一个键**（先备份、保留其他字段），改完复核。
+
+4. **凭据**：查本机凭据文件在不在（`bash <技能目录>/scripts/set-credentials.sh --path` 给出位置，`<技能目录>` 同上）。
+
+   - 在 → 跳到第 5 步。
+   - 不在 → Agent 的命令环境没有可交互的输入，替用户输密码会把密码带进对话。请用户**在自己终端**跑一条命令写入（验证连接要用它，见 0.3）：
+
+     ```bash
+     bash <技能目录>/scripts/set-credentials.sh
+     ```
+
+     Windows：`powershell -ExecutionPolicy Bypass -File <技能目录>\scripts\set-credentials.ps1`。
+
+5. **提示重启宿主**：Claude Code 退出重开；pi 执行 `/reload`。重启后再验证（0.3）。
+
+6. **如实汇报**：分别说清「禅道 MCP 已登记」「凭据已写入 / 还没写入」「需要重开宿主」。没验证过不要说「装好了、能提反馈了」。
+
+#### B 路径：用户自己跑脚本
+
+Agent 没有命令工具、或脚本跑失败时，把这条命令给用户，让他自己在终端跑（脚本一次做完「登记禅道 MCP + 交互输入本人凭据」）：
+
+```bash
+bash ~/.claude/skills/rh-product-feedback/scripts/install.sh
+```
+
+用 pi 把路径里的 `.claude` 换成 `.agents`；Windows 用 `install.ps1`（见 [references/setup.md](references/setup.md)）。
 
 安装过程只做这些；不要替用户编造地址，不要把凭据写进任何仓库文件。
 
@@ -87,7 +131,7 @@ metadata:
 
 | 用户表达 | 流程 | 反馈类型 |
 | --- | --- | --- |
-| 「帮我装 / 配置 / 连接禅道」「禅道连不上」 | [引导安装](#02-引导安装自我安装) | — |
+| `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）「帮我装 / 配置 / 连接禅道」「禅道连不上」 | [安装](#02-安装自助安装) | — |
 | 「有个问题 / 页面报错 / 复现步骤是…」 | [提交反馈](#2-提交反馈) | Bug |
 | 「需要一个功能 / 希望支持…」 | 提交反馈 | 需求 |
 | 「体验不好 / 建议优化…」 | 提交反馈 | 建议 |
@@ -212,7 +256,7 @@ metadata:
 3. **不确定先查**：超时、连接中断、返回与预期不符时，先查询核实再决定下一步；同一份内容不重复创建。禅道创建无幂等，盲目重试会造重复单。写入前保留已扫描反馈的 ID 基线，结果不确定时只认「基线之外、唯一、回读完全一致」的新记录；认不准或复查不完整就报未确认交回用户，不把「没查到」说成「没创建」。
 4. **身份**：所有操作都以**当前登录账号**（用户本人的禅道账号）进行。说「这是你提交的反馈」只在回读确认提交人是当前登录账号时才能说；提交人不是本人时（如实说「禅道里这条反馈的提交人是 <另一个人>」），不要把服务端的提交人当成用户本人。`openedbyme` 指的是当前登录账号本人提交的记录。
    - 写完回读时核对反馈的 `feedbackBy` 是不是当前登录账号；不是就如实告诉用户「禅道里这条反馈的提交人是 <另一个人>」，不要把服务端的提交人当成用户本人。
-5. **凭据**：账号、密码、令牌由用户自己在本机写入接入凭据文件；**不在对话里索要、不在回复里回显、不写进任何仓库文件**。地址同理：只从 `config.local.json` 读，**不在回复里写出地址的具体值**——汇报连接状态时说「已登记、已连接」即可，不要把 URL 贴给用户。
+5. **凭据**：账号、密码、令牌由用户自己在本机写入接入凭据文件；**不在对话里索要、不在回复里回显、不写进任何仓库文件**。Agent 代跑安装脚本时一律加 `--skip-credentials`：凭据必须由本人在自己的终端输入。地址同理：只从 `config.local.json` 读，**不在回复里写出地址的具体值**——汇报连接状态时说「已登记、已连接」即可，不要把 URL 贴给用户。
 6. **权限边界**：当前账号看不到的产品与反馈就是看不到。不要绕过禅道权限去达成写入目的；用户看不到时如实说明并指出该找谁开权限。
 7. **附件**：MCP 的附件上传实测不可用。用户要传截图时，说明当前能力不支持，请其贴文字说明或走禅道 Web 端上传后再补充描述。
 8. **不做人的决定**：关闭、删除、解决、重新打开单据，以及指派负责人，都由人来做；Agent 只提交内容与读取状态。

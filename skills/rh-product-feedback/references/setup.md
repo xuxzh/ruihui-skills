@@ -1,8 +1,8 @@
 # 连接禅道 MCP
 
-业务用户跑一条安装命令；管理员看「禅道地址从哪来」与「分发」。
+业务用户装完技能后，在 Agent 里说一句就能接上；管理员看「禅道地址从哪来」与「分发」。
 
-## 业务用户：一条命令
+## 业务用户：装技能 + 一句话安装
 
 ### 1. 装技能
 
@@ -12,7 +12,23 @@ npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
 
 skills CLI 把技能装到 `~/.agents/skills/rh-product-feedback/`，再按宿主建入口：Claude Code 得到 `~/.claude/skills/rh-product-feedback`（软链），pi 直接用 `~/.agents/skills/`。也可以直接从 GitHub 下载技能包、解压后放到上面任一路径。
 
-### 2. 跑安装脚本
+### 2. 在 Agent 里说一句
+
+```
+/rh-product-feedback install
+```
+
+pi 用 `/skill:rh-product-feedback install`。Agent 接到这句会：
+
+1. 代跑随包的安装脚本（`install.sh --skip-credentials --force`），把禅道 MCP 登记到宿主——地址从技能包的 `config.local.json` 读，不回显、不进对话。
+2. 给你一条写**本人**账号密码的命令。密码必须由你在自己的终端输入：Agent 的命令环境没有可交互的输入，替你输就会把密码带进对话。
+3. 提示你重启宿主。
+
+登记发生在宿主运行期间（Agent 就在宿主里），宿主退出时可能回写配置覆盖刚登记的条目。Agent 登记后会回读复核；重开会话时若条目不见了，会话自检会自动把地址按技能包里的 `config.local.json` 补回去（只改 `zentao` 这一个键）。
+
+### 3. 手动跑安装脚本（备选）
+
+技能没被加载、或 Agent 用不了命令时，在终端跑：
 
 ```bash
 # Claude Code（主宿主）
@@ -34,9 +50,9 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-pro
 
 脚本可以重复跑：已装好的部分会跳过，地址一致就什么都不改。
 
-### 3. 重启 Agent，然后验证
+### 4. 重启 Agent，然后验证
 
-- Claude Code：退出重开。运行中的 Claude Code 会回写 `~/.claude.json`，所以**先把宿主退出再跑脚本**；脚本检测到宿主还在跑会直接停下提示你。
+- Claude Code：退出重开。运行中的 Claude Code 会回写 `~/.claude.json`，所以**手动跑脚本时先把宿主退出**；脚本检测到宿主还在跑会直接停下提示你。（Agent 代跑时不用退出：登记后回读复核，重启后如连不上，在会话里说「更新禅道地址」即可。）
 - pi：执行 `/reload`，不用重启。
 
 重开后，在 Agent 里说：
@@ -51,6 +67,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-pro
 
 | 你看到的 | 原因 | 怎么办 |
 | --- | --- | --- |
+| `/rh-product-feedback install` 没反应 | 技能没被加载，或宿主不认这个斜杠命令 | 先确认技能在列表里；不认就手动跑安装脚本 |
 | 脚本说没有检测到宿主 | Claude Code 和 pi 都没装 | 先装其中一个宿主再跑 |
 | 脚本说 Claude Code 正在运行 | 运行中的宿主会覆盖配置 | 退出 Claude Code 再跑（或加 `--force`） |
 | 装完连不上 | 地址不一致或条目被覆盖 | 在 Agent 里说「更新禅道地址」，它只改 `zentao` 这一个键；或再跑一次脚本 |

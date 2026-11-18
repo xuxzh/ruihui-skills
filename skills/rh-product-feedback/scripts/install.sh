@@ -7,6 +7,10 @@
 #   bash install.sh --repo owner/name   # 远程安装时的仓库（默认 xuxzh/ruihui-skills）
 #   bash install.sh --force             # Claude Code 正在运行也继续登记
 #
+# 由 Agent 代跑安装时（用户输入 /rh-product-feedback install）用：
+#   bash install.sh --skip-credentials --force
+# 只登记禅道 MCP，不做交互输入凭据（凭据必须由本人在自己的终端写）。
+#
 # 三种起跑位置都能用：
 #   1. 已装好的技能目录（~/.claude/skills/rh-product-feedback/scripts/）：技能已在位，只做配置
 #   2. 下载的技能包（.../rh-product-feedback/scripts/）：就地复制到宿主技能目录
@@ -34,7 +38,7 @@ note() { printf '%s\n' "$*"; }
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,20p' "$0" 2>/dev/null || true
+  sed -n '2,24p' "$0" 2>/dev/null || true
   printf '\n用法：bash install.sh [--skip-credentials] [--repo owner/name] [--force]\n'
 }
 
@@ -175,11 +179,14 @@ register_pi() {
 }
 
 for host in $hosts; do
-  if [ "$host" = "claude" ] && [ "$FORCE" -eq 0 ] && host_running claude; then
-    die "Claude Code 正在运行：运行中的 Claude Code 会回写 ~/.claude.json，登记好的条目可能丢失。
-先退出 Claude Code 再跑这条命令（确实要继续就加 --force）。"
-  fi
   if [ "$host" = "claude" ]; then
+    if host_running claude; then
+      if [ "$FORCE" -eq 0 ]; then
+        die "Claude Code 正在运行：运行中的 Claude Code 会回写 ~/.claude.json，登记好的条目可能丢失。
+先退出 Claude Code 再跑这条命令（确实要继续就加 --force）。"
+      fi
+      note "Claude Code 正在运行：登记好的条目可能被宿主回写覆盖——重启后如连不上，在 Agent 里说「更新禅道地址」，它只改这一个键"
+    fi
     register_claude
   else
     register_pi
@@ -189,6 +196,13 @@ done
 # --- 写入本人凭据 -------------------------------------------------------
 if [ "$SKIP_CREDENTIALS" -eq 1 ]; then
   note "凭据：已跳过（本人之后自己写）"
+  if [ -n "$script_dir" ] && [ -f "$script_dir/set-credentials.sh" ]; then
+    note "  bash $script_dir/set-credentials.sh"
+  else
+    for host in $hosts; do
+      note "  bash $(host_skill_dir "$host")/$SKILL_NAME/scripts/set-credentials.sh"
+    done
+  fi
 elif [ -z "$script_dir" ]; then
   # 管道方式（curl | bash）：脚本的 stdin 是管道，交互输入拿不到；
   # 子进程还可能先把终端输入吃掉，所以这里不猜，给出确定的下一条命令。

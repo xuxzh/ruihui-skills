@@ -6,6 +6,10 @@
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Repo owner/name
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Force
 #
+# 由 Agent 代跑安装时（用户输入 /rh-product-feedback install）用：
+#   powershell -ExecutionPolicy Bypass -File install.ps1 -SkipCredentials -Force
+# 只登记禅道 MCP，不做交互输入凭据（凭据必须由本人在自己的终端写）。
+#
 # 三种起跑位置都能用：
 #   1. 已装好的技能目录（%USERPROFILE%\.claude\skills\rh-product-feedback\scripts\）：技能已在位，只做配置
 #   2. 下载的技能包（...\rh-product-feedback\scripts\）：就地复制到宿主技能目录
@@ -139,8 +143,11 @@ function Register-Pi {
 
 foreach ($h in $hosts) {
   if ($h -eq 'claude') {
-    if (-not $Force -and (Get-Process claude -ErrorAction SilentlyContinue)) {
-      Fail 'Claude Code 正在运行：运行中的 Claude Code 会回写 ~/.claude.json，登记好的条目可能丢失。先退出 Claude Code 再跑这条命令（确实要继续就加 -Force）。'
+    if (Get-Process claude -ErrorAction SilentlyContinue) {
+      if (-not $Force) {
+        Fail 'Claude Code 正在运行：运行中的 Claude Code 会回写 ~/.claude.json，登记好的条目可能丢失。先退出 Claude Code 再跑这条命令（确实要继续就加 -Force）。'
+      }
+      Write-Note 'Claude Code 正在运行：登记好的条目可能被宿主回写覆盖——重启后如连不上，在 Agent 里说「更新禅道地址」，它只改这一个键'
     }
     Register-Claude
   } else {
@@ -151,6 +158,15 @@ foreach ($h in $hosts) {
 # --- 写入本人凭据 -------------------------------------------------------
 if ($SkipCredentials) {
   Write-Note '凭据：已跳过（本人之后自己写）'
+  $credSibling = Join-Path $scriptDir 'set-credentials.ps1'
+  if (Test-Path $credSibling) {
+    Write-Note "  powershell -ExecutionPolicy Bypass -File $credSibling"
+  } else {
+    foreach ($h in $hosts) {
+      $skillPath = Join-Path (Get-HostSkillDir $h) $SkillName
+      Write-Note "  powershell -ExecutionPolicy Bypass -File $(Join-Path (Join-Path $skillPath 'scripts') 'set-credentials.ps1')"
+    }
+  }
 } else {
   $credScript = Join-Path $scriptDir 'set-credentials.ps1'
   if (-not (Test-Path $credScript)) {

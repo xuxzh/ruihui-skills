@@ -144,7 +144,7 @@ test('凭据脚本：--token 写入令牌而不是密码', { skip: process.platf
 // --- 安装脚本 -----------------------------------------------------------
 
 /** 造一个假的宿主 CLI：记录被调用的参数，按剧本回答。 */
-function fakeHostBin(home) {
+function fakeHostBin(home, { claudeRunning = false } = {}) {
   const bin = path.join(home, 'bin');
   fs.mkdirSync(bin, { recursive: true });
   const log = path.join(home, 'host-calls.log');
@@ -176,6 +176,10 @@ exit 0
 `,
     { mode: 0o755 },
   );
+
+  // 假的 pgrep：让「宿主是否在运行」只由测试决定，不受本机真实进程影响
+  const pgrep = path.join(bin, 'pgrep');
+  fs.writeFileSync(pgrep, `#!/usr/bin/env bash\nexit ${claudeRunning ? 0 : 1}\n`, { mode: 0o755 });
 
   return { bin, log };
 }
@@ -304,4 +308,50 @@ test('安装脚本：子进程读 stdin 也不会把脚本本身吃掉（管道�
 
   assert.match(stdout, /装好了/, '脚本被提前吃掉了');
   assert.match(fs.readFileSync(log, 'utf8'), /claude mcp add --transport http zentao /);
+});
+
+test('安装脚本：跳过凭据时打印写入凭据的那条命令，供 Agent 原样转交用户', { skip: process.platform === 'win32' }, () => {
+  const home = tmpDir('rh-home-');
+  const { bin } = fakeHostBin(home);
+
+  const stdout = execFileSync('bash', [INSTALL_SH, '--skip-credentials'], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+  });
+
+  assert.match(stdout, /凭据：已跳过/);
+  assert.match(stdout, /bash .*set-credentials\.sh/);
+});
+
+test('安装脚本：宿主在运行时加 --force 继续登记，并提示条目可能被宿主回写覆盖', { skip: process.platform === 'win32' }, () => {
+  const home = tmpDir('rh-home-');
+  const { bin, log } = fakeHostBin(home, { claudeRunning: true });
+
+  const stdout = execFileSync('bash', [INSTALL_SH, '--skip-credentials', '--force'], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+  });
+
+  assert.match(fs.readFileSync(log, 'utf8'), /claude mcp add --transport http zentao /);
+  assert.match(stdout, /可能被宿主回写覆盖/);
+});
+
+test('安装脚本：宿主在运行且没有 --force 时停下，提示先退出宿主', { skip: process.platform === 'win32' }, () => {
+  const home = tmpDir('rh-home-');
+  const { bin, log } = fakeHostBin(home, { claudeRunning: true });
+
+  assert.throws(
+    () =>
+      execFileSync('bash', [INSTALL_SH, '--skip-credentials'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+      }),
+    /Claude Code 正在运行/,
+  );
+
+  assert.doesNotMatch(
+    fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '',
+    /mcp add/,
+    '停下时不应登记 MCP',
+  );
 });
