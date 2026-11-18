@@ -699,3 +699,34 @@ test('D04 既没有明说也没有默认产品：追问一次', () => {
   assert.equal(result.status, 'ask');
   assert.equal(result.askUser, true);
 });
+
+test('D05 随包默认产品：每次使用都要跟用户确认一句', () => {
+  const result = pickProduct({
+    packageDefault: { id: 102, name: '示例产品 B' },
+    visibleProducts: [{ id: 101 }, { id: 102 }],
+  });
+  assert.equal(result.status, 'package_default');
+  assert.equal(result.needsConfirm, true, '随包默认不是用户自己选的，必须确认');
+  assert.match(result.message, /对吗/);
+});
+
+test('D06 本机默认优先于随包默认，且不再确认', () => {
+  const result = pickProduct({
+    defaultProduct: { id: 101, name: '示例产品 A' },
+    packageDefault: { id: 102, name: '示例产品 B' },
+    visibleProducts: [{ id: 101 }, { id: 102 }],
+  });
+  assert.equal(result.status, 'default');
+  assert.equal(result.needsConfirm, undefined, '本机默认是用户自己设的，直接用');
+  assert.equal(result.product.id, 101);
+});
+
+test('D07 随包默认产品不可见：如实说明并追问，不静默换产品', () => {
+  const result = pickProduct({
+    packageDefault: { id: 102, name: '示例产品 B' },
+    visibleProducts: [{ id: 101 }],
+  });
+  assert.equal(result.status, 'not_visible');
+  assert.equal(result.askUser, true);
+  assert.match(result.message, /随包默认/);
+});

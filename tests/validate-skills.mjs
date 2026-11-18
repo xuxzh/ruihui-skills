@@ -214,6 +214,16 @@ check('.env 在 .gitignore 中', /^\s*\.env\s*$/m.test(gitignore));
 // 地址随技能包分发：接入配置必须进版本库，否则装到的技能没有地址可用。
 const configTracked = spawnSync('git', ['ls-files', '--error-unmatch', 'skills/rh-product-feedback/config.local.json'], { cwd: ROOT });
 check('技能包内的 config.local.json 已纳入版本库', configTracked.status === 0);
+// 随包默认产品预置在接入配置里：字段必须在，否则技能读不到预置值。
+const skillConfig = JSON.parse(fs.readFileSync(path.join(ROOT, 'skills/rh-product-feedback/config.local.json'), 'utf8'));
+check(
+  '接入配置预留随包默认产品字段',
+  skillConfig && Object.prototype.hasOwnProperty.call(skillConfig, 'defaultProduct'),
+  '缺 defaultProduct 字段',
+);
+// 技能文档必须写清两层的边界：随包默认只读、本机默认不进包。
+const skillMd = fs.readFileSync(path.join(ROOT, 'skills/rh-product-feedback/SKILL.md'), 'utf8');
+check('SKILL.md 写明随包默认产品与本机默认产品的边界', /随包默认/.test(skillMd) && /preferences\.json|偏好文件/.test(skillMd));
 
 // ---- 汇总 --------------------------------------------------------------
 const failed = results.filter((r) => !r.ok);

@@ -441,36 +441,65 @@ export function normalizeBuild(value) {
 }
 
 /**
- * 选品规则：用户这次明说的 > 默认产品 > 追问一次。
- * 默认产品只是默认值；它当前不可见时如实说明，不静默换一个产品建单。
+ * 选品规则：用户这次明说的 > 本机默认 > 随包默认（需确认）> 追问一次。
+ * 两个默认都只是默认值；不可见时如实说明，不静默换一个产品建单。
  *
- * @param {{stated?: {id: number, name?: string}|null, defaultProduct?: {id: number, name?: string}|null, visibleProducts?: Array<{id: number, name?: string}>}} input
+ * @param {{stated?: {id: number, name?: string}|null, defaultProduct?: {id: number, name?: string}|null, packageDefault?: {id: number, name?: string}|null, visibleProducts?: Array<{id: number, name?: string}>}} input
  */
-export function pickProduct({ stated = null, defaultProduct = null, visibleProducts = [] } = {}) {
+export function pickProduct({
+  stated = null,
+  defaultProduct = null,
+  packageDefault = null,
+  visibleProducts = [],
+} = {}) {
   const visibleIds = new Set((visibleProducts || []).map((p) => Number(p.id)));
   const isVisible = (p) => p && visibleIds.has(Number(p.id));
+  const label = (p) => p?.name || p?.id;
 
   if (stated) {
     if (!isVisible(stated)) {
       return {
         status: 'not_visible',
+        source: 'stated',
         product: stated,
-        message: `你的账号看不到 ${stated.name || stated.id}，这条暂时无法提交到该产品，请找管理员开权限或换一个产品`,
+        message: `你的账号看不到 ${label(stated)}，这条暂时无法提交到该产品，请找管理员开权限或换一个产品`,
       };
     }
-    return { status: 'stated', product: stated };
+    return { status: 'stated', source: 'stated', product: stated };
   }
 
+  // 本机默认：用户自己设的，直接用，不再问。
   if (defaultProduct) {
     if (!isVisible(defaultProduct)) {
       return {
         status: 'not_visible',
+        source: 'local',
         product: defaultProduct,
-        message: `你设的默认产品 ${defaultProduct.name || defaultProduct.id} 当前账号看不到，请找管理员开权限或换一个`,
         askUser: true,
+        message: `你设的默认产品 ${label(defaultProduct)} 当前账号看不到，请找管理员开权限或换一个`,
       };
     }
-    return { status: 'default', product: defaultProduct };
+    return { status: 'default', source: 'local', product: defaultProduct };
+  }
+
+  // 随包默认：分发者预置的，不是用户自己选的，每次使用都要确认一句。
+  if (packageDefault) {
+    if (!isVisible(packageDefault)) {
+      return {
+        status: 'not_visible',
+        source: 'package',
+        product: packageDefault,
+        askUser: true,
+        message: `随包默认的 ${label(packageDefault)} 当前账号看不到，请找管理员开权限或换一个`,
+      };
+    }
+    return {
+      status: 'package_default',
+      source: 'package',
+      product: packageDefault,
+      needsConfirm: true,
+      message: `默认记到 ${label(packageDefault)} 对吗？`,
+    };
   }
 
   return { status: 'ask', askUser: true };

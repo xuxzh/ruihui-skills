@@ -98,6 +98,25 @@ function copyFile(from, to) {
   fs.copyFileSync(from, to);
 }
 
+/**
+ * 随包默认产品：从技能目录里的 config.local.json 读，管理员预置后随包分发。
+ * 没预置就是空位（id 为 null），技能会当没设默认产品处理。
+ */
+function readPackageDefaultProduct() {
+  const localConfig = path.join(SKILL_DIR, 'config.local.json');
+  if (!fs.existsSync(localConfig)) return { id: null, name: '' };
+  try {
+    const config = JSON.parse(fs.readFileSync(localConfig, 'utf8'));
+    const preset = config.defaultProduct;
+    if (preset && preset.id !== null && preset.id !== undefined && preset.id !== '') {
+      return { id: Number(preset.id), name: String(preset.name || '') };
+    }
+  } catch {
+    // 配置坏了就当没预置，不阻断打包
+  }
+  return { id: null, name: '' };
+}
+
 function buildPackage(args) {
   const { mcpUrl, zentaoWebUrl, source } = resolveAddresses(args);
   assertHttpUrl(mcpUrl, '禅道 MCP 地址');
@@ -124,7 +143,7 @@ function buildPackage(args) {
 
   fs.writeFileSync(
     path.join(pkgDir, 'config.local.json'),
-    `${JSON.stringify({ mcpUrl, zentaoWebUrl }, null, 2)}\n`,
+    `${JSON.stringify({ mcpUrl, zentaoWebUrl, defaultProduct: readPackageDefaultProduct() }, null, 2)}\n`,
   );
 
   return { pkgDir, source, hasWebUrl: Boolean(zentaoWebUrl) };
