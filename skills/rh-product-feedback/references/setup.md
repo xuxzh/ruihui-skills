@@ -10,7 +10,7 @@
 npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
 ```
 
-Claude Code 装到 `~/.claude/skills/`，pi 装到 `~/.agents/skills/`。也可以直接从 GitHub 下载技能包、解压后按下面的路径跑脚本。
+skills CLI 把技能装到 `~/.agents/skills/rh-product-feedback/`，再按宿主建入口：Claude Code 得到 `~/.claude/skills/rh-product-feedback`（软链），pi 直接用 `~/.agents/skills/`。也可以直接从 GitHub 下载技能包、解压后放到上面任一路径。
 
 ### 2. 跑安装脚本
 

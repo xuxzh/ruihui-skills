@@ -12,7 +12,7 @@
 
 完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的命令、三个示例和常见问题。概览：
 
-1. **装技能**：`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`——自动装到 Claude Code 的 `~/.claude/skills/` 或 pi 的 `~/.agents/skills/`。
+1. **装技能**：`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`——装到 `~/.agents/skills/rh-product-feedback/`，Claude Code 在 `~/.claude/skills/` 下得到软链，pi 直接用 `~/.agents/skills/`。
 2. **跑安装脚本**：`bash ~/.claude/skills/rh-product-feedback/scripts/install.sh`——一次做完「登记禅道 MCP + 让你输入自己的账号密码」。**你不用填 IP，也不用改配置文件**；密码不回显，只写在你自己的机器上。
 3. **重启 Agent 后验证**：Claude Code 退出重开，pi 执行 `/reload`；在 Agent 里说「验证一下禅道连接」。
 

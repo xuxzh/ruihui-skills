@@ -16,14 +16,11 @@
 npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
 ```
 
-它会自动装到你的 Agent 上：
+它把技能装到 `~/.agents/skills/rh-product-feedback/`，并按你用的 Agent 建入口：Claude Code 得到 `~/.claude/skills/rh-product-feedback`（软链），pi 直接用 `~/.agents/skills/`。两个路径都指向同一份文件。
 
-| 你用的 | 装到这里（macOS / Linux） | Windows |
-| --- | --- | --- |
-| Claude Code | `~/.claude/skills/rh-product-feedback/` | `%USERPROFILE%\.claude\skills\rh-product-feedback\` |
-| pi | `~/.agents/skills/rh-product-feedback/` | `%USERPROFILE%\.agents\skills\rh-product-feedback\` |
+不想用命令行，也可以从 GitHub 下载技能包、解压后放到上面任一路径——第 2 步的脚本就在包里。
 
-不想用命令行，也可以从 GitHub 下载技能包、解压后按上面的路径放好——第 2 步的脚本就在包里。
+装完确认一下：在 Agent 里问一句「你的技能列表里有没有 rh-product-feedback」。**没有**就是路径没放对（Claude Code 要在 `~/.claude/skills/` 下，或让 skills CLI 装），改完重开一次 Agent。
 
 ## 第 2 步：跑安装脚本
 
@@ -41,13 +38,13 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.claude\skills\rh-pro
 
 脚本一次做完三件事：
 
-1. **登记禅道 MCP**：从技能包里读地址，登记到你的 Agent。**你不用填 IP，也不用改任何配置文件。**
+1. **登记禅道 MCP**：从技能包里读地址，登记到你的 Agent。**你不用填 IP，也不用改任何配置文件。** 已经登记过、地址一致就跳过，不会重复写。
 2. **让你输入自己的禅道账号和密码**：密码不回显，写在你自己的机器上，只有你能读。
 3. **提示你重启 Agent**：Claude Code 退出重开；pi 执行 `/reload`。
 
 > **先退出 Claude Code 再跑这条命令。** 运行中的 Claude Code 会回写 `~/.claude.json`，可能把你刚登记的条目覆盖掉。脚本发现宿主还在跑会直接停下提示你。
 
-脚本可以重复跑：装好的部分会跳过，地址一致就什么都不改。
+脚本可以重复跑：装好的部分会跳过，地址一致就什么都不改。跑完第一行会打印脚本所在位置——如果你的技能不是装在默认路径，用它打印出来的路径。
 
 ## 第 3 步：重启 Agent，验证连接
 
@@ -102,16 +99,17 @@ Agent 会依次做这些事：补齐缺的信息 → 确认属于哪个产品 �
 
 禅道 MCP 现在是**用一个固定的服务端账号**提交所有反馈的，所以反馈单上的「提交人」不是你，而是那个服务端账号（已记录在 [#7](https://github.com/xuxzh/ruihui-skills/issues/7)，MCP 侧修好后才会变成你本人）。
 
-所以：
+实测结论：**用错的账号密码登录也会返回「登录成功」**——登录这一步目前不校验凭据，也不决定操作身份。所以：
 
 - 想让别人知道这条是你提的，**在描述里写上你的姓名或工号**，或者直接跟评审的人说一声。
-- 别把「提交人」那一栏当成自己的名字去看——它现在对所有人都是同一个。
+- 别把「提交人」那一栏当成自己的名字去看——它对所有人都是同一个固定账号（除非那个固定账号正好就是你）。
 - 你自己的账号密码**照常输入**：等 MCP 改成按用户凭据登录时，凭据已经在机器上，直接生效，不用重装。
 
 ## 常见问题
 
 | 你看到的 | 原因 | 怎么办 |
 | --- | --- | --- |
+| Agent 说没有 rh-product-feedback 这个技能 | 技能目录没放对，或装完没重开 | 问一句「你的技能列表里有没有 rh-product-feedback」确认；装完重开一次 Agent |
 | 脚本说没有检测到宿主 | Claude Code 和 pi 都没装 | 先装好其中一个再跑脚本 |
 | 脚本说 Claude Code 正在运行 | 运行中的宿主会覆盖配置 | 退出 Claude Code 再跑（或加 `--force`） |
 | 装完连不上禅道 | 宿主回写覆盖了配置 | 在 Agent 里说「更新禅道地址」，它只改一个键；或再跑一次脚本 |
