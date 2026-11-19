@@ -1595,12 +1595,34 @@ Object.assign(COMMANDS, {
 
 const HELP = `禅道入口脚本（rh-product-feedback）
 
-  products                     当前账号可见的产品（这就是后续选品范围）
-  projects [--product <产品ID>]  可见项目；给产品 ID 就只看它下面的
+用法：node <技能目录>/scripts/zentao.mjs <子命令> [选项]
+
+读：
+  products                              当前账号可见的产品（这就是后续选品范围）
+  projects [--product <产品ID>]          可见项目；给产品 ID 就只看它下面的
+  bugs --product <产品ID> [--status <状态>] [--match <关键词>] [--limit <条数>]
+                                        缺陷列表：全量翻页 + 字段投影 + 客户端筛选，只打表格
+  feedbacks --product <产品ID> [--status <状态>] [--match <关键词>] [--limit <条数>]
+                                        反馈列表：同上
+  bug --id <缺陷ID> [--baseline-actions <动作ID,...>]
+                                        缺陷详情：一行 JSON（正文、负责人、流水）
+  feedback --id <反馈ID> [--baseline-actions <动作ID,...>]
+                                        反馈详情：一行 JSON
+  dup --kind <bug|feedback> --product <产品ID> --title <标题>
+                                        查重扫描：列候选，最后一行 JSON 带 baseline
+
+写（载荷只走文件：正文不进命令行参数，也不进 Agent 上下文）：
+  bug-create --payload-file <路径>                 建缺陷单：只发一次 → 回读核对
+  feedback-create --payload-file <路径>            建反馈单：同上
+  bug-update --id <缺陷ID> --payload-file <路径>   更新缺陷单：写前复核 → 更新 → 回读
+  feedback-update --id <反馈ID> --payload-file <路径>
+                                                 更新反馈单：同上
+  file-create --file <图片路径> --object-type <bug|feedback> --object-id <单据ID>
+                                                 传图，返回文件标识与正文里的图片引用
 
 环境变量：ZENTAO_WEB_URL 覆盖禅道站点地址  ZENTAO_CREDENTIALS_FILE 覆盖本机凭据文件路径
 认证：脚本用本机凭据换当次令牌，经环境变量注入官方禅道 CLI；令牌不进命令行、不打印、不落盘。
-其余子命令（单据列表与详情、建单、更新、传图、查重）在迁移中陆续补齐，见 references/zentao-cli.md。`;
+字段、枚举、错误码与已知限制见 references/zentao-cli.md。`;
 
 async function main() {
   const { cmd, opts } = parseArgs(process.argv.slice(2));
