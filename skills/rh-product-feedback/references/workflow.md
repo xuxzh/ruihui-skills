@@ -222,7 +222,7 @@ node <技能目录>/scripts/zentao.mjs feedback-create --payload-file /tmp/rh-ze
 严重程度 / 优先级：3 / 3（默认值）
 影响版本：trunk（默认值）
 缺陷类型：codeerror
-负责人：未指派（随包默认不指派；生效值是产品 QD 时写「产品 QD：majiawei（马嘉炜）」，用户指名就写他的账号）
+负责人：未指派（随包默认不指派；生效值是产品 QD 时用 `qd --product 1` 查出账号与姓名，写「产品 QD：<账号>（<姓名>）」；该产品没有 QD 写「未指派（该产品没有 QD）」；用户指名就写他的账号）
 
 正文：
 【步骤】
@@ -308,7 +308,7 @@ node <技能目录>/scripts/zentao.mjs bug-create --payload-file /tmp/rh-zentao-
 - `ok:false` + `uncertain:true` → 是否建成**未确认**：不重发，把 `candidates` 列给终端用户并请他自己在禅道里看一眼；**不要把「没查到」说成「没创建」**。
 - 终端用户要细节时，再用入口脚本 `bug --id <ID>` 读一遍正文、流水与历史。
 
-负责人的生效值：`assigneeSource` 为 `qd` 时由禅道按产品 QD 指派，脚本拿不到预期值，只把回读到的 `assignedTo` 如实转述（对不上就如实说明，不要改单据）；为 `package` / `local` / `user` 时断言 `assignedTo` 与载荷一致（`""` 就是未指派）。
+负责人的生效值：`assigneeSource` 为 `qd` 时由禅道按产品 QD 指派——草稿里写的 QD 是用 `qd --product <产品ID>` 查出来的「谁来承接」，回读到的 `assignedTo` 才是生效结果；两者对不上（例如 QD 账号已锁定）就如实说明，不要改单据。为 `package` / `local` / `user` 时断言 `assignedTo` 与载荷一致（`""` 就是未指派）。
 
 ### 7. 交付
 
@@ -331,7 +331,7 @@ node <技能目录>/scripts/zentao.mjs bug-create --payload-file /tmp/rh-zentao-
 
 用户说「以后提 bug 默认不指派」「默认都指给张三」时，把值合并写进偏好文件的 `bugAssignee`（别覆盖文件里已有的 `defaultProduct`），回读复核后告知用户。取值含义与生效顺序见 [setup.md](setup.md)「默认负责人」。
 
-随包默认是不指派（`bugAssignee` 为 `""`）；配成 `"qd"` 时才由产品 QD 承接，承接人以回读到的 `assignedTo` 为准。
+随包默认是不指派（`bugAssignee` 为 `""`）；配成 `"qd"` 时才由产品 QD 承接——交给谁先用 `node <技能目录>/scripts/zentao.mjs qd --product <产品ID>` 查（账号、姓名、账号状态、最后登录），承接结果以回读到的 `assignedTo` 为准。
 
 ### 默认产品
 
@@ -554,9 +554,11 @@ node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --objec
 
 把图片引用放进**追加段落**里，再按 F4 的可靠路径走（草稿 → 用户确认 → 写前复核 → 更新 → 回读）。反馈单改 `desc`，缺陷单改 `steps`。
 
-为什么必须放追加段落：更新的草稿是「原文 + 分隔行 + 标注 + 追加段落」，脚本要求草稿的**原文部分**与 `expectedBody`（用户确认时看到的那份原文）逐字一致，追加段落写在分隔行之后。试图把图片插进正文中间会与 `expectedBody` 对不上，脚本报冲突并不写入。
+为什么必须放追加段落：更新的草稿是「原文 + 分隔行 + 追加段落」，脚本要求草稿的**原文部分**与 `expectedBody`（用户确认时看到的那份原文）逐字一致，追加段落写在分隔行之后。试图把图片插进正文中间会与 `expectedBody` 对不上，脚本报冲突并不写入。
 
-草稿给用户看时用纯文本版，图片位置写「【补充说明 · 截图 1】」，引用行附在下面：
+**图片落在单据正文里**（这是终端用户要的效果），位置是**原文之后的追加段落**——不是插在正文中间，也不是只挂在附件列表里。段落的标签按场景写（「截图 1」之类），由载荷的 `appendLabel` 指定，脚本在分隔行后补一行「【截图 1】」；不写 `appendLabel` 就沿用草稿里自己写的标签（补充说明流程写「【补充说明 · 日期 · 用户口述，AI 整理】」）。
+
+草稿给用户看时用纯文本版，图片位置写「【截图 1】」，引用行附在下面：
 
 ```
 即将更新的正文（反馈 #421）：
@@ -568,11 +570,11 @@ node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --objec
 3. 页面无响应
 
 ────
-【补充说明 · 截图 1】
+【截图 1】
 <img src="/index.php?m=file&f=read&t=png&fileID=6530" alt="file-read-6530.png" />
 ```
 
-载荷里的 `desc`（缺陷单是 `steps`）写「完整原文 + 空行 + 分隔行 + 追加段落」，`expectedBody` 写用户确认时看到的那份原文。
+载荷里的 `desc`（缺陷单是 `steps`）写「完整原文 + 空行 + 分隔行 + 图片引用」，`expectedBody` 写用户确认时看到的那份原文，`appendLabel` 写「截图 1」。
 
 ### 5. 回读与交付
 
@@ -609,7 +611,6 @@ node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --objec
 - 一次诉求挂几张图就传几张，各自带一个标签；不要把多张图拼成一张。
 - 上传失败按 [error-handling.md](error-handling.md) 的「图片上传失败」处理：单据已经建好，如实说图没传上去，不重建单据，也不改用文字描述假装图已经放上去。
 - 上传结果不确定（超时、读不懂响应）：图片可能已经挂上去了——先去单据里看有没有多出这个附件，**不重复上传**（上传没有幂等键，重复会多出附件）；查不到就报未确认。
-- 禅道单文件上限 50 MiB，超了先压缩。
 - 删除单据时图片是否一并清理由禅道决定，技能不承诺。
 
 ## 身份与权限的措辞
