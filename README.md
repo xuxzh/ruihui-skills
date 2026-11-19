@@ -4,7 +4,7 @@
 
 | 技能 | 版本 | 说明 |
 | --- | --- | --- |
-| [`rh-product-feedback`](skills/rh-product-feedback) | 0.10.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），其余建**反馈单**；两条路径都支持查询、解释处理进度、补充说明、正文带图；禅道 MCP 没配好时，能引导你完成安装与认证 |
+| [`rh-product-feedback`](skills/rh-product-feedback) | 0.11.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），其余建**反馈单**；两条路径都支持查询、解释处理进度、补充说明、正文带图；禅道 MCP 没配好时，能引导你完成安装与认证 |
 
 ## 业务用户：装完技能，一句话接入
 
@@ -19,6 +19,8 @@
 3. **让 Agent 重载后验证**：Claude Code 退出重开，pi 执行 `/reload`；在 Agent 里说「验证一下禅道连接」。
 
 > 不想让技能常驻、只想试一次：用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback`（技能落在临时目录），提示词见 quick-start。
+
+**技能有新版时**：把更新提示词发给同一个 Agent 就行（见 [`docs/quick-start.md`](docs/quick-start.md) 的「更新技能」）——它先查有没有新版再更新；你的禅道凭据与禅道 MCP 登记都不在技能目录里，更新不会动到，重载一次宿主即可生效。
 
 之后就能直接用：
 

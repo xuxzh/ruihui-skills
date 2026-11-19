@@ -224,17 +224,37 @@ if (fs.existsSync(quickStart)) {
   // 安装提示词只有一份真相：quick-start 与随包 setup.md 逐字一致（ADR-0014）。
   const setupPath = path.join(SKILLS_DIR, 'rh-product-feedback', 'references', 'setup.md');
   if (fs.existsSync(setupPath)) {
+    const setupText = fs.readFileSync(setupPath, 'utf8');
     const promptOf = (text) => {
       const m = text.match(/```\n(帮我装上 ruihui 的产品反馈助手[\s\S]*?)```/);
       return m ? m[1] : '';
     };
     const inQuickStart = promptOf(quickText);
-    const inSetup = promptOf(fs.readFileSync(setupPath, 'utf8'));
+    const inSetup = promptOf(setupText);
     check(
       '安装提示词与随包 setup.md 逐字一致',
       !!inQuickStart && inQuickStart === inSetup,
       !inQuickStart || !inSetup ? '找不到提示词块' : inQuickStart === inSetup ? '' : '两处不一致',
     );
+
+    // 更新提示词同样只有一份真相。
+    const updatePromptOf = (text) => {
+      const m = text.match(/```\n(帮我更新 ruihui 的产品反馈助手[\s\S]*?)```/);
+      return m ? m[1] : '';
+    };
+    const updateInQuickStart = updatePromptOf(quickText);
+    const updateInSetup = updatePromptOf(setupText);
+    check(
+      '更新提示词与随包 setup.md 逐字一致',
+      !!updateInQuickStart && updateInQuickStart === updateInSetup,
+      !updateInQuickStart || !updateInSetup ? '找不到更新提示词块' : updateInQuickStart === updateInSetup ? '' : '两处不一致',
+    );
+
+    check(
+      '快速上手写了更新技能的检查与更新命令',
+      quickText.includes('npx skills check') && quickText.includes('npx skills update rh-product-feedback'),
+    );
+    check('快速上手说明更新不用重做接入', quickText.includes('不用重做接入'));
   }
 } else {
   check('存在 docs/quick-start.md', false);

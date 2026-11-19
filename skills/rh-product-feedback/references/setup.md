@@ -57,6 +57,35 @@ node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao �
 
 自检通过就直接进入终端用户的诉求（收集要素、查重、草稿），不要插入「自检报告 → 等确认」的往返；只在认证失败、产品不可见时停下来。
 
+## 更新技能
+
+终端用户问「技能有新版吗」「更新一下 rh-product-feedback」时走这一节。**更新由 skills CLI 完成，技能包自己不参与**——技能没被加载也能更新。
+
+### 用户侧提示词
+
+把下面这段发给你正在用的 Agent（与仓库的 [`docs/quick-start.md`](https://github.com/xuxzh/ruihui-skills/blob/main/docs/quick-start.md) 的「更新技能」逐字一致，由 `tests/validate-skills.mjs` 校验）：
+
+```
+帮我更新 ruihui 的产品反馈助手（rh-product-feedback）：
+1. 先跑 `npx skills check`。没有新版就告诉我「已是最新」，到此为止；如果它报我改过技能里的文件（local changes），先告诉我会覆盖什么，等我确认再动。
+2. 有新版就跑 `npx skills update rh-product-feedback`。
+3. 更新完告诉我三件事：更新到了哪个版本（读技能目录里 SKILL.md 的 `rh-version`）、我的禅道凭据还在不在（只说在与不在，别回显内容）、以及要不要重载才能生效。
+```
+
+### Agent 执行路径
+
+1. **查**：`npx skills check`。它列出所有可更新的技能，也报出技能目录里被手改过的文件（`has local changes`）。有新版或本地改动时退出码是 1——那是「有东西要动」的信号，不是失败。
+2. **有本地改动先问**：更新会覆盖技能目录里的文件。终端用户改过 `SKILL.md`、`config.local.json` 或脚本时，先说清会覆盖什么，等终端用户确认再动。
+3. **更新**：`npx skills update rh-product-feedback`。带技能名时不问范围，project 与 global 都会找；`-g` 只更全局、`-p` 只更项目、`-y` 跳过范围提示。
+4. **没走过 skills CLI 的安装**（实施人员直接拷贝的文件夹）没有锁条目，`skills update` 找不到它——让实施人员给一份新包覆盖旧目录，不要自己去改技能包的文件。
+5. **重载才生效**：更新换的是磁盘上的文件，运行中的宿主还在用旧版本。按「各宿主配置」提示终端用户重载（Claude Code 退出重开；pi 执行 `/reload`）。
+6. **不用重做接入**：接入凭据在本机的凭据文件里（`~/.config/rh-zentao/credentials`）、本机偏好（默认产品、默认负责人）在本机偏好文件里、禅道 MCP 登记在宿主配置里——三处都不在技能目录里，更新不会动。照实说「不用重新写密码、不用重新登记」。
+7. **报版本号**：更新完读技能目录里 `SKILL.md` 的 `metadata.rh-version` 报给终端用户；读不到就说读不到。
+
+### 临时副本
+
+`npx skills use` 落在临时目录里的技能没有更新入口——想拿新版就重新跑一次 `use`。
+
 ## 业务用户：粘一段提示词
 
 ### 1. 安装提示词
@@ -399,6 +428,8 @@ npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
 | 终端管理（Intune / 域策略 / MDM） | 无需操作，机器上已有 |
 
 `node scripts/build-internal-package.mjs` 仍能打出自洽的目录（`dist/rh-product-feedback/`），供压缩包分发使用；地址取自仓库里的 `config.local.json`。
+
+**只有走 skills CLI 装的才有自动更新**（`npx skills check` / `npx skills update`）。走备用渠道拷贝目录的用户没有更新入口——技能内容变了要重新分发一份，覆盖旧目录（见上面「更新技能」）。
 
 ### 禅道 MCP 侧可改进的两点
 

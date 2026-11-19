@@ -75,6 +75,7 @@ node <技能目录>/scripts/zentao-write.mjs bug-create --payload-file /tmp/rh-p
 | 终端用户表达 | 流程 | 落点 |
 | --- | --- | --- |
 | `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）「帮我装 / 配置 / 连接禅道」「禅道连不上」 | 安装，见 [references/setup.md](references/setup.md) | — |
+| 「更新技能」「技能有新版吗」「把 rh-product-feedback 更新一下」 | 更新，见 [references/setup.md](references/setup.md) 的「更新技能」 | — |
 | 「提 bug / 报缺陷 / 页面报错 / 崩溃 / 复现步骤是… / 这个功能报错」 | [写单据](#2-写单据反馈单与缺陷单共用一条主干) | 缺陷单 |
 | 「提需求 / 需要一个功能 / 希望支持…」「提反馈 / 提建议 / 体验不好 / 建议优化…」 | [写单据](#2-写单据反馈单与缺陷单共用一条主干) | 反馈单（类型：需求 / 建议） |
 | 「有个问题 / 不太对劲 / 你看看」 | 追问一次「提反馈单还是直接建缺陷单？」，再进对应流程 | — |
