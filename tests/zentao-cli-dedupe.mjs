@@ -274,3 +274,65 @@ test('D10 查重扫描：选项写错时报用法，不悄悄按默认值跑', {
     assert.match(stderr, /错误：/);
   });
 });
+
+// 超过一页（假服务每页 20 条）的缺陷：逼出翻页
+test('D11 服务端分页不前进：查重不谎报「未发现重复」，而是说清覆盖不完整', { skip: NEEDS_CLI }, async () => {
+  await withMock(
+    (state) => {
+      seedBug(state, { id: 1945, title: '语言切换功能失效', status: 'active', assignedTo: 'dev-a' });
+      seedBug(state, { id: 1946, title: '切换语言功能失效', status: 'active', assignedTo: 'dev-b' });
+      for (let i = 0; i < 23; i++) seedBug(state, { id: 2000 + i, title: `无关缺陷 ${i + 1}` });
+      state.pagingStuckProducts = [101];
+    },
+    async ({ env }) => {
+      const { code, stdout, stderr } = await runNode(
+        SCRIPT,
+        ['dup', '--kind', 'bug', '--product', '101', '--title', '切换语言功能失效'],
+        env,
+      );
+      assert.equal(code, 0, stderr);
+      // 不能把第 1 页当全部：「在你可见的 N 条中未发现重复」这种说法不许出现
+      assert.doesNotMatch(stdout, /在你可见的 \d+ 条/);
+      assert.match(stdout, /覆盖不完整/);
+      assert.match(stdout, /只扫到 20 条缺陷，服务端称共有 25 条，服务端分页未向前推进/);
+      assert.match(stdout, /不等于全部可见记录里没有/);
+      // 基线也不完整，不能拿它判断哪些是本次新建
+      assert.match(stdout, /基线不完整/);
+      // 第 1 页里命中的候选照常列出
+      assert.match(stdout, /^1945\t语言切换功能失效\tactive\tdev-a\t\d+%$/m);
+      const contract = contractOf(stdout);
+      assert.equal(contract.complete, false);
+      assert.equal(contract.scanned, 20);
+      assert.equal(contract.total, 25);
+      assert.ok(contract.baseline.length > 0, '拿到的第 1 页编号仍要给出');
+    },
+  );
+});
+
+test('D12 服务端返回别的产品的记录：不算进覆盖范围，也不进基线', { skip: NEEDS_CLI }, async () => {
+  await withMock(
+    (state) => {
+      // 请求产品 101 的缺陷列表，回来的却是产品 102 的记录（复刻真实实例的怪象）
+      seedBug(state, { id: 1945, product: 102, title: '语言切换功能失效' });
+      seedBug(state, { id: 1946, product: 102, title: '切换语言功能失效' });
+      state.foreignProductLists = { 101: 102 };
+    },
+    async ({ env }) => {
+      const { code, stdout, stderr } = await runNode(
+        SCRIPT,
+        ['dup', '--kind', 'bug', '--product', '101', '--title', '切换语言功能失效'],
+        env,
+      );
+      assert.equal(code, 0, stderr);
+      // 别的产品的记录不能算成本产品的候选，也不能撑起「在你可见的 N 条」这种说法
+      assert.doesNotMatch(stdout, /在你可见的 \d+ 条/);
+      assert.match(stdout, /^# 覆盖范围：在这 0 条缺陷中未发现重复/m);
+      assert.match(stdout, /不属于产品 101，已丢弃/);
+      assert.match(stdout, /基线不完整/);
+      const contract = contractOf(stdout);
+      assert.equal(contract.complete, false);
+      assert.equal(contract.foreignRecords, 2);
+      assert.deepEqual(contract.baseline, []);
+    },
+  );
+});

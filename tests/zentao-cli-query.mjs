@@ -136,7 +136,7 @@ test('Q01 缺陷列表：投影后的紧凑表格，正文与原始 JSON 不进�
   await withMock((state) => seedManyBugs(state, 12), async ({ server, env }) => {
     const { code, stdout, stderr } = await runScript(['bugs', '--product', '101'], env);
     assert.equal(code, 0, stderr);
-    assert.match(stdout, /^# 缺陷（产品 101 可见 12 条，只列前 10 条）$/m);
+    assert.match(stdout, /^# 缺陷（产品 101 可见 12 条，已扫 12 条，只列前 10 条）$/m);
     assert.match(stdout, /^1901\t批量缺陷 1\tactive\tdev-a\t2\/2$/m);
     // 十几行表格：一行表头 + 默认 10 行
     assert.equal(stdout.trim().split('\n').length, 11, '列表要能一眼看完，不能把上百条倒进上下文');
@@ -152,7 +152,7 @@ test('Q02 列表：一次拉全量（翻完所有页），筛选在客户端做�
   await withMock((state) => seedManyBugs(state, 25, { status: (i) => (i < 15 ? 'active' : 'closed') }), async ({ server, env }) => {
     const { code, stdout, stderr } = await runScript(['bugs', '--product', '101', '--status', 'active'], env);
     assert.equal(code, 0, stderr);
-    assert.match(stdout, /^# 缺陷（产品 101 可见 25 条，筛选后 15 条，只列前 10 条）$/m);
+    assert.match(stdout, /^# 缺陷（产品 101 可见 25 条，已扫 25 条，筛选后 15 条，只列前 10 条）$/m);
     assert.match(stdout, /^1901\t批量缺陷 1\tactive/m);
     assert.ok(!stdout.includes('批量缺陷 16'), '状态是 closed 的不该出现');
     // 翻页 = 一次拉全量；筛选不触发第二次扫描
@@ -168,7 +168,7 @@ test('Q03 列表 --match 只在标题里筛：正文里的词不算命中', { sk
   }, async ({ env }) => {
     const { code, stdout, stderr } = await runScript(['bugs', '--product', '101', '--match', '登录'], env);
     assert.equal(code, 0, stderr);
-    assert.match(stdout, /^# 缺陷（产品 101 可见 2 条，筛选后 1 条）$/m);
+    assert.match(stdout, /^# 缺陷（产品 101 可见 2 条，已扫 2 条，筛选后 1 条）$/m);
     assert.match(stdout, /^1952\t登录超时/m);
     assert.ok(!stdout.includes('导出按钮'), '标题里没有关键词的不该命中');
   });
@@ -181,7 +181,7 @@ test('Q04 反馈列表：产品下的反馈单紧凑表格，未指派写「（�
   }, async ({ server, env }) => {
     const { code, stdout, stderr } = await runScript(['feedbacks', '--product', '101'], env);
     assert.equal(code, 0, stderr);
-    assert.match(stdout, /^# 反馈（产品 101 可见 2 条）$/m);
+    assert.match(stdout, /^# 反馈（产品 101 可见 2 条，已扫 2 条）$/m);
     assert.match(stdout, /^901\t希望支持导出筛选结果\twait\t（未指派）$/m);
     assert.match(stdout, /^902\t报表页加载慢\tdoing\tdev-b$/m);
     assert.ok(!stdout.includes('{'), '输出里不该有原始 JSON 片段');
@@ -341,4 +341,74 @@ test('Q11 单据不存在：退出码非 0，错误可读，stdout 是 ok:false'
     assert.match(stderr, /^错误：禅道 CLI 报错/m);
     assert.equal(JSON.parse(stdout.trim()).ok, false);
   });
+});
+
+// 一批反馈：超过一页（假服务每页 20 条），逼出翻页
+function seedManyFeedbacks(state, count) {
+  for (let i = 0; i < count; i++) {
+    seedFeedback(state, { id: 901 + i, title: `批量反馈 ${i + 1}` });
+  }
+}
+
+const feedbackListCalls = (server) =>
+  server.state.calls.filter((c) => /\/api\.php\/v2\/products\/\d+\/feedbacks$/.test(c.path));
+
+test('Q12 服务端分页不前进：列表不整体失败，退回第 1 页并注明覆盖不完整', { skip: NEEDS_CLI }, async () => {
+  // 复刻真实 max 8.2 实例：产品 101 的反馈列表从第 2 页起返回空集、pageID 钳回 1
+  await withMock(
+    (state) => {
+      seedManyFeedbacks(state, 25);
+      state.pagingStuckProducts = [101];
+    },
+    async ({ server, env }) => {
+      const { code, stdout, stderr } = await runScript(['feedbacks', '--product', '101'], env);
+      assert.equal(code, 0, stderr);
+      // 表头必须让人一眼看出这次扫描是不完整的，并且不能说成「全部」
+      assert.match(
+        stdout,
+        /^# 反馈（产品 101 扫到 20 条，服务端称共有 25 条，服务端分页未向前推进，覆盖不完整，只列前 10 条）$/m,
+      );
+      // 第 1 页的记录照常返回，不是空表
+      assert.match(stdout, /^901\t批量反馈 1\t/m);
+      assert.ok(!stdout.includes('{'), '输出里不该有原始 JSON 片段');
+      // 请求轨迹：翻到第 2 页才失败，然后退回第 1 页重读
+      assert.deepEqual(feedbackListCalls(server).map((c) => c.query.pageID), ['1', '2', '1']);
+    },
+  );
+});
+
+test('Q13 同一页内容重复：同样退回第 1 页，覆盖范围同样注明不完整', { skip: NEEDS_CLI }, async () => {  // CLI 的另一条分页保护：相邻两页内容一模一样（同样报 E2008「服务端分页未向前推进」）
+  await withMock(
+    (state) => {
+      seedManyFeedbacks(state, 25);
+      state.pagingRepeatProducts = [101];
+    },
+    async ({ server, env }) => {
+      const { code, stdout, stderr } = await runScript(['feedbacks', '--product', '101'], env);
+      assert.equal(code, 0, stderr);
+      assert.match(stdout, /^# 反馈（产品 101 扫到 20 条，服务端称共有 25 条，服务端分页未向前推进，覆盖不完整/m);
+      assert.match(stdout, /^901\t批量反馈 1\t/m);
+      assert.deepEqual(feedbackListCalls(server).map((c) => c.query.pageID), ['1', '2', '1']);
+    },
+  );
+});
+
+test('Q14 服务端返回别的产品的记录：归属校验丢掉，并在表头点名', { skip: NEEDS_CLI }, async () => {
+  // 复刻真实实例的另一个怪象：请求产品 101 的反馈列表，回来的记录 product 字段是 102
+  await withMock(
+    (state) => {
+      seedFeedback(state, { id: 951, product: 102, title: '属于产品 102 的反馈' });
+      seedFeedback(state, { id: 952, product: 102, title: '另一条产品 102 的反馈' });
+      state.foreignProductLists = { 101: 102 };
+    },
+    async ({ env }) => {
+      const { code, stdout, stderr } = await runScript(['feedbacks', '--product', '101'], env);
+      assert.equal(code, 0, stderr);
+      assert.match(
+        stdout,
+        /^# 反馈（产品 101 扫到 0 条，禅道返回的 2 条记录 product 字段是 102，不属于产品 101，已丢弃）$/m,
+      );
+      assert.ok(!stdout.includes('属于产品 102 的反馈'), '别的产品的记录不能当成本产品的列出来');
+    },
+  );
 });

@@ -167,11 +167,16 @@ function cliArgs(...args) {
 }
 
 // CLI 的失败都带 {ok:false,error:{code,message}}；detail 里有站点地址，不回显
+// 官方错误码挂到 err.cliCode 上：调用方要按码分辨错误类型，不能靠在中文信息里抠字
 function cliFailure(stderr) {
   try {
     const body = JSON.parse(String(stderr || ''));
     const code = body?.error?.code ? `（${body.error.code}）` : '';
-    if (body?.error?.message) return new Error(`禅道 CLI 报错${code}：${body.error.message}`);
+    if (body?.error?.message) {
+      const error = new Error(`禅道 CLI 报错${code}：${body.error.message}`);
+      error.cliCode = body?.error?.code ? String(body.error.code) : '';
+      return error;
+    }
   } catch {
     // stderr 不是 JSON，落到下面兜底
   }
@@ -261,9 +266,10 @@ async function cmdProjects(env, opts) {
 // 列表默认只打十行：再多的单据一次倒进上下文也是白搭，要更多让他显式加 --limit
 const DEFAULT_LIST_LIMIT = 10;
 
-// 缺陷列表投影：够判断「到哪了」的字段，正文不进表格
-const BUG_LIST_FIELDS = 'id,title,status,assignedTo,severity,pri';
-const FEEDBACK_LIST_FIELDS = 'id,title,status,assignedTo';
+// 缺陷列表投影：够判断「到哪了」的字段，正文不进表格。
+// product 不进表格，但要参与归属校验（请求的是产品 X，回来的记录 product 字段不是 X 就不能算）
+const BUG_LIST_FIELDS = 'id,title,status,assignedTo,severity,pri,product';
+const FEEDBACK_LIST_FIELDS = 'id,title,status,assignedTo,product';
 // 详情投影：正文 + 状态 + 负责人 + 处理人/处理时间/结论 + 流水
 const BUG_DETAIL_FIELDS =
   'id,title,status,product,type,severity,pri,openedBuild,openedBy,openedDate,assignedTo,resolvedBy,resolvedDate,resolution,steps,actions';
@@ -325,30 +331,101 @@ function listFilterArgs(opts) {
   return args;
 }
 
-// 表头说清范围：「产品 101 可见 25 条，筛选后 15 条，只列前 10 条」
-function printList(label, productId, total, rows, limit) {
-  const parts = [`产品 ${productId} 可见 ${total} 条`];
-  if (rows.length !== total) parts.push(`筛选后 ${rows.length} 条`);
+/**
+ * 服务端分页不前进：--all 遍历时会整条失败（E2008）。这条保护同时覆盖两种情况——
+ * 请求的页码与服务端回的页码不一致、以及相邻两页内容完全相同。
+ * 实测：某台 max 8.2 实例的产品反馈列表从第 2 页起返回空集并把 pageID 钳回 1。
+ */
+function isPagingStuck(err) {
+  return String(err?.cliCode || '') === '2008' && /分页未向前推进/.test(String(err?.message || ''));
+}
+
+/**
+ * 读一个列表命令的全量：--all 翻完所有页，返回
+ * { rows, scanned, total, foreign, complete, reason }。
+ * 服务端分页不前进时不整条失败，退回只读第 1 页；拿到的记录照常用，但这次扫描算不完整——
+ * 第 1 页不是全部，不能当成全部说出去。
+ *
+ * 回退取回的记录还要做归属校验：请求的是产品 X，回来的记录 product 字段不是 X，就不是这个产品的记录。
+ * 实测某台 max 8.2 实例上请求产品 29 的反馈列表会返回 product=1 的记录，照用会把别的产品的数据
+ * 当成这个产品的（查重基线、覆盖范围全跟着错），所以这类记录一律丢弃并在输出里点名。
+ */
+async function runListScan(args, productId, env) {
+  const scanOf = (payload, complete, reason) => {
+    const fetched = rowsOf(payload.data);
+    const rows = [];
+    const dropped = [];
+    for (const row of fetched) (isProductRecord(row, productId) ? rows : dropped).push(row);
+    const total = Number(payload.meta?.total ?? fetched.length);
+    return {
+      rows,
+      // 扫到 = 服务端给了多少条，减掉不属于这个产品的
+      scanned: Number(payload.meta?.fetched ?? fetched.length) - dropped.length,
+      total,
+      foreign: { count: dropped.length, products: [...new Set(dropped.map((row) => idOf(row.product)))] },
+      complete,
+      reason,
+    };
+  };
+  try {
+    return scanOf(await runCli([...args, '--all'], env), true, '');
+  } catch (err) {
+    if (!isPagingStuck(err)) throw err;
+    const first = await runCli([...args, '--page', '1'], env);
+    return scanOf(first, false, '服务端分页未向前推进');
+  }
+}
+
+// 记录没带 product 字段时判不了归属（投影里没取到），只能照用；带了就必须与请求的产品一致
+function isProductRecord(row, productId) {
+  const product = row?.product;
+  if (product === undefined || product === null || product === '') return true;
+  return idOf(product) === String(productId);
+}
+
+// 覆盖范围的一句话：扫了多少条、扫全没有、有没有丢掉不属于这个产品的记录。
+function scanCoverage(scan, productId) {
+  const parts = [];
+  if (scan.complete && !scan.foreign.count) {
+    parts.push(`可见 ${scan.total} 条，已扫 ${scan.scanned} 条`);
+  } else {
+    parts.push(`扫到 ${scan.scanned} 条`);
+    if (scan.total > scan.scanned + scan.foreign.count) parts.push(`服务端称共有 ${scan.total} 条`);
+    if (!scan.complete) parts.push(scan.reason);
+  }
+  if (scan.foreign.count) {
+    parts.push(
+      `禅道返回的 ${scan.foreign.count} 条记录 product 字段是 ${scan.foreign.products.join('/')}，不属于产品 ${productId}，已丢弃`
+    );
+  }
+  if (!scan.complete) parts.push('覆盖不完整');
+  return parts.join('，');
+}
+
+// 表头说清范围：「产品 101 可见 25 条，已扫 25 条，筛选后 15 条，只列前 10 条」
+function printList(label, productId, scan, rows, limit) {
+  const parts = [scanCoverage(scan, productId)];
+  if (rows.length !== scan.scanned) parts.push(`筛选后 ${rows.length} 条`);
   const shown = rows.slice(0, limit);
   if (shown.length < rows.length) parts.push(`只列前 ${shown.length} 条`);
-  out(`# ${label}（${parts.join('，')}）`);
+  out(`# ${label}（产品 ${productId} ${parts.join('，')}）`);
   for (const row of shown) out(row.join('\t'));
 }
 
-// 一次拉全量（--all 翻完所有页）+ 字段投影（--fields）+ 客户端筛选
+// 一次拉全量（--all 翻完所有页，分页不前进时退回第 1 页）+ 字段投影（--fields）+ 客户端筛选
 async function cmdBugs(env, opts) {
   const productId = productIdOf(opts, 'bugs');
   const limit = listLimitOf(opts);
-  const { data, meta } = await runCli(
-    ['bug', 'list', '--scope', 'products', '--scope-id', productId, '--all', '--fields', BUG_LIST_FIELDS, ...listFilterArgs(opts)],
+  const scan = await runListScan(
+    ['bug', 'list', '--scope', 'products', '--scope-id', productId, '--fields', BUG_LIST_FIELDS, ...listFilterArgs(opts)],
+    productId,
     env
   );
-  const bugs = rowsOf(data);
   printList(
     '缺陷',
     productId,
-    Number(meta?.total ?? bugs.length),
-    bugs.map((bug) => [cell(bug.id), cell(bug.title), cell(bug.status), assignee(bug.assignedTo), `${cell(bug.severity)}/${cell(bug.pri)}`]),
+    scan,
+    scan.rows.map((bug) => [cell(bug.id), cell(bug.title), cell(bug.status), assignee(bug.assignedTo), `${cell(bug.severity)}/${cell(bug.pri)}`]),
     limit
   );
 }
@@ -356,16 +433,16 @@ async function cmdBugs(env, opts) {
 async function cmdFeedbacks(env, opts) {
   const productId = productIdOf(opts, 'feedbacks');
   const limit = listLimitOf(opts);
-  const { data, meta } = await runCli(
-    ['feedback', 'list', '--product-id', productId, '--all', '--fields', FEEDBACK_LIST_FIELDS, ...listFilterArgs(opts)],
+  const scan = await runListScan(
+    ['feedback', 'list', '--product-id', productId, '--fields', FEEDBACK_LIST_FIELDS, ...listFilterArgs(opts)],
+    productId,
     env
   );
-  const feedbacks = rowsOf(data);
   printList(
     '反馈',
     productId,
-    Number(meta?.total ?? feedbacks.length),
-    feedbacks.map((feedback) => [cell(feedback.id), cell(feedback.title), cell(feedback.status), assignee(feedback.assignedTo)]),
+    scan,
+    scan.rows.map((feedback) => [cell(feedback.id), cell(feedback.title), cell(feedback.status), assignee(feedback.assignedTo)]),
     limit
   );
 }
@@ -573,15 +650,17 @@ async function readBug(id, env) {
   return data && typeof data === 'object' ? data : {};
 }
 
-/** 某产品下的全部缺陷编号：写入前拍的基线，也是结果不确定时找新记录的范围。 */
+/**
+ * 某产品下的缺陷编号：写入前拍的基线，也是结果不确定时找新记录的范围。
+ * 扫不全时（服务端分页不前进，只读到第 1 页）一并交代：这种基线不能当完整依据。
+ */
 async function bugIdsOf(productID, env) {
-  const { data } = await runCli(
-    ['bug', 'list', '--scope', 'products', '--scope-id', String(productID), '--all', '--fields', 'id'],
+  const scan = await runListScan(
+    ['bug', 'list', '--scope', 'products', '--scope-id', String(productID), '--fields', 'id,product'],
+    productID,
     env,
   );
-  return rowsOf(data)
-    .map((row) => Number(row.id))
-    .filter((id) => Number.isFinite(id));
+  return { ...scan, ids: scan.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id)) };
 }
 
 function versionListOf(value) {
@@ -658,16 +737,38 @@ function cliOutcomeUnknown(err) {
 /**
  * 结果不确定（超时 / 断连 / 读不懂响应）时，先查该产品的缺陷列表，只认
  * 「查重基线之外 + 唯一 + 回读完全一致」的那条；认不准就报未确认。
+ * 基线本身不完整（只读到第 1 页）时这条判据不成立：直接报未确认，不拿不完整的扫描当依据。
  */
 async function confirmBugByQuery(env, payload, assigneeSource, baseline, why) {
-  let ids;
+  if (!baseline.complete || baseline.foreign.count) {
+    const coverage = baseline.complete
+      ? `有 ${baseline.foreign.count} 条记录 product 字段是 ${baseline.foreign.products.join('/')}、不属于产品 ${payload.productID}，已丢弃`
+      : `${baseline.reason}，只扫到 ${baseline.ids.length} 条`;
+    reportBugUncertain(
+      `${why}；写入前的查重基线不完整（${coverage}），分不出哪条是本次新建：这条缺陷是否新建未确认。不要重发。`,
+      { id: null, candidates: [], baselineComplete: false },
+    );
+    return;
+  }
+  let scan;
   try {
-    ids = await bugIdsOf(payload.productID, env);
+    scan = await bugIdsOf(payload.productID, env);
   } catch (err) {
     reportBugUncertain(`${why}；重查产品 ${payload.productID} 的缺陷列表也失败（${err?.message || err}），这条缺陷是否建成都未确认。不要重发。`);
     return;
   }
-  const fresh = ids.filter((id) => !baseline.has(id));
+  if (!scan.complete || scan.foreign.count) {
+    const coverage = scan.complete
+      ? `有 ${scan.foreign.count} 条记录不属于产品 ${payload.productID}，已丢弃`
+      : `${scan.reason}，只扫到 ${scan.ids.length} 条`;
+    reportBugUncertain(
+      `${why}；重查的覆盖不完整（${coverage}），分不出哪条是本次新建：这条缺陷是否新建未确认。不要重发。`,
+      { id: null, candidates: [], baselineComplete: false },
+    );
+    return;
+  }
+  const known = new Set(baseline.ids);
+  const fresh = scan.ids.filter((id) => !known.has(id));
   const matched = [];
   for (const id of fresh) {
     let bug;
@@ -708,7 +809,7 @@ async function cmdBugCreate(env, opts) {
     // 写入前拍一次查重基线：结果不确定时，只有基线之外的编号才可能是本次新建的
     let baseline;
     try {
-      baseline = new Set(await bugIdsOf(payload.productID, env));
+      baseline = await bugIdsOf(payload.productID, env);
     } catch (err) {
       throw new Error(`读不到产品 ${payload.productID} 的缺陷列表，没敢建单（先确认产品与权限）：${err?.message || err}`);
     }
@@ -830,15 +931,13 @@ async function readFeedback(id, env) {
   return data && typeof data === 'object' ? data : {};
 }
 
-/** 某产品下的全部反馈编号：写入前拍的基线，也是结果不确定时找新记录的范围。 */
+/**
+ * 某产品下的反馈编号：写入前拍的基线，也是结果不确定时找新记录的范围。
+ * 扫不全时（服务端分页不前进，只读到第 1 页）一并交代：这种基线不能当完整依据。
+ */
 async function feedbackIdsOf(product, env) {
-  const { data } = await runCli(
-    ['feedback', 'list', '--product-id', String(product), '--all', '--fields', 'id'],
-    env,
-  );
-  return rowsOf(data)
-    .map((row) => Number(row.id))
-    .filter((id) => Number.isFinite(id));
+  const scan = await runListScan(['feedback', 'list', '--product-id', String(product), '--fields', 'id,product'], product, env);
+  return { ...scan, ids: scan.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id)) };
 }
 
 /**
@@ -910,18 +1009,40 @@ function reportFeedbackUncertain(message, extra = {}) {
 /**
  * 结果不确定（超时 / 断连 / 读不懂响应）时，先查该产品的反馈列表，只认
  * 「查重基线之外 + 唯一 + 回读完全一致」的那条；认不准就报未确认。
+ * 基线本身不完整（只读到第 1 页）时这条判据不成立：直接报未确认，不拿不完整的扫描当依据。
  */
 async function confirmFeedbackByQuery(env, payload, account, baseline, why) {
-  let ids;
+  if (!baseline.complete || baseline.foreign.count) {
+    const coverage = baseline.complete
+      ? `有 ${baseline.foreign.count} 条记录 product 字段是 ${baseline.foreign.products.join('/')}、不属于产品 ${payload.product}，已丢弃`
+      : `${baseline.reason}，只扫到 ${baseline.ids.length} 条`;
+    reportFeedbackUncertain(
+      `${why}；写入前的查重基线不完整（${coverage}），分不出哪条是本次新建：这条反馈是否新建未确认。不要重发。`,
+      { id: null, candidates: [], baselineComplete: false },
+    );
+    return;
+  }
+  let scan;
   try {
-    ids = await feedbackIdsOf(payload.product, env);
+    scan = await feedbackIdsOf(payload.product, env);
   } catch (err) {
     reportFeedbackUncertain(
       `${why}；重查产品 ${payload.product} 的反馈列表也失败（${err?.message || err}），这条反馈是否建成都未确认。不要重发。`,
     );
     return;
   }
-  const fresh = ids.filter((id) => !baseline.has(id));
+  if (!scan.complete || scan.foreign.count) {
+    const coverage = scan.complete
+      ? `有 ${scan.foreign.count} 条记录不属于产品 ${payload.product}，已丢弃`
+      : `${scan.reason}，只扫到 ${scan.ids.length} 条`;
+    reportFeedbackUncertain(
+      `${why}；重查的覆盖不完整（${coverage}），分不出哪条是本次新建：这条反馈是否新建未确认。不要重发。`,
+      { id: null, candidates: [], baselineComplete: false },
+    );
+    return;
+  }
+  const known = new Set(baseline.ids);
+  const fresh = scan.ids.filter((id) => !known.has(id));
   const matched = [];
   for (const id of fresh) {
     let feedback;
@@ -965,7 +1086,7 @@ async function cmdFeedbackCreate(env, opts) {
     // 写入前拍一次查重基线：结果不确定时，只有基线之外的编号才可能是本次新建的
     let baseline;
     try {
-      baseline = new Set(await feedbackIdsOf(payload.product, env));
+      baseline = await feedbackIdsOf(payload.product, env);
     } catch (err) {
       throw new Error(`读不到产品 ${payload.product} 的反馈列表，没敢建单（先确认产品与权限）：${err?.message || err}`);
     }
@@ -1367,8 +1488,9 @@ Object.assign(COMMANDS, {
 });
 // ===== 查重子命令 =====
 
-// 查重只投影这四个字段：候选要列编号、标题、状态、负责人，正文不进上下文
-const DUP_LIST_FIELDS = 'id,title,status,assignedTo';
+// 查重只投影这几个字段：候选要列编号、标题、状态、负责人，正文不进上下文；
+// product 也取来，用于归属校验（回退取回的记录可能不是这个产品的）
+const DUP_LIST_FIELDS = 'id,title,status,assignedTo,product';
 // 候选最多列多少行：候选是给人挑的，列太多挑不动
 const DUP_CANDIDATE_LIMIT = 10;
 
@@ -1392,22 +1514,28 @@ async function cmdDup(env, opts) {
       : ['feedback', 'list', '--product-id', productId];
 
   // 全量扫描：既是候选的来源，也是写入时的查重基线
-  const all = await runCli([...listArgs, '--all', '--fields', DUP_LIST_FIELDS], env);
-  const rows = rowsOf(all.data);
+  const all = await runListScan([...listArgs, '--fields', DUP_LIST_FIELDS], productId, env);
+  const rows = all.rows;
   const baseline = rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
 
   // 变体组交给 CLI：一次 --search 一组（组内=且），多组之间=或；--search-fields title 把检索范围限制在标题
   const searchArgs = [];
   for (const group of groups) searchArgs.push('--search', group);
   searchArgs.push('--search-fields', 'title');
-  const found = await runCli([...listArgs, '--all', '--fields', DUP_LIST_FIELDS, ...searchArgs], env);
-  const hits = rowsOf(found.data);
+  const found = await runListScan([...listArgs, '--fields', DUP_LIST_FIELDS, ...searchArgs], productId, env);
+  const hits = found.rows;
 
   // 精确度自己把关：CLI 只给候选，覆盖比例不到门槛的丢掉，剩下的按匹配度降序
   const candidates = rankByMatch(title, hits, (row) => row.title, hits.length).map((row) => ({
     row,
     score: matchScore(title, row.title),
   }));
+
+  // 两次扫描碰上同一条分页缺陷：任一次没扫全，整次查重就算覆盖不完整
+  const complete = all.complete && found.complete;
+  const reason = all.complete ? found.reason : all.reason;
+  // 丢弃的异物记录按基线那次扫描来说（另一次只是同一批记录的检索视图，相加会重复计）
+  const foreign = all.foreign;
 
   const label = kind === 'bug' ? '缺陷' : '反馈';
   out(`# 查重（产品 ${productId} · ${label}单；标题关键词匹配，客户端完成）`);
@@ -1416,17 +1544,42 @@ async function cmdDup(env, opts) {
       [cell(row.id), cell(row.title), cell(row.status), assignee(row.assignedTo), `${Math.round(score * 100)}%`].join('\t')
     );
   }
-  const scope = candidates.length
-    ? `在你可见的 ${rows.length} 条${label}中发现 ${candidates.length} 条相近记录`
-    : `在你可见的 ${rows.length} 条${label}中未发现重复`;
-  out(`# 覆盖范围：${scope}（在标题里命中 ${hits.length} 条）`);
-  out(`# 基线（本次扫描到的 ${baseline.length} 个单据 ID；基线之外的编号才可能是本次新建）`);
+  const hitsNote = `（在标题里命中 ${hits.length} 条）`;
+  const droppedNote = foreign.count
+    ? `；另有 ${foreign.count} 条返回记录 product 字段是 ${foreign.products.join('/')}，不属于产品 ${productId}，已丢弃`
+    : '';
+  if (complete && !foreign.count) {
+    const scope = candidates.length
+      ? `在你可见的 ${rows.length} 条${label}中发现 ${candidates.length} 条相近记录`
+      : `在你可见的 ${rows.length} 条${label}中未发现重复`;
+    out(`# 覆盖范围：${scope}${hitsNote}`);
+  } else if (complete) {
+    const scope = candidates.length
+      ? `在这 ${rows.length} 条${label}中发现 ${candidates.length} 条相近记录`
+      : `在这 ${rows.length} 条${label}中未发现重复`;
+    out(`# 覆盖范围：${scope}${hitsNote}${droppedNote}`);
+  } else {
+    // 没扫全就不说「在你可见的 N 条中未发现重复」：那是把第 1 页当成了全部
+    const scope = candidates.length
+      ? `这 ${rows.length} 条里发现 ${candidates.length} 条相近记录`
+      : `这 ${rows.length} 条里未发现重复`;
+    const claim = all.total > rows.length + foreign.count ? `，服务端称共有 ${all.total} 条` : '';
+    out(`# 覆盖范围：只扫到 ${rows.length} 条${label}${claim}，${reason}，覆盖不完整——${scope}，不等于全部可见记录里没有${hitsNote}${droppedNote}`);
+  }
+  out(
+    complete && !foreign.count
+      ? `# 基线（本次扫描到的 ${baseline.length} 个单据 ID；基线之外的编号才可能是本次新建）`
+      : `# 基线（本次只扫到 ${baseline.length} 个单据 ID，${complete ? '有记录不属于本产品、' : `${reason}、`}基线不完整；写入后不能用它判断哪些是本次新建）`
+  );
   out(
     JSON.stringify({
       ok: true,
       kind,
       product: Number(productId),
       scanned: rows.length,
+      complete: complete && !foreign.count,
+      total: all.total,
+      foreignRecords: foreign.count,
       candidateIds: candidates.map((entry) => Number(entry.row.id)),
       baseline,
     })
