@@ -122,11 +122,11 @@ node <技能目录>/scripts/zentao-write.mjs bug-create --payload-file /tmp/rh-p
 
 ### 2.5 创建
 
-写入走随包的写入脚本（**不要调宿主里的禅道 MCP 工具**：它的身份是服务端配置的固定账号，单据会留痕在那个账号名下）。先把 payload 内容写进一个临时 JSON 文件，再调脚本；载荷文件里放 payload 的内容本身，**不要再套一层 `payload`**。临时文件放本机临时目录（macOS / Linux 用 `/tmp/rh-zentao-payload.json`，Windows 用 `%TEMP%\rh-zentao-payload.json`），用完删掉。
+写入走随包脚本（**不要调宿主里的禅道 MCP 工具**：它的身份是服务端配置的固定账号，单据会留痕在那个账号名下）。载荷先写进一个临时 JSON 文件，再交给脚本——**正文只走文件，不进命令行参数**；文件里放请求体本身，**不要再套一层 `payload`**。临时文件放本机临时目录（macOS / Linux 用 `/tmp/rh-zentao-payload.json`，Windows 用 `%TEMP%\rh-zentao-payload.json`），用完删掉。
 
 ```bash
 node <技能目录>/scripts/zentao-write.mjs feedback-create --payload-file /tmp/rh-payload.json
-node <技能目录>/scripts/zentao-write.mjs bug-create      --payload-file /tmp/rh-payload.json
+node <技能目录>/scripts/zentao.mjs       bug-create      --payload-file /tmp/rh-payload.json
 ```
 
 ```json
@@ -134,26 +134,26 @@ node <技能目录>/scripts/zentao-write.mjs bug-create      --payload-file /tmp
 {"productID": 42, "title": "<标题>", "openedBuild": ["trunk"], "severity": 3, "pri": 3, "type": "codeerror", "steps": "<正文 HTML>"}
 ```
 
-- 脚本输出一行 JSON：`{"ok":true,"kind":"bug-create","id":"1945","status":"success","message":"保存成功"}`。`ok:false` → 按失败处理，并把 `message` 里的服务端原因告诉终端用户；`uncertain:true` → 按「结果不确定」处理（见 2.6）。
+- 缺陷单的 `bug-create` 输出一行 JSON：`{"ok":true,"kind":"bug","id":1945,"title":"…","status":"active","assignedTo":"","assigneeSource":"package","openedBy":"<账号>","url":"<禅道 Web 地址>/bug-view-1945.html","verified":"readback"}`——脚本写完自己按编号回读核对，`verified` 说明结论来自回读（`readback`）还是超时后的查询核实（`query`）；回读对不上 → `ok:false` + `created:true` + `mismatches`，**不要重建**；`uncertain:true` → 按「结果不确定」处理（见 2.6）。
 - **只发一次调用**：脚本只发一次请求；禅道创建接口没有幂等键，重发会产生两条记录。
-- 字段名与枚举见 [references/zentao-mcp.md](references/zentao-mcp.md)，两条路径的差异见 [3. 反馈单与缺陷单的差异](#3-反馈单与缺陷单的差异)。
-- **缺陷单的负责人按「终端用户明说 > 本机默认 > 随包默认 > 缺省」解析**，随包默认是**不指派**（`""`），代码兜底是**产品 QD**。终端用户明说指派给谁 → 载荷写 `assignedTo`；否则**不要写这个字段**，由写入脚本按配置补（`""` 不指派 / `"qd"` 交给产品 QD / 账号名指给该账号）。配置见 [references/setup.md](references/setup.md)「默认负责人」。
+- 字段名与枚举见 [references/zentao-cli.md](references/zentao-cli.md)，两条路径的差异见 [3. 反馈单与缺陷单的差异](#3-反馈单与缺陷单的差异)。
+- **缺陷单的负责人按「终端用户明说 > 本机默认 > 随包默认 > 代码兜底」解析**，随包默认是**不指派**（`""`），代码兜底是**产品 QD**。终端用户明说指派给谁 → 载荷写 `assignedTo`；否则**不要写这个字段**，由入口脚本按配置补（`""` 不指派 / `"qd"` 不带该字段、交给产品 QD / 账号名指给该账号）。配置见 [references/setup.md](references/setup.md)「默认负责人」。
 - `source` / `module` / `feedbackBy` 保持不填：反馈者由禅道按当前禅道账号自动记录，填了反而与实际留痕矛盾。
 - 给了截图 → 建单成功后按 [6](#6-正文带图片) 传图并更新正文。
 
 ### 2.6 回读校验
 
-用返回的 `id` 调查询器 `feedback --id <ID>` / `bug --id <ID>`（**不要用 `get_issues_issueID`**——它解析不了缺陷 ID），核对：产品、标题、完整描述（缺陷单是 `steps`，比较前先剥掉 HTML 标签并归一化换行与空白），以及 `actions` 里**本次新增**了 `opened`（历史上存在过不算）。缺陷单另核对 `openedBuild`（列表显示「主干」、详情显示 `trunk`，两者指同一个值）与 `severity` / `pri`，以及 `assignedTo` 是否与生效值一致（生效值是产品 QD 就用查询器 `qd` 取 QD 账号对照，对不上如实说明，不要改单据）。
+用返回的 `id` 调查询器 `feedback --id <ID>` / `bug --id <ID>`（**不要用 `get_issues_issueID`**——它解析不了缺陷 ID），核对：产品、标题、完整描述（缺陷单是 `steps`，比较前先剥掉 HTML 标签并归一化换行与空白），以及 `actions` 里**本次新增**了 `opened`（历史上存在过不算）。缺陷单另核对 `openedBuild`（列表显示「主干」、详情显示 `trunk`，两者指同一个值）与 `severity` / `pri`，以及 `assignedTo` 是否与生效值一致（生效值是产品 QD 就用查询器 `qd` 取 QD 账号对照，对不上如实说明，不要改单据）。缺陷单的 `bug-create` 已经按返回编号做完这套核对（输出里的 `verified` 说明结论是回读还是查询核实），终端用户要细节时再调查询器 `bug --id <ID>`。
 
 任一不一致 → 按 [references/error-handling.md](references/error-handling.md) 处理：先查后报，不重复创建。
 
-**结果不确定时（超时、断连、返回无法解析）**：不重发创建请求。重新扫描该产品，只把「查重基线里没有的 ID + 回读后产品、标题、完整描述都一致 + 有 `opened` 流水」的候选当作可能的新建：恰好一条 → 按创建成功交付，并说明是查询核实到的；多条 → 报无法唯一确认并列出候选；零条或扫描不完整 → 报未确认，交回终端用户。
+**结果不确定时（超时、断连、返回无法解析）**：不重发创建请求。重新扫描该产品，只把「查重基线里没有的 ID + 回读后产品、标题、完整描述都一致 + 有 `opened` 流水」的候选当作可能的新建：恰好一条 → 按创建成功交付，并说明是查询核实到的；多条 → 报无法唯一确认并列出候选；零条或扫描不完整 → 报未确认，交回终端用户。缺陷单的 `bug-create` 自己就是这么做的（写入前拍一次基线，超时后重查该产品），Agent 只需把输出里的 `uncertain` / `verified` 如实转述。
 
 **响应里没有可解析的业务状态**（HTTP 200 但正文为空、或只回了 JSON-RPC 错误）时，按结果不确定处理。参数错误（JSON-RPC `-32602`，payload 缺必填字段）除外：请求根本没被执行，按失败处理并把服务端的原因告诉终端用户。
 
 ### 2.7 交付
 
-给出单据 ID、标题、当前状态、负责人（说清是谁、怎么来的：产品 QD 承接 / 终端用户指名 / 尚未指派）、提交人（当前禅道账号本人）、**禅道直达链接**，以及下一步建议（等待评审 / 需要补充什么信息 / 与哪条既有单重复）。输出样例见 [references/workflow.md](references/workflow.md)。
+给出单据 ID、标题、当前状态、负责人（说清是谁、怎么来的：终端用户指名 / 本机默认 / 随包默认未指派 / 产品 QD）、提交人（当前禅道账号本人）、**禅道直达链接**，以及下一步建议（等待评审 / 需要补充什么信息 / 与哪条既有单重复）。输出样例见 [references/workflow.md](references/workflow.md)。
 
 **链接**：`<禅道 Web 地址>/feedback-view-<反馈 ID>.html` 或 `<禅道 Web 地址>/bug-view-<缺陷 ID>.html`。禅道 Web 地址读技能包内 `config.local.json` 的 `zentaoWebUrl`；读不到或该字段为空 → **不给链接**，只给 ID，并如实说明「技能包里没有配置禅道 Web 地址，给不了直达链接」。不要拿 MCP 地址拼链接，也不要凭印象编一个；给完整 URL，用户点开就能看，不要只写「去禅道看 #421」。
 
@@ -169,6 +169,8 @@ node <技能目录>/scripts/zentao-write.mjs bug-create      --payload-file /tmp
 | 项目 | 不挂 | 与产品同名的项目 → 挂它；没有同名项目而可见项目只有一个 `doing` 项目 → 挂它；多个 `doing` 项目且无同名 → 不挂并在草稿注明「未指定项目」；他明说「这是 XX 项目的」→ 挂对应的（先用查询器 `projects` 确认存在）。禅道的项目列表不按产品过滤（`get_projects` 传 `productID` 也返回全部可见项目） |
 | 选品 | 本机默认产品一层 | 多一层随包默认产品：用它建单前确认一句「默认记到 <产品名> 对吗？」 |
 | 草稿声明 | — | 必须写「即将创建的是禅道正式缺陷单（会进入开发流程），不是反馈单。」 |
+| 写入与回读 | 写入脚本 `feedback-create`，写完再调查询器 `feedback --id` 核对 | 入口脚本 `bug-create`：只发一次，写完自己按编号回读核对（输出 `assigneeSource` 与 `verified`） |
+| 负责人 | 不指派 | 终端用户明说 > 本机默认 > 随包默认（未指派）> 代码兜底（产品 QD）；交付要说清来源 |
 | 附带反馈单 | — | 不附带：禅道没有「反馈转缺陷」的关联字段，一次诉求只建一张单 |
 
 ## 4. 查询与解释进度
