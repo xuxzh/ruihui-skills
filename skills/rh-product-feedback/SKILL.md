@@ -119,7 +119,7 @@ node <技能目录>/scripts/zentao-write.mjs bug-create --payload-file /tmp/rh-p
 
 ### 2.5 创建
 
-写入走随包的写入脚本（**不要调宿主里的禅道 MCP 工具**：它的身份是服务端配置的固定账号，单据会留痕在那个账号名下）。先把 payload 内容写进一个临时 JSON 文件，再调脚本；载荷文件里放 payload 的内容本身，**不要再套一层 `payload`**。
+写入走随包的写入脚本（**不要调宿主里的禅道 MCP 工具**：它的身份是服务端配置的固定账号，单据会留痕在那个账号名下）。先把 payload 内容写进一个临时 JSON 文件，再调脚本；载荷文件里放 payload 的内容本身，**不要再套一层 `payload`**。临时文件放本机临时目录（macOS / Linux 用 `/tmp/rh-zentao-payload.json`，Windows 用 `%TEMP%\rh-zentao-payload.json`），用完删掉。
 
 ```bash
 node <技能目录>/scripts/zentao-write.mjs feedback-create --payload-file /tmp/rh-payload.json
