@@ -23,10 +23,18 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 
-// qd 是产品默认承接人：建单不指定负责人时，禅道会指派给他（ADR-0016 / ADR-0018 的语义）
+// QD 是产品默认承接人：建单不指定负责人时，禅道会指派给他（ADR-0016 / ADR-0018 的语义）。
+// 字段名与真禅道一致：大写 QD（小写 qd 不是合法字段名，会被投影忽略）。
 export const MOCK_API_PRODUCTS = [
-  { id: 101, name: '示例产品 A', code: 'demo-a', status: 'normal', qd: 'mock-qd' },
-  { id: 102, name: '示例产品 B', code: 'demo-b', status: 'normal', qd: '' },
+  { id: 101, name: '示例产品 A', code: 'demo-a', status: 'normal', QD: 'mock-qd' },
+  { id: 102, name: '示例产品 B', code: 'demo-b', status: 'normal', QD: '' },
+];
+
+// 用户表：产品 QD 指向的账号及它的软失效标记（deleted / locked）与最后登录
+export const MOCK_API_USERS = [
+  { account: 'mock-qd', realname: '模拟质负', deleted: '0', locked: '', last: '2026-10-27 17:21:36' },
+  { account: 'mock-qd-deleted', realname: '已删质负', deleted: '1', locked: '', last: '2025-01-02 09:00:00' },
+  { account: 'mock-qd-locked', realname: '锁定质负', deleted: '0', locked: '1', last: '2025-06-01 08:00:00' },
 ];
 
 export const MOCK_API_PROJECTS = [
@@ -52,6 +60,7 @@ export function createMockApiState(overrides = {}) {
     // 换过几次令牌、给谁换的（测试用来断言认证走的是账号密码）
     tokenRequests: [],
     products: MOCK_API_PRODUCTS.map((p) => ({ ...p })),
+    users: MOCK_API_USERS.map((u) => ({ ...u })),
     projects: MOCK_API_PROJECTS.map((p) => ({ ...p })),
     bugs: new Map(),
     feedbacks: new Map(),
@@ -172,7 +181,7 @@ function newRecord(state, account, payload, kind) {
 // 产品的默认承接人（QD）：建单不指定负责人时，禅道按产品的 QD 指派
 function qdOf(state, productId) {
   const product = state.products.find((p) => Number(p.id) === Number(productId));
-  return String(product?.qd || '');
+  return String(product?.QD || '');
 }
 
 // 当前账号看不见这个产品：读列表过滤、写入报业务失败（权限边界，不静默换个产品）
@@ -301,6 +310,9 @@ function route(state, req, pathname, query, token, payload) {
   }
   if (req.method === 'GET' && pathname === '/api.php/v2/projects') {
     return { body: listBody('projects', state.projects, query) };
+  }
+  if (req.method === 'GET' && pathname === '/api.php/v2/users') {
+    return { body: listBody('users', state.users, query) };
   }
 
   let m = pathname.match(/^\/api\.php\/v2\/products\/(\d+)\/bugs$/);

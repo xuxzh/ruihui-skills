@@ -11,14 +11,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { MOCK_API_ACCOUNT, MOCK_API_ACCOUNTS, createMockApiState, startMockApi } from './mock-zentao-api.mjs';
+import { MOCK_API_ACCOUNT, MOCK_API_ACCOUNTS } from './mock-zentao-api.mjs';
+import { findZentaoCli, installCliShim, runEntryScript, withMockApi } from './zentao-client.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SCRIPT = path.join(ROOT, 'skills', 'rh-product-feedback', 'scripts', 'zentao.mjs');
 const ACCOUNT = MOCK_API_ACCOUNT;
 const PASSWORD = MOCK_API_ACCOUNTS[ACCOUNT];
 const FILES_PATH = '/api.php/v2/files';
@@ -28,25 +24,11 @@ const PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AAAwAB/wFRIQAAAABJRU5ErkJggg==';
 
 // 入口脚本靠官方禅道 CLI 取数写数；没装就别假装测过
-function findCli() {
-  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
-    if (!dir) continue;
-    const file = path.join(dir, process.platform === 'win32' ? 'zentao.cmd' : 'zentao');
-    try {
-      fs.accessSync(file, fs.constants.X_OK);
-      return file;
-    } catch {
-      // 继续找下一个目录
-    }
-  }
-  return '';
-}
-
-const ZENTAO_CLI = findCli();
+const ZENTAO_CLI = findZentaoCli();
 const NEEDS_CLI = ZENTAO_CLI ? false : '没装禅道 CLI（npm i -g zentao-cli）：入口脚本靠它传图，装好再跑这份测试';
 
-// 替身 CLI：把收到的命令行参数记下来，再按 RH_CLI_SHIM_MODE 决定是给固定响应还是转给真的禅道 CLI。
-// 这样能测「CLI 给了看不懂的响应」这类分支，也能直接看到「脚本对 CLI 说了什么」。
+// 这支测试专用的替身 CLI：除了记 argv，还能按 RH_CLI_SHIM_MODE 给固定响应——
+// 测「CLI 回了看不懂的响应」「超时」这类分支，通用替身只做记录 + 转发。
 const SHIM_SOURCE = `#!/usr/bin/env node
 const fs = require('node:fs');
 if (process.env.RH_CLI_SHIM_LOG) fs.appendFileSync(process.env.RH_CLI_SHIM_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');
@@ -63,6 +45,10 @@ const { execFileSync } = require('node:child_process');
 execFileSync(process.env.RH_CLI_REAL, process.argv.slice(2), { stdio: 'inherit', env: process.env });
 `;
 
+/** 起假服务 + 隔离的本机配置（凭据、随包配置都落在临时目录里）。 */
+const withMock = (overrides, fn) =>
+  withMockApi({ tag: 'rh-cli-file', config: { bugAssignee: '' }, ...overrides }, fn);
+
 const BUG_STEPS = ['<p><strong>[步骤]</strong></p>', '<p>1. 打开「设备管理」</p>', '<p>2. 点「导出」</p>'].join('');
 
 /** 一张真实存在的图片文件（默认写在临时目录里）。 */
@@ -76,44 +62,6 @@ function writePayload(dir, payload) {
   const file = path.join(dir, `payload-${process.pid}-${Math.random().toString(16).slice(2)}.json`);
   fs.writeFileSync(file, JSON.stringify(payload));
   return file;
-}
-
-function writeCredentials(dir) {
-  const file = path.join(dir, 'credentials');
-  fs.writeFileSync(file, `ZENTAO_ACCOUNT=${ACCOUNT}\nZENTAO_PASSWORD=${PASSWORD}\n`);
-  return file;
-}
-
-// 入口脚本是子进程；假服务跑在当前进程里，所以必须用异步 execFile——
-// 同步等待会卡住当前事件循环，假服务就没人应答了。cwd 决定图片相对路径的基准。
-function runScript(args, env, cwd) {
-  return new Promise((resolve) => {
-    execFile(
-      process.execPath,
-      [SCRIPT, ...args],
-      { env: { ...process.env, ...env }, cwd: cwd || ROOT },
-      (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout: stdout ?? '', stderr: stderr ?? '' }),
-    );
-  });
-}
-
-/** 起假服务 + 隔离的本机配置（凭据、随包配置都落在临时目录里）。 */
-async function withMock(overrides, fn) {
-  const server = await startMockApi(createMockApiState(overrides));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rh-cli-file-'));
-  const packageConfig = path.join(dir, 'config.local.json');
-  fs.writeFileSync(packageConfig, JSON.stringify({ zentaoWebUrl: server.url, bugAssignee: '' }));
-  const env = {
-    ZENTAO_WEB_URL: server.url,
-    ZENTAO_CREDENTIALS_FILE: writeCredentials(dir),
-    ZENTAO_PACKAGE_CONFIG_FILE: packageConfig,
-  };
-  try {
-    await fn({ server, env, dir });
-  } finally {
-    await server.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 function uploads(server) {
@@ -139,22 +87,8 @@ function singleLineJson(stdout) {
 
 /** 起一个替身 CLI，返回它的 argv 日志路径与环境变量。 */
 function useShim(dir, env, mode) {
-  const bin = path.join(dir, 'bin');
-  fs.mkdirSync(bin, { recursive: true });
-  const shim = path.join(bin, process.platform === 'win32' ? 'zentao.cmd' : 'zentao');
-  fs.writeFileSync(shim, SHIM_SOURCE);
-  fs.chmodSync(shim, 0o755);
-  const argvLog = path.join(dir, 'cli-argv.log');
-  return {
-    argvLog,
-    env: {
-      ...env,
-      PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-      RH_CLI_SHIM_LOG: argvLog,
-      RH_CLI_SHIM_MODE: mode,
-      RH_CLI_REAL: ZENTAO_CLI,
-    },
-  };
+  const shim = installCliShim(dir, ZENTAO_CLI, { source: SHIM_SOURCE });
+  return { argvLog: shim.argvLog, env: { ...env, ...shim.env, RH_CLI_SHIM_MODE: mode } };
 }
 
 // ---------------------------------------------------------------- 传图：成功路径
@@ -164,7 +98,7 @@ test('F01 缺陷单传图：图片挂到已存在的缺陷单上，输出文件�
   const bugs = new Map([[1900, { id: 1900, title: '设备列表导出无响应', product: 101, status: 'active', steps: BUG_STEPS }]]);
   await withMock({ bugs, nextFileId: 6530 }, async ({ server, env, dir }) => {
     const image = writeImage(dir);
-    const { code, stdout, stderr } = await runScript(
+    const { code, stdout, stderr } = await runEntryScript(
       ['file-create', '--file', image, '--object-type', 'bug', '--object-id', '1900'],
       env,
     );
@@ -198,7 +132,7 @@ test('F02 反馈单传图：--object-type feedback 透传给服务端并绑定�
   const feedbacks = new Map([[900, { id: 900, title: '导出失败', product: 101, status: 'active', desc: '点了没反应' }]]);
   await withMock({ feedbacks, nextFileId: 6531 }, async ({ server, env, dir }) => {
     const image = writeImage(dir, 'shot.png');
-    const { code, stdout, stderr } = await runScript(
+    const { code, stdout, stderr } = await runEntryScript(
       ['file-create', '--file', image, '--object-type', 'feedback', '--object-id', '900'],
       env,
     );
@@ -220,7 +154,7 @@ test('F02 反馈单传图：--object-type feedback 透传给服务端并绑定�
 test('F03 图片引用指向附件：相对路径 + 小写扩展名，不用内联数据', { skip: NEEDS_CLI }, async () => {
   await withMock({ nextFileId: 6530 }, async ({ env, dir }) => {
     const image = writeImage(dir, 'ScreenShot.PNG');
-    const { code, stdout, stderr } = await runScript(
+    const { code, stdout, stderr } = await runEntryScript(
       ['file-create', '--file', image, '--object-type', 'bug', '--object-id', '1900'],
       env,
     );
@@ -243,10 +177,10 @@ test('F04 相对路径按命令执行目录解析：脚本不产生临时文件�
     writeImage(workdir, 'shot.png');
     const before = fs.readdirSync(workdir).sort();
 
-    const { code, stdout, stderr } = await runScript(
+    const { code, stdout, stderr } = await runEntryScript(
       ['file-create', '--file', 'shot.png', '--object-type', 'bug', '--object-id', '1900'],
       env,
-      workdir,
+      { cwd: workdir },
     );
     assert.equal(code, 0, stderr);
 
@@ -264,7 +198,7 @@ test('F04 相对路径按命令执行目录解析：脚本不产生临时文件�
 test('F05 服务端拒绝上传：如实报错，不改用文字描述假装图片已放上去', { skip: NEEDS_CLI }, async () => {
   await withMock({ failPaths: [FILES_PATH] }, async ({ server, env, dir }) => {
     const image = writeImage(dir);
-    const { code, stdout, stderr } = await runScript(
+    const { code, stdout, stderr } = await runEntryScript(
       ['file-create', '--file', image, '--object-type', 'bug', '--object-id', '1900'],
       env,
     );
@@ -281,7 +215,7 @@ test('F06 上传返回里没有文件标识：按失败处理，不给图片引�
   await withMock({}, async ({ env, dir }) => {
     const image = writeImage(dir);
     const shim = useShim(dir, env, 'no-id');
-    const { code, stdout, stderr } = await runScript(
+    const { code, stdout, stderr } = await runEntryScript(
       ['file-create', '--file', image, '--object-type', 'bug', '--object-id', '1900'],
       shim.env,
     );
@@ -297,7 +231,7 @@ test('F07 上传结果不确定（超时）：报未确认，不重传', { skip:
   await withMock({}, async ({ env, dir }) => {
     const image = writeImage(dir);
     const shim = useShim(dir, env, 'timeout');
-    const { code, stdout, stderr } = await runScript(
+    const { code, stdout, stderr } = await runEntryScript(
       ['file-create', '--file', image, '--object-type', 'bug', '--object-id', '1900'],
       shim.env,
     );
@@ -331,7 +265,7 @@ test('F07 上传结果不确定（超时）：报未确认，不重传', { skip:
 
 test('F08 图片文件找不到：本地就报错，一个上传请求都不发', { skip: NEEDS_CLI }, async () => {
   await withMock({}, async ({ server, env, dir }) => {
-    const { code, stdout, stderr } = await runScript(
+    const { code, stdout, stderr } = await runEntryScript(
       ['file-create', '--file', path.join(dir, 'nope.png'), '--object-type', 'bug', '--object-id', '1900'],
       env,
     );
@@ -345,15 +279,15 @@ test('F08 图片文件找不到：本地就报错，一个上传请求都不发'
 test('F09 用法错误：object-type 只认 bug 与 feedback，缺参数报用法', { skip: NEEDS_CLI }, async () => {
   await withMock({}, async ({ server, env, dir }) => {
     const image = writeImage(dir);
-    const story = await runScript(['file-create', '--file', image, '--object-type', 'story', '--object-id', '1'], env);
+    const story = await runEntryScript(['file-create', '--file', image, '--object-type', 'story', '--object-id', '1'], env);
     assert.equal(story.code, 2);
     assert.match(story.stderr, /^错误：用法：.*file-create --file/);
 
-    const missing = await runScript(['file-create', '--file', image, '--object-type', 'bug'], env);
+    const missing = await runEntryScript(['file-create', '--file', image, '--object-type', 'bug'], env);
     assert.equal(missing.code, 2);
     assert.match(missing.stderr, /单据 ID 是数字/);
 
-    const bogus = await runScript(['file-create', '--file', image, '--object-type', 'bug', '--object-id', '1900', '--bogus', '1'], env);
+    const bogus = await runEntryScript(['file-create', '--file', image, '--object-type', 'bug', '--object-id', '1900', '--bogus', '1'], env);
     assert.equal(bogus.code, 2);
     assert.equal(uploads(server).length, 0);
   });
@@ -373,13 +307,13 @@ test('F10 顺序固定：先建单 → 再传图 → 再更新正文，回读能
       type: 'codeerror',
       steps: BUG_STEPS,
     });
-    const created = await runScript(['bug-create', '--payload-file', bugFile], env);
+    const created = await runEntryScript(['bug-create', '--payload-file', bugFile], env);
     assert.equal(created.code, 0, created.stderr);
     assert.equal(singleLineJson(created.stdout).id, 1900);
 
     // 2. 传图：挂在刚建好的缺陷单上
     const image = writeImage(dir);
-    const uploaded = await runScript(['file-create', '--file', image, '--object-type', 'bug', '--object-id', '1900'], env);
+    const uploaded = await runEntryScript(['file-create', '--file', image, '--object-type', 'bug', '--object-id', '1900'], env);
     assert.equal(uploaded.code, 0, uploaded.stderr);
     const fileResult = singleLineJson(uploaded.stdout);
     assert.equal(fileResult.fileId, 6530);
@@ -390,7 +324,7 @@ test('F10 顺序固定：先建单 → 再传图 → 再更新正文，回读能
       steps: `${BUG_STEPS}\n\n${appended}`,
       expectedBody: BUG_STEPS,
     });
-    const updated = await runScript(['bug-update', '--id', '1900', '--payload-file', updateFile], env);
+    const updated = await runEntryScript(['bug-update', '--id', '1900', '--payload-file', updateFile], env);
     assert.equal(updated.code, 0, updated.stderr);
     assert.equal(singleLineJson(updated.stdout).updated, true);
 
@@ -411,7 +345,7 @@ test('F10 顺序固定：先建单 → 再传图 → 再更新正文，回读能
     assert.ok(uploadAt < updateAt, '先传图再更新正文');
 
     // Agent 的回读视图：追加段落的说明文字看得到（HTML 标签会被查询输出剥掉）
-    const readback = await runScript(['bug', '--id', '1900'], env);
+    const readback = await runEntryScript(['bug', '--id', '1900'], env);
     assert.equal(readback.code, 0, readback.stderr);
     assert.match(singleLineJson(readback.stdout).body, /【补充说明 · 截图 1】/);
   });

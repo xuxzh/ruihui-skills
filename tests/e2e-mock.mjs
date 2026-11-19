@@ -9,13 +9,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {
-  MOCK_API_ACCOUNT,
-  MOCK_API_ACCOUNTS,
-  createMockApiState,
-  startMockApi,
-} from './mock-zentao-api.mjs';
-import { ZentaoEntry, findZentaoCli } from './zentao-client.mjs';
+import { MOCK_API_ACCOUNT, MOCK_API_ACCOUNTS } from './mock-zentao-api.mjs';
+import { ZentaoEntry, findZentaoCli, installCliShim, withMockApi } from './zentao-client.mjs';
 import { FeedbackAssistant, DefectAssistant, pickProduct } from './skill-flow.mjs';
 import { runLiveE2E, runLiveBugE2E, resolveWriteGate } from './e2e-live-flow.mjs';
 
@@ -26,15 +21,6 @@ const NEEDS_CLI = ZENTAO_CLI ? false : '没装禅道 CLI（npm i -g zentao-cli�
 const ACCOUNT = MOCK_API_ACCOUNT;
 const PASSWORD = MOCK_API_ACCOUNTS[ACCOUNT];
 const PRODUCT_ID = 101;
-
-// 替身 CLI：把收到的命令行参数记下来，再原样交给真的禅道 CLI。
-// 这样测试能直接看到「脚本对 CLI 说了什么」，而不必猜脚本内部怎么拼参数。
-const SHIM_SOURCE = `#!/usr/bin/env node
-const fs = require('node:fs');
-const { execFileSync } = require('node:child_process');
-fs.appendFileSync(process.env.RH_CLI_SHIM_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');
-execFileSync(process.env.RH_CLI_REAL, process.argv.slice(2), { stdio: 'inherit', env: process.env });
-`;
 
 const DRAFT = {
   title: '设备列表导出按钮点击后无响应',
@@ -53,12 +39,6 @@ const BUG_STEPS = [
   '<p>应导出 Excel</p>',
 ].join('');
 const BUG_DRAFT = { title: '设备列表导出按钮点击后无响应', steps: BUG_STEPS, productId: PRODUCT_ID };
-
-function writeCredentials(dir) {
-  const file = path.join(dir, 'credentials');
-  fs.writeFileSync(file, `ZENTAO_ACCOUNT=${ACCOUNT}\nZENTAO_PASSWORD=${PASSWORD}\n`);
-  return file;
-}
 
 /** 假服务里已经存在的一条反馈（详情字段与真禅道一致）。 */
 function seedFeedback(state, id, overrides = {}) {
@@ -105,47 +85,20 @@ const bugCreates = (state) => state.calls.filter((c) => c.method === 'POST' && c
 const updatesOf = (state, kind) => state.calls.filter((c) => c.method === 'PUT' && c.path.startsWith(`/api.php/v2/${kind}s/`));
 
 /**
- * 起假服务 + 隔离的本机配置：
+ * 起假服务 + 隔离的本机配置，再给测试包一层入口脚本适配器：
  *   credentials（凭据）、preferences.json（本机偏好）、config.local.json（随包默认）
  * 三份文件都落在临时目录里，测试不碰开发者本机的真实配置。
  */
 async function withAssistant({ config = { bugAssignee: '' }, preferences = {}, credentials = true, ...overrides }, fn) {
-  const server = await startMockApi(createMockApiState(overrides));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rh-e2e-mock-'));
-  const packageConfig = path.join(dir, 'config.local.json');
-  fs.writeFileSync(packageConfig, JSON.stringify({ zentaoWebUrl: server.url, ...config }));
-  const preferencesFile = path.join(dir, 'preferences.json');
-  fs.writeFileSync(preferencesFile, JSON.stringify(preferences));
-  const env = {
-    ZENTAO_WEB_URL: server.url,
-    ZENTAO_CREDENTIALS_FILE: credentials ? writeCredentials(dir) : path.join(dir, 'missing-credentials'),
-    ZENTAO_PACKAGE_CONFIG_FILE: packageConfig,
-    ZENTAO_PREFERENCES_FILE: preferencesFile,
-  };
-  const zentao = new ZentaoEntry({ env });
-  try {
-    await fn({ zentao, server, state: server.state, env, dir });
-  } finally {
-    await server.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  await withMockApi({ tag: 'rh-e2e-mock', config, preferences, credentials, ...overrides }, async (ctx) => {
+    await fn({ ...ctx, zentao: new ZentaoEntry({ env: ctx.env }) });
+  });
 }
 
 /** 在 PATH 前面插一个记录 argv 的替身 CLI（断言「脚本对 CLI 说了什么」用）。 */
 function withCliShim(dir, env, run) {
-  const bin = path.join(dir, 'bin');
-  fs.mkdirSync(bin);
-  const shim = path.join(bin, process.platform === 'win32' ? 'zentao.cmd' : 'zentao');
-  fs.writeFileSync(shim, SHIM_SOURCE);
-  fs.chmodSync(shim, 0o755);
-  const argvLog = path.join(dir, 'cli-argv.log');
-  const shimEnv = {
-    ...env,
-    PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-    RH_CLI_SHIM_LOG: argvLog,
-    RH_CLI_REAL: ZENTAO_CLI,
-  };
-  return run(new ZentaoEntry({ env: shimEnv }), argvLog);
+  const shim = installCliShim(dir, ZENTAO_CLI);
+  return run(new ZentaoEntry({ env: { ...env, ...shim.env } }), shim.argvLog);
 }
 
 function readArgv(argvLog) {

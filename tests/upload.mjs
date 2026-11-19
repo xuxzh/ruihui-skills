@@ -6,9 +6,10 @@
 //   - 凭据与令牌不进输出
 //   - 服务端拒绝、图片不存在都要明确失败，不假装图片已经放上去
 //
-// 迁移说明：旧上传脚本自带「逐字节回读」校验（直连 REST v2 读回文件比对字节）；
-// 新通道由官方禅道 CLI 完成上传，没有读回字节这个动作，对应用例（回读字节不一致）随之下线，
-// 「拿不到文件标识」的用例在 tests/zentao-cli-file.mjs F06/F07 里覆盖。
+// 迁移说明：旧上传脚本靠直连 REST v2 逐字节回读附件；官方禅道 CLI 没有 file get / file list，
+// 回读字节这条路不存在。等价覆盖是 U05：上传后回读目标单据，确认正文里有那张图的引用
+// （fileID 与上传返回一致）、附件挂载对象就是目标单据。「拿不到文件标识」的用例在
+// tests/zentao-cli-file.mjs F06/F07 里覆盖。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -121,5 +122,53 @@ test('U04 图片文件不存在：直接失败，一个上传请求都不发', {
     assert.equal(data.ok, false);
     assert.match(stderr, /找不到图片文件/);
     assert.equal(uploads(state).length, 0, '不该发出上传请求');
+  });
+});
+
+test('U05 上传后回读目标单据：正文里有那张图的引用，附件挂的就是这张单据', { skip: NEEDS_CLI }, async () => {
+  // 官方 CLI 没有 file get / file list，无法逐字节回读附件；
+  // 等价的覆盖是：回读目标单据，确认引用落在正文里、且附件挂载对象就是它。
+  const original = '【业务场景】\n仓管每天下班前导出对账。';
+  const record = {
+    id: 65,
+    product: 101,
+    title: '导出按钮点击后无响应',
+    desc: original,
+    type: 'advice',
+    status: 'wait',
+    feedbackBy: ACCOUNT,
+    openedBy: ACCOUNT,
+    openedDate: '2026-11-20 10:00:00',
+    actions: [{ id: 650, action: 'opened', actor: ACCOUNT, date: '2026-11-20 10:00:00', comment: '' }],
+  };
+  await withMock({ feedbacks: new Map([[record.id, record]]) }, async ({ zentao, state, imagePath }) => {
+    const upload = await zentao.fileCreate({ file: imagePath, objectType: 'feedback', objectId: record.id });
+    assert.equal(upload.code, 0, upload.stderr);
+
+    const update = await zentao.updateFeedback(record.id, {
+      product: record.product,
+      title: record.title,
+      desc: `${original}\n\n──────────────\n${upload.data.reference}`,
+      expectedBody: original,
+      appendLabel: '截图 1',
+    });
+    assert.equal(update.code, 0, update.stderr);
+    assert.equal(update.data.updated, true);
+
+    // 附件挂在目标单据上：上传请求带的 objectType / objectID 就是它，且只传了一次
+    assert.equal(uploads(state).length, 1, '附件只传一次');
+    const [sent] = uploads(state);
+    assert.match(sent.body, /name="objectType"[\s\S]*feedback/);
+    assert.match(sent.body, new RegExp(`name="objectID"[\\s\\S]*${record.id}`));
+
+    // 回读目标单据：正文里有那张图的引用（fileID 与上传返回一致）
+    const read = await zentao.feedback(record.id);
+    assert.equal(read.code, 0, read.stderr);
+    const stored = state.feedbacks.get(record.id).desc;
+    assert.match(stored, /【截图 1】/);
+    assert.ok(stored.includes(upload.data.reference), '正文里要有这张图的引用');
+    assert.ok(stored.includes(`fileID=${upload.data.fileId}`), '引用的 fileID 与上传返回的文件标识一致');
+    assert.match(read.data.body, /截图 1/, '详情回读看得到追加段落的标签');
+    assert.equal(read.data.actions.filter((a) => a.action === 'edited').length, 1, '本次新增了「编辑」流水');
   });
 });

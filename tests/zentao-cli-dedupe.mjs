@@ -1,76 +1,19 @@
-// 查重测试：中文词序不同的标题要能互相命中。
-// 运行：node --test tests/zentao-cli-dedupe.mjs
-//
-// 关注点（只看脚本对禅道说了什么、Agent 拿到什么）：
-//   - 查重助手把中文标题切成二元组，产出「组内且、组间或」的变体组
-//   - 「切换语言功能失效」与「语言切换功能失效」互相命中（ADR-0010 记过的坑）
-//   - 只在标题里匹配：正文里出现的词不算命中
-//   - 覆盖范围说清是「在你可见的 N 条」，并给出本次扫描的基线 ID
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { MOCK_API_ACCOUNT, MOCK_API_ACCOUNTS, createMockApiState, startMockApi } from './mock-zentao-api.mjs';
+import { ENTRY_SCRIPT, findZentaoCli, runEntryScript, runScript, withMockApi } from './zentao-client.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SCRIPTS = path.join(ROOT, 'skills', 'rh-product-feedback', 'scripts');
-const SCRIPT = path.join(SCRIPTS, 'zentao.mjs');
+const SCRIPTS = path.dirname(ENTRY_SCRIPT);
 const DEDUPE = path.join(SCRIPTS, 'zentao-dedupe.mjs');
-const ACCOUNT = MOCK_API_ACCOUNT;
-const PASSWORD = MOCK_API_ACCOUNTS[ACCOUNT];
 
-// 入口脚本要靠官方禅道 CLI 取数；没装就别假装测过
-function findCli() {
-  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
-    if (!dir) continue;
-    const file = path.join(dir, process.platform === 'win32' ? 'zentao.cmd' : 'zentao');
-    try {
-      fs.accessSync(file, fs.constants.X_OK);
-      return file;
-    } catch {
-      // 继续找下一个目录
-    }
-  }
-  return '';
-}
+const NEEDS_CLI = findZentaoCli() ? false : '没装禅道 CLI（npm i -g zentao-cli）：入口脚本靠它取数，装好再跑这份测试';
 
-const NEEDS_CLI = findCli() ? false : '没装禅道 CLI（npm i -g zentao-cli）：入口脚本靠它取数，装好再跑这份测试';
-
-function writeCredentials(dir) {
-  const file = path.join(dir, 'credentials');
-  fs.writeFileSync(file, `ZENTAO_ACCOUNT=${ACCOUNT}\nZENTAO_PASSWORD=${PASSWORD}\n`);
-  return file;
-}
-
-// 入口脚本与查重助手都是子进程；假服务跑在当前进程里，所以必须用异步的 execFile
-function runNode(script, args, env) {
-  return new Promise((resolve) => {
-    execFile(process.execPath, [script, ...args], { env: { ...process.env, ...env } }, (err, stdout, stderr) =>
-      resolve({ code: err?.code ?? 0, stdout: stdout ?? '', stderr: stderr ?? '' }),
-    );
-  });
-}
-
-async function withMock(setup, fn) {
-  const state = createMockApiState();
-  if (typeof setup === 'function') setup(state);
-  const server = await startMockApi(state);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rh-cli-dedupe-'));
-  const env = { ZENTAO_WEB_URL: server.url, ZENTAO_CREDENTIALS_FILE: writeCredentials(dir) };
-  try {
-    await fn({ server, env, dir, state });
-  } finally {
-    await server.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-}
+/** 起假服务 + 隔离的本机凭据；setup 往状态里塞单据。 */
+const withMock = (setup, fn) => withMockApi({ tag: 'rh-cli-dedupe', seed: setup }, fn);
 
 // 查重助手单独跑：打印变体组，一行一个
 async function variantGroupsOf(title) {
-  const { code, stdout, stderr } = await runNode(DEDUPE, ['--title', title], {});
+  const { code, stdout, stderr } = await runScript(DEDUPE, ['--title', title], {});
   assert.equal(code, 0, stderr);
   return stdout
     .split('\n')
@@ -168,8 +111,7 @@ test('D03 查重助手：标题太长时改用相邻窗口，组数不随特征�
 
 test('D04 查重扫描：词序不同的标题互相命中，候选给出编号、标题、状态、负责人', { skip: NEEDS_CLI }, async () => {
   await withMock(seedDedupeBugs, async ({ env }) => {
-    const { code, stdout, stderr } = await runNode(
-      SCRIPT,
+    const { code, stdout, stderr } = await runEntryScript(
       ['dup', '--kind', 'bug', '--product', '101', '--title', '切换语言功能失效'],
       env,
     );
@@ -189,8 +131,7 @@ test('D04 查重扫描：词序不同的标题互相命中，候选给出编号�
 
 test('D05 查重扫描：反过来的词序也命中同一条单据', { skip: NEEDS_CLI }, async () => {
   await withMock(seedDedupeBugs, async ({ env }) => {
-    const { code, stdout, stderr } = await runNode(
-      SCRIPT,
+    const { code, stdout, stderr } = await runEntryScript(
       ['dup', '--kind', 'bug', '--product', '101', '--title', '语言切换功能失效'],
       env,
     );
@@ -202,8 +143,7 @@ test('D05 查重扫描：反过来的词序也命中同一条单据', { skip: NE
 
 test('D06 查重扫描：正文里出现的词不算命中', { skip: NEEDS_CLI }, async () => {
   await withMock(seedDedupeBugs, async ({ env }) => {
-    const { code, stdout, stderr } = await runNode(
-      SCRIPT,
+    const { code, stdout, stderr } = await runEntryScript(
       ['dup', '--kind', 'bug', '--product', '101', '--title', '切换语言功能失效'],
       env,
     );
@@ -221,8 +161,7 @@ test('D07 查重扫描：反馈单也能查，候选与覆盖范围照样给全'
       seedFeedback(state, { id: 902, title: '页面样式错乱', status: 'wait', assignedTo: '' });
     },
     async ({ env }) => {
-      const { code, stdout, stderr } = await runNode(
-        SCRIPT,
+      const { code, stdout, stderr } = await runEntryScript(
         ['dup', '--kind', 'feedback', '--product', '101', '--title', '切换语言功能失效'],
         env,
       );
@@ -240,8 +179,7 @@ test('D08 查重扫描：没有重复时说清「在你可见的 N 条中未发�
       seedBug(state, { id: 1949, title: '登录后偶尔掉线' });
     },
     async ({ env }) => {
-      const { code, stdout, stderr } = await runNode(
-        SCRIPT,
+      const { code, stdout, stderr } = await runEntryScript(
         ['dup', '--kind', 'bug', '--product', '101', '--title', '切换语言功能失效'],
         env,
       );
@@ -255,8 +193,7 @@ test('D08 查重扫描：没有重复时说清「在你可见的 N 条中未发�
 
 test('D09 查重扫描：本次扫描的基线是全部单据 ID，基线之外的编号才可能是本次新建', { skip: NEEDS_CLI }, async () => {
   await withMock(seedDedupeBugs, async ({ env }) => {
-    const { code, stdout, stderr } = await runNode(
-      SCRIPT,
+    const { code, stdout, stderr } = await runEntryScript(
       ['dup', '--kind', 'bug', '--product', '101', '--title', '切换语言功能失效'],
       env,
     );
@@ -269,7 +206,7 @@ test('D09 查重扫描：本次扫描的基线是全部单据 ID，基线之外�
 
 test('D10 查重扫描：选项写错时报用法，不悄悄按默认值跑', { skip: NEEDS_CLI }, async () => {
   await withMock(seedDedupeBugs, async ({ env }) => {
-    const { code, stderr } = await runNode(SCRIPT, ['dup', '--kind', 'issue', '--product', '101', '--title', '切换语言'], env);
+    const { code, stderr } = await runEntryScript( ['dup', '--kind', 'issue', '--product', '101', '--title', '切换语言'], env);
     assert.notEqual(code, 0);
     assert.match(stderr, /错误：/);
   });
@@ -285,8 +222,7 @@ test('D11 服务端分页不前进：查重不谎报「未发现重复」，而�
       state.pagingStuckProducts = [101];
     },
     async ({ env }) => {
-      const { code, stdout, stderr } = await runNode(
-        SCRIPT,
+      const { code, stdout, stderr } = await runEntryScript(
         ['dup', '--kind', 'bug', '--product', '101', '--title', '切换语言功能失效'],
         env,
       );
@@ -318,8 +254,7 @@ test('D12 服务端返回别的产品的记录：不算进覆盖范围，也不�
       state.foreignProductLists = { 101: 102 };
     },
     async ({ env }) => {
-      const { code, stdout, stderr } = await runNode(
-        SCRIPT,
+      const { code, stdout, stderr } = await runEntryScript(
         ['dup', '--kind', 'bug', '--product', '101', '--title', '切换语言功能失效'],
         env,
       );
