@@ -1269,6 +1269,102 @@ Object.assign(COMMANDS, {
   'bug-update': { run: (env, opts) => cmdUpdate('bug', env, opts), options: ['id', 'payload-file'] },
 });
 // ----- 传图 -----
+
+// 禅道单文件上限 50 MiB（CLI 的 multipart 上传也是这个限）
+const FILE_MAX_BYTES = 50 * 1024 * 1024;
+
+// 图片能挂的对象。CLI 的 --object-type 帮助文本只列 bug/story/task/testcase，
+// 但它没有 enum 校验：feedback 会原样透传给服务端并绑定成功（证据：issue #13 判据③）。
+const FILE_OBJECT_TYPES = ['bug', 'feedback'];
+
+/** 扩展名小写、不带点；没有扩展名按 png 记（引用里的 t 参数就是它）。 */
+function imageExtensionOf(file) {
+  return path.extname(file).replace(/^\./, '').toLowerCase() || 'png';
+}
+
+/** 正文里用的图片引用：相对路径 + 文件 ID，不内联 base64。 */
+function buildReference(fileId, ext) {
+  return `<img src="/index.php?m=file&f=read&t=${ext}&fileID=${fileId}" alt="file-read-${fileId}.${ext}" />`;
+}
+
+/** 上传返回的文件标识：CLI 把服务端的 file 对象放在 data.file 里（实测）。 */
+function fileIdOf(data) {
+  const file = data && typeof data === 'object' ? data.file ?? data : {};
+  const id = file?.id ?? data?.fileID ?? String(file?.url ?? '').match(/fileID=(\d+)/)?.[1];
+  return id === undefined || id === null || id === '' ? '' : String(id);
+}
+
+/** 上传结果不确定：不重传（上传没有幂等键，重复会多出附件），交回终端用户。 */
+function reportFileUncertain(message, extra = {}) {
+  process.stderr.write(`错误：${message}\n`);
+  out(JSON.stringify({ ok: false, kind: 'file', uncertain: true, ...extra, message }));
+  process.exitCode = 1;
+}
+
+/**
+ * 传图：把图片挂到**已存在的**单据上，拿到文件标识后给出正文用的图片引用。
+ * 只上传、不改正文：顺序是建单 → 传图 → 更新正文（上传要带单据类型与单据 ID）。
+ */
+async function cmdFileCreate(env, opts) {
+  const usageText = 'node zentao.mjs file-create --file <图片路径> --object-type <bug|feedback> --object-id <单据ID>';
+  const wanted = String(opts.file ?? '').trim();
+  if (!wanted) throw usage(usageText);
+  const objectType = String(opts['object-type'] ?? '').trim();
+  if (!FILE_OBJECT_TYPES.includes(objectType)) throw usage(`${usageText}（--object-type 只能是 bug 或 feedback）`);
+  const objectId = String(opts['object-id'] ?? '').trim();
+  if (!/^\d+$/.test(objectId)) throw usage(`${usageText}（单据 ID 是数字）`);
+
+  // 相对路径按命令执行目录解析：调用者在哪个目录下跑，图就从哪儿找
+  const file = path.resolve(wanted);
+  let size;
+  try {
+    size = fs.statSync(file).size;
+  } catch {
+    throw new Error(`找不到图片文件：${file}`);
+  }
+  if (size > FILE_MAX_BYTES) {
+    throw new Error(`图片 ${Math.ceil(size / 1024 / 1024)} MiB，超过禅道单文件上限 50 MiB；先压缩再上传。`);
+  }
+
+  let payload;
+  try {
+    payload = await runCli(['file', 'create', '--file', file, '--object-type', objectType, '--object-id', objectId], env);
+  } catch (err) {
+    // 没拿到回执：图片可能已经传上去了，先查单据里有没有多出附件，不重传
+    if (cliOutcomeUnknown(err)) {
+      reportFileUncertain(
+        `传图结果不确定（${err.message}）：图片可能已经挂上去了。先到单据里看有没有多出这个附件，不要直接重传。`,
+        { objectType, objectId: Number(objectId) }
+      );
+      return;
+    }
+    throw new Error(`传图失败（${objectType} #${objectId}）：图片没有传上去。${err.message}`);
+  }
+
+  const fileId = fileIdOf(payload.data);
+  if (!fileId) {
+    throw new Error(
+      `上传返回里没有文件标识（挂载对象 ${objectType} #${objectId}），没法生成图片引用。先查单据里有没有多出附件，不要重传。`
+    );
+  }
+  const extension = imageExtensionOf(file);
+  out(
+    JSON.stringify({
+      ok: true,
+      kind: 'file',
+      fileId: /^\d+$/.test(fileId) ? Number(fileId) : fileId,
+      objectType,
+      objectId: Number(objectId),
+      extension,
+      reference: buildReference(fileId, extension),
+    })
+  );
+}
+
+// 各票的子命令注册放在自己的分区里，免得同改 COMMANDS 字面量
+Object.assign(COMMANDS, {
+  'file-create': { run: cmdFileCreate, options: ['file', 'object-type', 'object-id'] },
+});
 // ===== 查重子命令 =====
 
 // 查重只投影这四个字段：候选要列编号、标题、状态、负责人，正文不进上下文

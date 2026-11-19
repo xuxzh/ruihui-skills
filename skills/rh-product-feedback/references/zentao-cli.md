@@ -61,6 +61,17 @@
 - `feedback update`：`feedbackID`、`product`（必填）、`module`、`title`（必填）、`type`、`desc`、`feedbackBy`、`source`。
 - `file create`：`file`（本地路径，必填）、`objectType`（`bug` \| `feedback`，必填）、`objectID`（整数，必填）。
 
+### 传图（`file create`）
+
+`zentao file create --file <本地路径> --object-type <类型> --object-id <单据ID>` → `POST /api.php/v2/files`，`multipart/form-data`。
+
+- 单文件上限 **50 MiB**，超了 SDK 直接拦；先压缩再传。
+- `--file` 是本地路径，由跑 CLI 的那台机器解析（相对路径相对 CLI 的工作目录）；MIME 按扩展名推断，不认识的一律 `application/octet-stream`。
+- **`objectType` 没有 enum 校验**：帮助文本只列 `bug` / `story` / `task` / `testcase`，但 `feedback` 会原样透传给服务端并绑定成功（证据：issue #13 判据③）。所以缺陷单与反馈单都能挂图，不要按帮助文本把 `feedback` 禁掉。
+- 返回 `{"ok":true,"data":{"file":{"id":…}}}`：文件标识是 `data.file.id`（实测）。
+- **没有 `file list` / `file get`**：附件身份只能靠上传返回的文件标识 + 单据正文里的引用核对。
+- 上传没有幂等键：重复上传会多出附件。超时、断连、读不懂响应时先查单据上有没有多出附件，**不重传**。
+
 ## 错误码
 
 | 码 | 含义 |

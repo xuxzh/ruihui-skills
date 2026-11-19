@@ -196,15 +196,14 @@ node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-ze
 
 ## 6. 正文带图片
 
-禅道正文里的图片是禅道里的**图片附件**：先上传拿到文件标识，再在正文里放一个**图片引用**。禅道 MCP 没有上传通道（`post_files` 只接受文件名），所以走随包的上传脚本，它直连禅道 REST v2；顺序固定：**先建单 → 再传图 → 再更新正文**（禅道上传要带单据类型与单据 ID，图片只能挂在已存在的单据上）。
+禅道正文里的图片是**图片附件**：先上传拿文件标识，再在正文里放**图片引用**（指向附件，不是内联数据）。顺序固定：**先建单 → 再传图 → 再更新正文 → 再回读**——上传要带单据类型与单据 ID，图只能挂在已存在的单据上。
 
 ```bash
-node <技能目录>/scripts/zentao-upload.mjs --file <图片路径> --object-type feedback --object-id <反馈 ID>
+node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --object-type feedback --object-id <反馈 ID>
 ```
 
-缺陷单把 `--object-type` 换成 `bug`。脚本输出文件标识与图片引用，并自己回读字节核对过。
-
-引用固定形态（相对路径；`t` 是扩展名、小写、不带点；不用 base64 内联）与边界（图片拿不到、传图失败、几张图怎么挂、删除单据时的清理）见 [references/workflow.md](references/workflow.md) 的 F5 与 [references/error-handling.md](references/error-handling.md)「图片上传失败」。上传失败就如实说失败，不改用文字描述假装图片已经放上去。
+缺陷单把 `--object-type` 换成 `bug`（CLI 帮助只列 `bug|story|task|testcase`，但没有 enum 校验，`feedback` 能绑定成功）；图片路径**相对命令执行目录**解析。输出一行 JSON：文件标识 + 挂载对象 + 图片引用（`<img src="/index.php?m=file&f=read&t=png&fileID=6530" …/>`；`t` 是扩展名、小写、不带点，不用 base64 内联）。**引用放进追加段落**：更新是 append-only，草稿原文部分必须与 `expectedBody` 逐字一致，所以图写在分隔行之后的「【补充说明 · 截图 1】」段里，按 §5 的 `feedback-update` / `bug-update` 写入，不要插进正文中间。
+回读核对：更新回读通过（完整预期正文 + 本次新增 `edited`）+ 引用里的文件 ID 与传图返回一致；附件挂载看传图输出的 `objectType`/`objectId` 就是目标单据。边界（图拿不到、传图失败、几张图怎么挂）见 [references/workflow.md](references/workflow.md) F5 与 [references/error-handling.md](references/error-handling.md)「图片上传失败」：上传失败就如实说失败，不用文字描述假装图已放上去；结果不确定先查单据里有没有多出附件，**不重复上传**。
 
 ## 硬约束
 
