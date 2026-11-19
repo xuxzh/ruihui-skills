@@ -1,7 +1,7 @@
 name: validate-skills
 
-# CI 只跑本地校验：静态校验、mock 层测试、规范校验。
-# 真实禅道 MCP 的端到端测试需要内网环境与明确授权，不在 CI 中运行。
+# CI 只跑本地校验：静态校验、mock 层测试、随包脚本测试、规范校验。
+# 真实禅道实例的端到端测试需要内网环境与明确授权，不在 CI 中运行。
 on:
   push:
     branches: [main]
@@ -20,11 +20,38 @@ jobs:
       - name: 静态校验（元数据 / 引用 / 硬约束 / 敏感信息）
         run: node tests/validate-skills.mjs
 
-      - name: 模拟层测试（mock MCP）
+      - name: 模拟层测试（假禅道 API v2）
         run: node --test tests/e2e-mock.mjs
 
       - name: 打包与随包脚本测试
         run: node --test tests/package.mjs
+
+      - name: 接入配置的 CLI 版本锁与接入提示词
+        run: node --test tests/setup-cli-pin.mjs
+
+      # 下面这些都要真的调官方禅道 CLI（runner 上没装就按 skip 计），
+      # 装 CLI 的机器上跑才是全绿；不装时至少保证脚本加载与 skip 逻辑没坏。
+      - name: 入口脚本读通道测试
+        run: |
+          for f in tests/zentao-cli-read.mjs tests/zentao-cli-query.mjs tests/zentao-cli-dedupe.mjs; do
+            node --test "$f"
+          done
+
+      - name: 入口脚本写通道测试
+        run: |
+          for f in tests/zentao-cli-bug.mjs tests/zentao-cli-feedback.mjs tests/zentao-cli-append.mjs tests/zentao-cli-file.mjs; do
+            node --test "$f"
+          done
+
+      - name: 既有读通道测试（查询器迁移来的用例）
+        run: node --test tests/queryer.mjs
+
+      - name: 既有写通道测试（写入脚本迁移来的用例）
+        run: node --test tests/write.mjs
+
+      - name: 技能流程测试
+        run: node --test tests/skill-flow.mjs
+
       - name: 图片上传测试
         run: node --test tests/upload.mjs
 

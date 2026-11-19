@@ -4,7 +4,7 @@
 // 用法：
 //   node scripts/build-internal-package.mjs                       # 用 .env 里的地址打包到 dist/
 //   node scripts/build-internal-package.mjs --out <目录>
-//   node scripts/build-internal-package.mjs --mcp-url <地址> --web-url <地址>
+//   node scripts/build-internal-package.mjs --web-url <禅道站点地址>
 //
 // 地址来源优先级：命令行参数 > 仓库根 .env > 技能目录里的 config.local.json。
 // 产物目录是用户唯一要复制的东西：整个复制进通用技能目录即完成安装。
@@ -16,14 +16,13 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL_DIR = path.join(ROOT, 'skills', 'rh-product-feedback');
 const SCRIPTS_DIR = path.join(SKILL_DIR, 'scripts');
-const PACKAGE_SCRIPTS = ['set-credentials.sh', 'set-credentials.ps1', 'zentao-client.mjs', 'zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1', 'zentao-write.mjs', 'zentao-upload.mjs'];
+const PACKAGE_SCRIPTS = ['set-credentials.sh', 'set-credentials.ps1', 'zentao.mjs', 'zentao-dedupe.mjs'];
 
 function parseArgs(argv) {
-  const args = { out: path.join(ROOT, 'dist'), mcpUrl: undefined, webUrl: undefined };
+  const args = { out: path.join(ROOT, 'dist'), webUrl: undefined };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
     if (key === '--out') args.out = path.resolve(argv[++i] ?? '');
-    else if (key === '--mcp-url') args.mcpUrl = argv[++i];
     else if (key === '--web-url') args.webUrl = argv[++i];
     else if (key === '--help' || key === '-h') args.help = true;
     else throw new Error(`未知参数：${key}`);
@@ -58,38 +57,27 @@ function assertHttpUrl(value, label) {
 }
 
 function resolveAddresses(args) {
-  if (args.mcpUrl !== undefined) {
-    assertHttpUrl(args.mcpUrl, '禅道 MCP 地址');
-    const webUrl = args.webUrl ?? '';
-    if (webUrl) assertHttpUrl(webUrl, '禅道 Web 地址');
-    return { mcpUrl: args.mcpUrl, zentaoWebUrl: webUrl, source: '命令行参数' };
+  if (args.webUrl !== undefined) {
+    assertHttpUrl(args.webUrl, '禅道站点地址');
+    return { zentaoWebUrl: args.webUrl, source: '命令行参数' };
   }
 
   const env = readEnvFile(path.join(ROOT, '.env'));
-  if (env.ZENTAO_MCP_URL) {
-    const base = env.ZENTAO_BASE_URL ?? '';
-    return {
-      mcpUrl: env.ZENTAO_MCP_URL,
-      zentaoWebUrl: args.webUrl ?? (base ? toWebUrl(base) : ''),
-      source: '.env',
-    };
+  if (env.ZENTAO_BASE_URL) {
+    return { zentaoWebUrl: toWebUrl(env.ZENTAO_BASE_URL), source: '.env' };
   }
 
   const localConfig = path.join(SKILL_DIR, 'config.local.json');
   if (fs.existsSync(localConfig)) {
     const config = JSON.parse(fs.readFileSync(localConfig, 'utf8'));
-    if (config.mcpUrl) {
-      return {
-        mcpUrl: config.mcpUrl,
-        zentaoWebUrl: args.webUrl ?? config.zentaoWebUrl ?? '',
-        source: '技能目录里的 config.local.json',
-      };
+    if (config.zentaoWebUrl) {
+      return { zentaoWebUrl: config.zentaoWebUrl, source: '技能目录里的 config.local.json' };
     }
   }
 
   throw new Error(
-    '找不到内网地址：请在仓库根 .env 填 ZENTAO_MCP_URL（可选 ZENTAO_BASE_URL），' +
-      '或用 --mcp-url 传入，或先在技能目录放好 config.local.json',
+    '找不到禅道站点地址：请在仓库根 .env 填 ZENTAO_BASE_URL，' +
+      '或用 --web-url 传入，或先在技能目录放好 config.local.json',
   );
 }
 
@@ -133,9 +121,29 @@ function readPackageBugAssignee() {
   return undefined;
 }
 
+/**
+ * 官方禅道 CLI 的版本锁：从技能目录里的 config.local.json 读，随包分发。
+ * 接入配置里没有这一项就是打包错误——装 CLI 的那一步得有一个唯一真相。
+ */
+function readPackageZentaoCli() {
+  const localConfig = path.join(SKILL_DIR, 'config.local.json');
+  if (!fs.existsSync(localConfig)) throw new Error('技能目录缺 config.local.json，拿不到禅道 CLI 版本锁');
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(localConfig, 'utf8'));
+  } catch (err) {
+    throw new Error(`config.local.json 解析失败，拿不到禅道 CLI 版本锁：${err.message}`);
+  }
+  const lock = config.zentaoCli;
+  if (!lock || !lock.package || !lock.version) {
+    throw new Error('config.local.json 缺 zentaoCli（package + version），拿不到禅道 CLI 版本锁');
+  }
+  return { package: String(lock.package), version: String(lock.version) };
+}
+
 function buildPackage(args) {
-  const { mcpUrl, zentaoWebUrl, source } = resolveAddresses(args);
-  assertHttpUrl(mcpUrl, '禅道 MCP 地址');
+  const { zentaoWebUrl, source } = resolveAddresses(args);
+  assertHttpUrl(zentaoWebUrl, '禅道站点地址');
 
   const out = args.out;
   const pkgDir = path.join(out, 'rh-product-feedback');
@@ -157,7 +165,7 @@ function buildPackage(args) {
     if (name.endsWith('.sh')) fs.chmodSync(to, 0o755);
   }
 
-  const packageConfig = { mcpUrl, zentaoWebUrl, defaultProduct: readPackageDefaultProduct() };
+  const packageConfig = { zentaoWebUrl, zentaoCli: readPackageZentaoCli(), defaultProduct: readPackageDefaultProduct() };
   const bugAssignee = readPackageBugAssignee();
   if (bugAssignee !== undefined) packageConfig.bugAssignee = bugAssignee;
   fs.writeFileSync(
@@ -165,19 +173,19 @@ function buildPackage(args) {
     `${JSON.stringify(packageConfig, null, 2)}\n`,
   );
 
-  return { pkgDir, source, hasWebUrl: Boolean(zentaoWebUrl) };
+  return { pkgDir, source };
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     process.stdout.write(
-      '用法：node scripts/build-internal-package.mjs [--out <目录>] [--mcp-url <地址>] [--web-url <地址>]\n',
+      '用法：node scripts/build-internal-package.mjs [--out <目录>] [--web-url <禅道站点地址>]\n',
     );
     return;
   }
 
-  const { pkgDir, source, hasWebUrl } = buildPackage(args);
+  const { pkgDir, source } = buildPackage(args);
 
   const files = [];
   const walk = (dir, prefix = '') => {
@@ -191,13 +199,12 @@ function main() {
 
   process.stdout.write(`内网版技能包已生成：${pkgDir}\n`);
   process.stdout.write(`地址来源：${source}\n`);
-  if (!hasWebUrl) process.stdout.write('提示：没有禅道 Web 地址，反馈链接会缺省\n');
   process.stdout.write('包含：\n');
   for (const file of files) process.stdout.write(`  ${file}\n`);
   process.stdout.write('\n下一步：把 rh-product-feedback 整个目录复制进宿主技能目录：\n');
   process.stdout.write('  macOS / Linux: mkdir -p ~/.agents/skills && cp -R <本目录>/rh-product-feedback ~/.agents/skills/\n');
   process.stdout.write('  Windows: Copy-Item -Recurse <本目录>\\rh-product-feedback "$env:USERPROFILE\\.agents\\skills\\"\n');
-  process.stdout.write('  装完后在宿主里说「帮我装禅道 MCP」：它会按自己所在的宿主登记禅道 MCP，并给你一条写本人凭据的命令。\n');
+  process.stdout.write('  装完后在宿主里说「帮我装禅道 CLI」（接入提示词见 docs/quick-start.md），再给你的本人凭据写一条命令。\n');
 }
 
 try {

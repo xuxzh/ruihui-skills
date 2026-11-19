@@ -16,7 +16,6 @@ const SKILL_DIR = path.join(ROOT, 'skills', 'rh-product-feedback');
 const SCRIPTS_DIR = path.join(SKILL_DIR, 'scripts');
 const CREDENTIAL_SH = path.join(SCRIPTS_DIR, 'set-credentials.sh');
 
-const MCP_URL = 'https://mcp.example.test/mcp';
 const WEB_URL = 'https://zentao.example.test';
 
 function tmpDir(prefix) {
@@ -32,18 +31,20 @@ function pack(outDir, args = []) {
 
 test('打包产物是一个顶层自洽的技能目录', () => {
   const out = tmpDir('rh-pkg-');
-  pack(out, ['--mcp-url', MCP_URL, '--web-url', WEB_URL]);
+  pack(out, ['--web-url', WEB_URL]);
   const pkg = path.join(out, 'rh-product-feedback');
 
   assert.ok(fs.existsSync(path.join(pkg, 'SKILL.md')), '缺 SKILL.md');
   assert.ok(fs.existsSync(path.join(pkg, 'references', 'setup.md')), '缺 references/');
   assert.ok(fs.existsSync(path.join(pkg, 'config.local.json')), '缺 config.local.json');
-  for (const script of ['set-credentials.sh', 'set-credentials.ps1', 'zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1']) {
+  for (const script of ['set-credentials.sh', 'set-credentials.ps1', 'zentao.mjs', 'zentao-dedupe.mjs']) {
     assert.ok(fs.existsSync(path.join(pkg, 'scripts', script)), `缺 scripts/${script}`);
   }
-  assert.ok(fs.existsSync(path.join(pkg, 'scripts', 'zentao-upload.mjs')), '缺 scripts/zentao-upload.mjs');
-  assert.ok(fs.existsSync(path.join(pkg, 'scripts', 'zentao-client.mjs')), '缺 scripts/zentao-client.mjs');
-  assert.ok(fs.existsSync(path.join(pkg, 'scripts', 'zentao-write.mjs')), '缺 scripts/zentao-write.mjs');
+  // 旧的直连实现与三支旧脚本已下线，包里不应再有它们（不并存原则落到终态）
+  for (const script of ['zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1', 'zentao-write.mjs', 'zentao-upload.mjs', 'zentao-client.mjs']) {
+    assert.ok(!fs.existsSync(path.join(pkg, 'scripts', script)), `scripts/${script} 应已下线`);
+  }
+  assert.ok(!fs.existsSync(path.join(pkg, 'references', 'zentao-mcp.md')), 'references/zentao-mcp.md 应已下线');
 
   // 技能文件与仓库里的一致
   assert.equal(
@@ -69,23 +70,23 @@ test('打包产物是一个顶层自洽的技能目录', () => {
 
   // 接入配置里只有地址与随包默认值，没有凭据字段
   const config = JSON.parse(fs.readFileSync(path.join(pkg, 'config.local.json'), 'utf8'));
-  assert.deepEqual(Object.keys(config).sort(), ['bugAssignee', 'defaultProduct', 'mcpUrl', 'zentaoWebUrl']);
+  assert.deepEqual(Object.keys(config).sort(), ['bugAssignee', 'defaultProduct', 'zentaoCli', 'zentaoWebUrl']);
+  assert.equal(config.mcpUrl, undefined, '禅道 MCP 地址已不进技能链路');
   assert.equal(config.defaultProduct.id, null, '没预置时随包默认产品是空位');
 });
 
 test('打包时用传入的地址写 config.local.json，不带仓库里的旧值', () => {
   const out = tmpDir('rh-pkg-');
-  pack(out, ['--mcp-url', MCP_URL, '--web-url', WEB_URL]);
+  pack(out, ['--web-url', WEB_URL]);
   const config = JSON.parse(
     fs.readFileSync(path.join(out, 'rh-product-feedback', 'config.local.json'), 'utf8'),
   );
-  assert.equal(config.mcpUrl, MCP_URL);
   assert.equal(config.zentaoWebUrl, WEB_URL);
 });
 
 test('打包时带上仓库里预置的随包默认产品', () => {
   const out = tmpDir('rh-pkg-');
-  pack(out, ['--mcp-url', MCP_URL, '--web-url', WEB_URL]);
+  pack(out, ['--web-url', WEB_URL]);
   const config = JSON.parse(
     fs.readFileSync(path.join(out, 'rh-product-feedback', 'config.local.json'), 'utf8'),
   );
@@ -97,7 +98,7 @@ test('打包时带上仓库里预置的随包默认产品', () => {
 
 test('打包时带上仓库里预置的随包默认负责人', () => {
   const out = tmpDir('rh-pkg-');
-  pack(out, ['--mcp-url', MCP_URL, '--web-url', WEB_URL]);
+  pack(out, ['--web-url', WEB_URL]);
   const config = JSON.parse(
     fs.readFileSync(path.join(out, 'rh-product-feedback', 'config.local.json'), 'utf8'),
   );
@@ -108,42 +109,75 @@ test('打包时带上仓库里预置的随包默认负责人', () => {
   assert.equal(config.bugAssignee, '', '随包默认负责人是不指派');
 });
 
+test('打包时把官方禅道 CLI 的版本锁带进包里', () => {
+  const out = tmpDir('rh-pkg-');
+  pack(out, ['--web-url', WEB_URL]);
+  const config = JSON.parse(
+    fs.readFileSync(path.join(out, 'rh-product-feedback', 'config.local.json'), 'utf8'),
+  );
+  const repoConfig = JSON.parse(
+    fs.readFileSync(path.join(SKILL_DIR, 'config.local.json'), 'utf8'),
+  );
+  assert.deepEqual(config.zentaoCli, repoConfig.zentaoCli);
+  assert.equal(config.zentaoCli.package, 'zentao-cli');
+  assert.match(config.zentaoCli.version, /^\d+\.\d+\.\d+$/, '版本锁是具体版本，不是范围');
+});
+
 test('打包不把内网地址打印到终端输出里', () => {
   const out = tmpDir('rh-pkg-');
-  const stdout = pack(out, ['--mcp-url', MCP_URL, '--web-url', WEB_URL]);
-  assert.doesNotMatch(stdout, new RegExp(MCP_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  const stdout = pack(out, ['--web-url', WEB_URL]);
+  assert.doesNotMatch(stdout, new RegExp(WEB_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('地址为空时打包失败，并给出可执行的提示', () => {
   const out = tmpDir('rh-pkg-');
   assert.throws(
-    () => pack(out, ['--mcp-url', '']),
-    (err) => /mcp-url|地址/.test(err.stderr ?? '') || /mcp-url|地址/.test(err.message ?? ''),
+    () => pack(out, ['--web-url', '']),
+    (err) => /web-url|地址/.test(err.stderr ?? '') || /web-url|地址/.test(err.message ?? ''),
   );
 });
 
-test('技能目录随包分发凭据脚本与查询器（skills.sh 装的就是这个目录）', () => {
-  for (const script of ['set-credentials.sh', 'set-credentials.ps1', 'zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1', 'zentao-upload.mjs']) {
+test('技能目录随包分发入口脚本、查重助手与凭据脚本（skills.sh 装的就是这个目录）', () => {
+  for (const script of ['set-credentials.sh', 'set-credentials.ps1', 'zentao.mjs', 'zentao-dedupe.mjs']) {
     assert.ok(fs.existsSync(path.join(SCRIPTS_DIR, script)), `技能目录缺 scripts/${script}`);
   }
-  assert.ok(fs.existsSync(path.join(SCRIPTS_DIR, 'zentao-client.mjs')), '技能目录缺 scripts/zentao-client.mjs');
-  assert.ok(fs.existsSync(path.join(SCRIPTS_DIR, 'zentao-write.mjs')), '技能目录缺 scripts/zentao-write.mjs');
 });
 
-test('技能目录不再随包分发安装脚本（登记交给当前宿主里的 Agent）', () => {
+// 不并存原则：旧的直连实现与三支旧脚本都下线，包里只剩一条通道。
+test('技能目录不再带着旧的直连实现', () => {
+  for (const script of ['zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1', 'zentao-write.mjs', 'zentao-upload.mjs', 'zentao-client.mjs']) {
+    assert.ok(!fs.existsSync(path.join(SCRIPTS_DIR, script)), `scripts/${script} 应已删除`);
+  }
+  assert.ok(!fs.existsSync(path.join(SKILL_DIR, 'references', 'zentao-mcp.md')), 'references/zentao-mcp.md 应已删除');
+});
+
+test('技能目录不再随包分发安装脚本（装 CLI 交给当前宿主里的 Agent）', () => {
   for (const script of ['install.sh', 'install.ps1']) {
     assert.ok(!fs.existsSync(path.join(SCRIPTS_DIR, script)), `scripts/${script} 应已删除`);
   }
 });
 
-test('查询器随包分发且能跑起来（--help 自带用法）', () => {
-  const stdout = execFileSync('node', [path.join(SCRIPTS_DIR, 'zentao-query.mjs'), '--help'], {
+test('入口脚本随包分发且 --help 列出全部子命令', () => {
+  const stdout = execFileSync('node', [path.join(SCRIPTS_DIR, 'zentao.mjs'), '--help'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  assert.match(stdout, /products/, '--help 里要列出子命令');
-  assert.match(stdout, /prep/, '--help 里要列出 prep');
-  assert.match(stdout, /check/, '--help 里要列出 check');
+  for (const cmd of [
+    'products',
+    'projects',
+    'bugs',
+    'feedbacks',
+    'bug',
+    'feedback',
+    'bug-create',
+    'feedback-create',
+    'bug-update',
+    'feedback-update',
+    'file-create',
+    'dup',
+  ]) {
+    assert.match(stdout, new RegExp(`^\\s+${cmd}\\b`, 'm'), `--help 里要列出 ${cmd}`);
+  }
 });
 
 test('打包产物目录在 .gitignore 里，避免内网地址被提交', () => {
@@ -185,43 +219,4 @@ test('凭据脚本：--token 写入令牌而不是密码', { skip: process.platf
   const content = fs.readFileSync(path.join(home, '.config', 'rh-zentao', 'credentials'), 'utf8');
   assert.match(content, /^ZENTAO_TOKEN=test-token-value$/m);
   assert.doesNotMatch(content, /PASSWORD/);
-});
-
-// --- 查询器：按当前宿主的配置核对/修正地址 ------------------------------
-
-test('查询器：check/sync 按 --config 指定的自定义宿主配置读写，只改 zentao 条目的 url', () => {
-  const dir = tmpDir('rh-host-');
-  const hostConfig = path.join(dir, 'host-mcp.json');
-  fs.writeFileSync(
-    hostConfig,
-    JSON.stringify(
-      {
-        mcpServers: {
-          other: { url: 'https://other.example.test/mcp' },
-          zentao: { url: 'https://old.example.test/mcp', headers: { 'X-Test': '1' } },
-        },
-      },
-      null,
-      2,
-    ),
-  );
-
-  const check = execFileSync('node', [path.join(SCRIPTS_DIR, 'zentao-query.mjs'), 'check', '--config', hostConfig], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  assert.match(check, /不一致/);
-
-  execFileSync('node', [path.join(SCRIPTS_DIR, 'zentao-query.mjs'), 'sync', '--config', hostConfig], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  const after = JSON.parse(fs.readFileSync(hostConfig, 'utf8'));
-  const pkgUrl = JSON.parse(fs.readFileSync(path.join(SKILL_DIR, 'config.local.json'), 'utf8')).mcpUrl;
-  assert.equal(after.mcpServers.zentao.url, pkgUrl, 'sync 后地址应与技能包一致');
-  assert.equal(after.mcpServers.zentao.headers['X-Test'], '1', 'sync 不应丢掉该条目上的其他字段');
-  assert.ok(after.mcpServers.other, 'sync 不应动别的 server');
-  const backups = fs.readdirSync(dir).filter((f) => f.startsWith('host-mcp.json.bak-'));
-  assert.equal(backups.length, 1, 'sync 写前应备份');
 });
