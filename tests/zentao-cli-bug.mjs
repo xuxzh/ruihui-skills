@@ -363,3 +363,68 @@ test('B13 结果不确定（保存成功但查不到）：报未确认，不把�
     assert.equal(creates(server).length, 1, '不重发');
   });
 });
+
+// 已经有 25 条缺陷的产品：基线扫描超过一页（假服务每页 20 条）
+function manyBugs(count) {
+  const map = new Map();
+  for (let i = 0; i < count; i++) {
+    const id = 1800 + i;
+    map.set(id, {
+      id,
+      product: 101,
+      title: `历史缺陷 ${i + 1}`,
+      status: 'active',
+      openedBy: ACCOUNT,
+      openedDate: '2026-11-01 10:00:00',
+      assignedTo: '',
+      severity: '3',
+      pri: '3',
+      type: 'codeerror',
+      openedBuild: ['trunk'],
+      steps: '<p>历史正文</p>',
+      actions: [{ id: id * 10, action: 'opened', actor: ACCOUNT, date: '2026-11-01 10:00:00', comment: '' }],
+    });
+  }
+  return map;
+}
+
+test('B14 查重基线不完整（服务端分页不前进）：建单后只能报「是否新建未确认」，不判成功、不重发', { skip: NEEDS_CLI }, async () => {
+  await withMock({ bugs: manyBugs(25), pagingStuckProducts: [101] }, async ({ server, env, dir }) => {
+    const file = writePayload(dir, bugPayload({ title: '__TIMEOUT__ 设备列表导出无响应' }));
+    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    assert.equal(code, 1);
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, false, '基线不完整时不能凭「基线之外唯一」判成功');
+    assert.equal(result.uncertain, true);
+    assert.equal(result.baselineComplete, false);
+    assert.match(stderr, /查重基线不完整/);
+    assert.match(stderr, /未确认/);
+    assert.ok(!/没创建/.test(`${stderr}${stdout}`), '不能把「没查到」说成「没创建」');
+    assert.equal(creates(server).length, 1, '不重发');
+  });
+});
+
+test('B15 基线里混进别的产品的记录：同样只报「是否新建未确认」，不判成功、不重发', { skip: NEEDS_CLI }, async () => {
+  // 请求产品 101 的缺陷列表，服务端回的是产品 102 的记录（复刻真实实例的怪象）
+  await withMock(
+    {
+      bugs: new Map([
+        [1900, { id: 1900, product: 102, title: '别的产品的缺陷', status: 'active', openedBy: ACCOUNT, assignedTo: '', steps: '<p>正文</p>', severity: '3', pri: '3', type: 'codeerror', openedBuild: ['trunk'], actions: [] }],
+      ]),
+      foreignProductLists: { 101: 102 },
+    },
+    async ({ server, env, dir }) => {
+      const file = writePayload(dir, bugPayload({ title: '__TIMEOUT__ 设备列表导出无响应' }));
+      const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+      assert.equal(code, 1);
+
+      const result = singleLineJson(stdout);
+      assert.equal(result.ok, false, '基线里的记录不属于本产品时不能判成功');
+      assert.equal(result.uncertain, true);
+      assert.equal(result.baselineComplete, false);
+      assert.match(stderr, /不属于产品 101，已丢弃/);
+      assert.equal(creates(server).length, 1, '不重发');
+    },
+  );
+});

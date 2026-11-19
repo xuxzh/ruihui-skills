@@ -18,7 +18,8 @@
 // 另有状态注入：loginFails（换令牌一律 400）、tokenFails（API 一律 401）、
 // failPaths / hangPaths（按路径注入业务失败或超时）、products / projects（换数据集）、
 // visibleProducts（按账号限定可见产品）、createHang（'ghost' / 'persist'）、
-// noopWrites / noopUpdate（写接口返回成功但不落库/不生效）、deleteFails（删除一律失败）。
+// noopWrites / noopUpdate（写接口返回成功但不落库/不生效）、deleteFails（删除一律失败）、
+// pagingStuckProducts / pagingRepeatProducts（产品列表的分页缺陷，见 createMockApiState）。
 import http from 'node:http';
 import crypto from 'node:crypto';
 
@@ -75,6 +76,14 @@ export function createMockApiState(overrides = {}) {
     createHang: '',
     // 删除接口一律业务失败（模拟没有删除权限）
     deleteFails: false,
+    // 这些产品的列表接口从第 2 页起返回空集，并把 pageID 钳回 1（复刻真实 max 8.2 实例的反馈列表：
+    // CLI 的 --all 保护会报 E2008「服务端分页未向前推进」，整条读取失败）
+    pagingStuckProducts: [],
+    // 这些产品的列表接口从第 2 页起原样返回第 1 页（同一页内容重复，CLI 报同一条 E2008）
+    pagingRepeatProducts: [],
+    // 请求这个产品的列表，服务端却返回另一个产品的记录（复刻真实实例：请求产品 29 的反馈列表，
+    // 回来的记录 product 字段是 1）——入口脚本靠 product 字段做归属校验，不能当成本产品的记录
+    foreignProductLists: {},
     // 账号 → 可见产品：给了就按它过滤产品列表与写入目标
     visibleProducts: null,
     ...overrides,
@@ -112,6 +121,27 @@ function paginate(items, query) {
 function listBody(key, items, query) {
   const { slice, pager } = paginate(items, query);
   return { [key]: slice, pager };
+}
+
+// 产品下的列表：可以按产品注入分页缺陷（pageID 从 2 开始才出问题，第 1 页正常返回）
+function productListBody(state, key, items, query, productId) {
+  const pageID = Math.max(1, Number(query.pageID) || 1);
+  const recPerPage = Math.min(MOCK_PAGE_SIZE, Math.max(1, Number(query.recPerPage) || MOCK_PAGE_SIZE));
+  if (pageID > 1 && state.pagingStuckProducts.map(Number).includes(Number(productId))) {
+    return { [key]: [], pager: { pageID: 1, recPerPage, recTotal: 0 } };
+  }
+  if (pageID > 1 && state.pagingRepeatProducts.map(Number).includes(Number(productId))) {
+    return { [key]: items.slice(0, recPerPage), pager: { pageID, recPerPage, recTotal: items.length } };
+  }
+  return listBody(key, items, query);
+}
+
+// 服务端把产品列表认错了：请求产品 A，回的是产品 B 的记录（记录自己的 product 字段仍是 B）
+function foreignItemsOf(state, kind, productId) {
+  const actual = Number(state.foreignProductLists?.[productId] ?? 0);
+  if (!actual || actual === Number(productId)) return null;
+  const source = kind === 'bugs' ? state.bugs : state.feedbacks;
+  return [...source.values()].filter((record) => Number(record.product) === actual);
 }
 
 function scenarioOf(title) {
@@ -276,8 +306,9 @@ function route(state, req, pathname, query, token, payload) {
   let m = pathname.match(/^\/api\.php\/v2\/products\/(\d+)\/bugs$/);
   if (req.method === 'GET' && m) {
     const product = Number(m[1]);
-    const items = [...state.bugs.values()].filter((b) => Number(b.product) === product);
-    return { body: listBody('bugs', items, query) };
+    const own = [...state.bugs.values()].filter((b) => Number(b.product) === product);
+    const items = foreignItemsOf(state, 'bugs', product) ?? own;
+    return { body: productListBody(state, 'bugs', items, query, product) };
   }
 
   m = pathname.match(/^\/api\.php\/v2\/bugs\/(\d+)$/);
@@ -310,8 +341,9 @@ function route(state, req, pathname, query, token, payload) {
   m = pathname.match(/^\/api\.php\/v2\/products\/(\d+)\/feedbacks$/);
   if (req.method === 'GET' && m) {
     const product = Number(m[1]);
-    const items = [...state.feedbacks.values()].filter((f) => Number(f.product) === product);
-    return { body: listBody('feedbacks', items, query) };
+    const own = [...state.feedbacks.values()].filter((f) => Number(f.product) === product);
+    const items = foreignItemsOf(state, 'feedbacks', product) ?? own;
+    return { body: productListBody(state, 'feedbacks', items, query, product) };
   }
 
   m = pathname.match(/^\/api\.php\/v2\/feedbacks\/(\d+)$/);
