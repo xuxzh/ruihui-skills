@@ -15,4 +15,4 @@
 - 术语与 `GLOSSARY.md` 对齐：正文用「终端用户」「禅道账号」，新增「查重基线」「可靠写入路径」两个词。
 - 上一版 SKILL.md 里「`desc` / `source` / `module` / `feedbackBy` 保持不填」与同段 payload 示例矛盾（`desc` 是反馈单正文，必填），改为只留 `source` / `module` / `feedbackBy` 不填。
 - `bug-templates.md` 里「当前能力不支持图片」的说法已过期（[ADR-0011](0011-图片上传直连禅道RESTv2.md) 起有上传脚本），同步更正。
-- 安装提示词里指向 SKILL.md「0.2 安装」的指针改为「0. 环境自检」（`docs/quick-start.md` 与 `references/setup.md` 同步）。
+- 安装提示词里指向 SKILL.md「0.2 安装」的指针改为「0. 接入自检」（`docs/quick-start.md` 与 `references/setup.md` 同步）。
