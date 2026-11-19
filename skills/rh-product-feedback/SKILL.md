@@ -173,9 +173,10 @@ node <技能目录>/scripts/zentao-write.mjs bug-create      --payload-file /tmp
 
 ## 4. 查询与解释进度
 
-- **定位**：给了数字 ID → 缺陷用 `bug --id <ID>`，反馈用 `feedback --id <ID>`；描述产品或标题 → 查询器 `bugs` / `feedbacks --product <ID> --match <关键词>` 客户端匹配后列候选让他选，并指出最相近的那条作为建议。
-- **读事实**：取状态、负责人、处理人/处理时间、评审人/评审时间、结论、解决方案，以及 `actions[]`（`action` / `actor` / `comment` / `date`）与其中的 `history[]`（字段级差异）。`actions[]` 与 `actions[].history[]` 运行时才返回，工具的 Schema 里没有声明，按运行时数据读。字段清单见 [references/zentao-mcp.md](references/zentao-mcp.md)。
-- **三段式解释**，不混写：**事实**（直接来自字段与 `actions[]` 的陈述：谁、何时、把什么改成了什么）→ **推断**（基于事实的判断，每条标注「推断」）→ **无法确定**（接口里没有的信息，如未排期原因）。例：`plan` 与 `version` 均为空，只能说明「禅道里没有排期记录」，不能等同于「产品经理拒绝了需求」——后者是推断，且必须写明它只是推断。
+- **列单据**（一次拉全量 + 字段投影 + 客户端筛选）：`node <技能目录>/scripts/zentao.mjs bugs --product <产品ID> [--status active] [--match 关键词]`；反馈单把 `bugs` 换成 `feedbacks`。脚本用 `--all` 翻完所有页、只留投影字段、在进程内按 `--status` / `--match` 筛，只打十几行表格（默认 10 条，要更多加 `--limit`），原始 JSON 不进上下文。表头的「可见 N 条」是当前账号在这个产品下能看到的全部，不是第一页。
+- **打开单据**：给了数字 ID → 缺陷 `bug --id <ID>`，反馈 `feedback --id <ID>`，输出**一行 JSON**：`status`（状态）、`assignee`（负责人）、`processor` + `processedDate`（处理人、处理时间）、`resolution`（结论）、`body`（正文：缺陷单已剥掉标签并归一化空白，可与原文逐字比对）、`actions`（流水），反馈单另有 `reviewer` / `reviewedDate`。只给了标题或产品 → 先用列表的 `--match` 列候选，让他挑编号再打详情。
+- **流水**：`actions` 每条有 `action` / `actor` / `date` / `comment`，`changes` 是这条动作的字段级差异（`field` + `from` → `to`，空值写「（空）」）。回读刚写过的那条单据时，把写前读到的动作 ID 传给 `--baseline-actions 19451,19452`，基线之外的动作才带 `"new": true`；不传基线就没有 `new` 字段——分不出来就说分不出来，不要把历史动作说成本次新增。
+- **三段式解释**，不混写：**事实**（字段与 `actions` 直接给出的东西：谁、何时、把什么改成了什么）→ **推断**（基于事实的判断，每条标注「推断」）→ **无法确定**（禅道里没有的信息）。排期是最常见的坑：`plan` 与 `version` 均为空，只能说「禅道里没有排期记录」，不能写成「产品经理拒绝了需求」——那是推断，且必须写明只是推断。
 - **输出格式**：当前状态 / 负责人 / 处理时间线（`actions` 倒序）/ 结论 / 需要补充的信息。话术与样例见 [references/workflow.md](references/workflow.md) 的 F2 / F3。
 
 ## 5. 补充说明
