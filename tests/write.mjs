@@ -45,7 +45,7 @@ async function withMock(fn, overrides = {}) {
     mcpUrl: server.url,
     zentaoWebUrl: server.baseUrl,
     defaultProduct: { id: null, name: '' },
-    bugAssignee: '',
+    bugAssignee: 'qd',
   }));
   const env = {
     ZENTAO_MCP_URL: server.url,
@@ -164,83 +164,6 @@ test('W07 业务失败：按失败处理，不当成成功', async () => {
   });
 });
 
-test('W12 默认负责人配成 qd：载荷不带 assignedTo，交给禅道按产品 QD 指派', async () => {
-  await withMock(async ({ state, env, dir }) => {
-    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: 'qd' }));
-    const file = writePayload(dir, BUG_PAYLOAD);
-    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
-    assert.equal(code, 0);
-    const result = JSON.parse(stdout.trim());
-    const call = state.calls.find((c) => c.name === 'post_bugs');
-    assert.equal('assignedTo' in call.args.payload, false, '配置成 qd 时载荷不该带这个字段');
-    const bug = state.bugs.get(String(result.id));
-    assert.equal(bug.assignedTo, 'mock-qd', '禅道按产品 QD 指派');
-  });
-});
-
-test('W13 默认负责人配成账号：按配置指给该账号', async () => {
-  await withMock(async ({ state, env, dir }) => {
-    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: 'zhangsan' }));
-    const file = writePayload(dir, BUG_PAYLOAD);
-    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
-    assert.equal(code, 0);
-    const result = JSON.parse(stdout.trim());
-    const call = state.calls.find((c) => c.name === 'post_bugs');
-    assert.equal(call.args.payload.assignedTo, 'zhangsan');
-    const bug = state.bugs.get(String(result.id));
-    assert.equal(bug.assignedTo, 'zhangsan');
-  });
-});
-
-test('W14 终端用户明说不指派：盖过 qd 配置', async () => {
-  await withMock(async ({ state, env, dir }) => {
-    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: 'qd' }));
-    const file = writePayload(dir, { ...BUG_PAYLOAD, assignedTo: '' });
-    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
-    assert.equal(code, 0);
-    const result = JSON.parse(stdout.trim());
-    const bug = state.bugs.get(String(result.id));
-    assert.equal(bug.assignedTo, '', '用户明说的不指派优先于配置');
-  });
-});
-
-test('W15 随包默认负责人配成 qd：没有本机设置时按随包配置', async () => {
-  await withMock(async ({ state, env, dir }) => {
-    fs.writeFileSync(env.ZENTAO_PACKAGE_CONFIG_FILE, JSON.stringify({
-      mcpUrl: env.ZENTAO_MCP_URL,
-      zentaoWebUrl: env.ZENTAO_WEB_URL,
-      bugAssignee: 'qd',
-    }));
-    const file = writePayload(dir, BUG_PAYLOAD);
-    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
-    assert.equal(code, 0);
-    const result = JSON.parse(stdout.trim());
-    const call = state.calls.find((c) => c.name === 'post_bugs');
-    assert.equal('assignedTo' in call.args.payload, false, '随包配置成 qd 时载荷不该带这个字段');
-    const bug = state.bugs.get(String(result.id));
-    assert.equal(bug.assignedTo, 'mock-qd');
-  });
-});
-
-test('W16 本机默认负责人盖过随包默认负责人', async () => {
-  await withMock(async ({ state, env, dir }) => {
-    fs.writeFileSync(env.ZENTAO_PACKAGE_CONFIG_FILE, JSON.stringify({
-      mcpUrl: env.ZENTAO_MCP_URL,
-      zentaoWebUrl: env.ZENTAO_WEB_URL,
-      bugAssignee: 'qd',
-    }));
-    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: '' }));
-    const file = writePayload(dir, BUG_PAYLOAD);
-    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
-    assert.equal(code, 0);
-    const result = JSON.parse(stdout.trim());
-    const call = state.calls.find((c) => c.name === 'post_bugs');
-    assert.equal(call.args.payload.assignedTo, '', '本机设置优先');
-    const bug = state.bugs.get(String(result.id));
-    assert.equal(bug.assignedTo, '');
-  });
-});
-
 test('W08 更新缺陷单：带上单据 ID 与 payload', async () => {
   await withMock(async ({ state, env, dir }) => {
     state.bugs.set('1900', {
@@ -269,29 +192,120 @@ test('W09 更新缺 ID：明确报错，不发请求', async () => {
     assert.equal(state.calls.filter((c) => c.name === 'put_bugs_bugID').length, 0, '不该发起写入');
   });
 });
-test('W10 缺陷单不指派：载荷没写负责人时，单据不会被指派给产品 QD', async () => {
+
+test('W10 缺省负责人 = 产品 QD：载荷不带 assignedTo，由接入层按产品 QD 指派', async () => {
   await withMock(async ({ state, env, dir }) => {
     const file = writePayload(dir, BUG_PAYLOAD);
     const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
     assert.equal(code, 0);
     const result = JSON.parse(stdout.trim());
     const call = state.calls.find((c) => c.name === 'post_bugs');
-    assert.equal(call.args.payload.assignedTo, '', '载荷要显式带空字符串');
+    assert.equal('assignedTo' in call.args.payload, false, '缺省不写这个字段');
     const bug = state.bugs.get(String(result.id));
-    assert.equal(bug.assignedTo, '', '禅道侧不应把单子指派给产品 QD');
-    assert.equal(bug.assignedDate, '');
+    assert.equal(bug.assignedTo, 'mock-qd', '缺省按产品 QD 指派');
+  });
+});
+
+test('W11 两层都没配：同样按产品 QD 指派', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    // 随包配置里没有 bugAssignee，本机也没有偏好文件
+    fs.writeFileSync(env.ZENTAO_PACKAGE_CONFIG_FILE, JSON.stringify({
+      mcpUrl: env.ZENTAO_MCP_URL,
+      zentaoWebUrl: env.ZENTAO_WEB_URL,
+    }));
+    const file = writePayload(dir, BUG_PAYLOAD);
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const call = state.calls.find((c) => c.name === 'post_bugs');
+    assert.equal('assignedTo' in call.args.payload, false);
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, 'mock-qd');
+  });
+});
+
+test('W12 本机默认负责人配成空串：不指派，挡住产品 QD', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: '' }));
+    const file = writePayload(dir, BUG_PAYLOAD);
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const call = state.calls.find((c) => c.name === 'post_bugs');
+    assert.equal(call.args.payload.assignedTo, '', '载荷要带空字符串');
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, '', '不该被指派');
     assert.ok(!bug.actions.some((a) => a.action === 'assigned'), '不应多出一条指派流水');
   });
 });
 
-test('W11 缺陷单用户明确指名时：按他给的禅道账号指派', async () => {
+test('W13 本机默认负责人配成 qd：按产品 QD 指派', async () => {
   await withMock(async ({ state, env, dir }) => {
-    const file = writePayload(dir, { ...BUG_PAYLOAD, assignedTo: 'zhangsan' });
+    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: 'qd' }));
+    const file = writePayload(dir, BUG_PAYLOAD);
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const call = state.calls.find((c) => c.name === 'post_bugs');
+    assert.equal('assignedTo' in call.args.payload, false);
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, 'mock-qd');
+  });
+});
+
+test('W14 本机默认负责人配成账号：按配置指给该账号', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: 'zhangsan' }));
+    const file = writePayload(dir, BUG_PAYLOAD);
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const call = state.calls.find((c) => c.name === 'post_bugs');
+    assert.equal(call.args.payload.assignedTo, 'zhangsan');
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, 'zhangsan');
+  });
+});
+
+test('W15 终端用户明说不指派：盖过 qd 配置', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: 'qd' }));
+    const file = writePayload(dir, { ...BUG_PAYLOAD, assignedTo: '' });
     const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
     assert.equal(code, 0);
     const result = JSON.parse(stdout.trim());
     const bug = state.bugs.get(String(result.id));
-    assert.equal(bug.assignedTo, 'zhangsan', '用户点名的负责人要保留');
+    assert.equal(bug.assignedTo, '', '用户明说的不指派优先于配置');
   });
 });
 
+test('W16 终端用户指名负责人：盖过配置', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: 'qd' }));
+    const file = writePayload(dir, { ...BUG_PAYLOAD, assignedTo: 'lisi' });
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, 'lisi');
+  });
+});
+
+test('W17 本机默认负责人盖过随包默认负责人', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    fs.writeFileSync(env.ZENTAO_PACKAGE_CONFIG_FILE, JSON.stringify({
+      mcpUrl: env.ZENTAO_MCP_URL,
+      zentaoWebUrl: env.ZENTAO_WEB_URL,
+      bugAssignee: 'qd',
+    }));
+    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: '' }));
+    const file = writePayload(dir, BUG_PAYLOAD);
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const call = state.calls.find((c) => c.name === 'post_bugs');
+    assert.equal(call.args.payload.assignedTo, '', '本机设置优先');
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, '');
+  });
+});

@@ -633,7 +633,8 @@ test('B11 缺陷查询与解释：事实、推断、无法确定分段', async (
     const result = await assistant.explainBug(created.id);
     assert.equal(result.status, 'ok');
     assert.ok(result.facts.some((f) => f.includes('当前状态：active')));
-    assert.ok(result.facts.some((f) => f.includes('负责人：未指派')));
+    // 缺省跟产品 QD 走：示例产品 A 的 QD 是 mock-qd
+    assert.ok(result.facts.some((f) => f.includes('负责人：mock-qd')));
     assert.ok(result.inferences.length >= 1);
     assert.ok(result.unknown.some((u) => u.includes('resolution')));
   });

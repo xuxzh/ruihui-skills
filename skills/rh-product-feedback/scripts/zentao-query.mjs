@@ -343,6 +343,55 @@ async function cmdPrep(ctx, opts) {
   for (const feedback of feedbackHits) out([cell(feedback.id), cell(feedback.title), cell(feedback.status), assignee(feedback.assignedTo)].join('\t'));
 }
 
+// 产品的默认承接人：缺省建单时会被指派给谁（产品 QD），以及这个账号还能不能用
+async function cmdQd(ctx, opts) {
+  const wanted = opts.product ? String(opts.product) : '';
+  if (!wanted) throw new Error('用法：zentao-query.mjs qd --product <产品名或ID>');
+
+  const { items: products, total } = await fetchList(ctx, 'get_products', {}, 3);
+  let product = null;
+  if (/^\d+$/.test(wanted)) {
+    product = products.find((p) => String(p.id) === wanted) || null;
+  } else {
+    const resolved = resolveProduct(wanted, products);
+    if (resolved.product) product = resolved.product;
+    else if (resolved.candidates) {
+      out(`# 「${wanted}」匹配到多个产品，选一个再用 --product <ID>：`);
+      for (const p of resolved.candidates) out([cell(p.id), cell(p.name)].join('\t'));
+      return;
+    }
+  }
+  if (!product) {
+    out(`# 没找到产品「${wanted}」（当前账号可见 ${total} 个，下面列出全部）`);
+    for (const p of products) out([cell(p.id), cell(p.name)].join('\t'));
+    return;
+  }
+
+  const { body } = await ctx.call('get_products_productID', { productID: String(product.id) });
+  const detail = body?.product || {};
+  const qd = String(detail.QD || '').trim();
+  out(`# 产品 ${cell(product.id)} ${cell(product.name)} 的默认承接人`);
+  if (!qd) {
+    out(['QD账号', '（空）'].join('\t'));
+    out(['说明', '该产品没配 QD，缺省建单不指派任何人'].join('\t'));
+    return;
+  }
+  out(['QD账号', qd].join('\t'));
+
+  const { items: users } = await fetchList(ctx, 'get_users', {}, 3);
+  const user = users.find((u) => u.account === qd);
+  if (!user) {
+    out(['姓名', '（禅道用户表里没有这个账号）'].join('\t'));
+    out(['账号状态', '查不到——可能已从禅道删除'].join('\t'));
+    return;
+  }
+  out(['姓名', cell(user.realname)].join('\t'));
+  if (String(user.deleted) === '1') out(['账号状态', '已删除（deleted=1）'].join('\t'));
+  else if (String(user.locked || '') !== '') out(['账号状态', '已锁定'].join('\t'));
+  else out(['账号状态', '可用'].join('\t'));
+  out(['最后登录', cell(user.last)].join('\t'));
+}
+
 // ---------------------------------------------------------------- 宿主地址一致性
 
 // 宿主 MCP 配置位置。默认覆盖 Claude Code 与 pi；Agent 可以用 --config/--pointer 指向当前宿主。
@@ -467,6 +516,7 @@ const HELP = `禅道只读查询器（rh-product-feedback）
   bug       --id <ID>                  缺陷详情（字段 + 正文 + 流水）
   feedback  --id <ID>                  反馈单详情（字段 + 正文 + 流水）
   prep      --product <名称或ID> [--match 关键词]   产品 + 项目 + 查重候选，一次拿全
+  qd        --product <名称或ID>         产品的默认承接人（QD 账号 + 账号是否还能用）
   check     [--config <文件> [--pointer <路径>]]   宿主 MCP 地址与技能包是否一致（只给结论）
   sync      [--config <文件> [--pointer <路径>]]   把宿主里的 zentao 地址改成技能包的（只改 url）
 
@@ -495,6 +545,7 @@ async function main() {
     case 'bug': return cmdBug(ctx, opts);
     case 'feedback': return cmdFeedback(ctx, opts);
     case 'prep': return cmdPrep(ctx, opts);
+    case 'qd': return cmdQd(ctx, opts);
     default:
       out(HELP);
       throw new Error(`未知命令：${cmd}`);

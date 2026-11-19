@@ -213,17 +213,22 @@ ZENTAO_PASSWORD=<你的禅道密码>
 
 ## 默认负责人（缺陷单）
 
-经禅道 MCP 建缺陷单时若没收到负责人，会把单子指派给**产品的 QD（质量负责人）**——实测 MOMV2.0 的 QD 是 `chenqiang`，不传就挂在他名下。本技能让这件事变成一个设置：**缺省不指派**，要禅道自己指也可以开。
+**缺省跟产品的 QD 走**：经禅道 MCP 建缺陷单时若不写负责人，单子会落到该产品的 QD（质量负责人）名下——实测 MOMV2.0 的 QD 是 `majiawei`，不传就挂在他名下；QD 为空的产品则不指派。
+
+本技能把它做成一个设置：**缺省 = 产品 QD**，想改成别的就用下面两个键。
 
 取值（字符串）：
 
 | 值 | 含义 | 载荷里怎么写 |
 | --- | --- | --- |
-| `""`（缺省） | 不指派 | 补 `assignedTo: ""` |
-| `"qd"` | 交给禅道默认（产品 QD） | **不带** `assignedTo` 字段 |
+| `"qd"`（缺省） | 产品 QD 承接 | **不带** `assignedTo` 字段 |
+| `""` | 不指派 | 补 `assignedTo: ""` |
 | 别的字符串 | 指给该禅道账号 | 补 `assignedTo: "<账号>"` |
 
-两级来源，**本机优先**：
+解析顺序：**终端用户明说 > 本机默认 > 随包默认 > 缺省（`qd`）**。
+
+- 终端用户明说指派给谁（或明确说不指派）→ 载荷里直接写 `assignedTo`，**盖过配置**。
+- 两级来源，**本机优先**：
 
 | 来源 | 位置 | 范围 |
 | --- | --- | --- |
@@ -231,24 +236,26 @@ ZENTAO_PASSWORD=<你的禅道密码>
 | 本机默认（用户级） | 偏好文件 `~/.config/rh-zentao/preferences.json` 的 `bugAssignee` | 只对本人生效 |
 
 ```json
-{ "defaultProduct": { "id": 1, "name": "MOMV2.0" }, "bugAssignee": "qd" }
+{ "defaultProduct": { "id": 1, "name": "MOMV2.0" }, "bugAssignee": "" }
 ```
 
-- **终端用户明说**要指派给谁（或明确说不指派）→ 载荷里直接写 `assignedTo`，**盖过配置**。
 - 写入脚本在 `bug-create` 时按上面的顺序解析并补字段（见 [SKILL.md](../SKILL.md)「写单据」）；反馈单没有这个字段。
+- 这个设置的来龙去脉见 [ADR-0016](https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/adr/0016-默认负责人跟产品QD走且可配置.md)。
+- 禅道里查不出「离职」——用户表里只有 `deleted` / `locked` 是硬失效标记，账号还在但人已离职查不出来。所以 QD 指向谁要靠**看得见**：草稿与交付都写出 QD 是谁（查询器 `qd --product <产品ID>` 给 QD 账号、姓名与账号状态）。
+
 ### 怎么设
 
-用户在对话里说「以后提 bug 默认指派给 QD」或「默认不指派」时，Agent：
+用户在对话里说「以后提 bug 默认不指派」「以后提 bug 都指给张三」时，Agent：
 
-1. 把要写的值（`qd` 或 `""`）给用户确认。
+1. 把要写的值（`""` / `"qd"` / 账号名）给用户确认。
 2. 合并写进偏好文件的 `bugAssignee`（别覆盖掉文件里已有的 `defaultProduct`）。
 3. 回读复核文件内容，再告诉用户「默认负责人已设为 …」。
 
 ### 怎么用
 
-- 草稿里的负责人一栏按生效值写：未指派 / 交给禅道默认（产品 QD）/ 指给某账号。
-- 建单后回读核对 `assignedTo`，与生效值对不上就如实说明，不要默默认了。
-- 偏好文件不存在或格式坏了 → 当作没设，用随包默认（再缺省就是**不指派**）。
+- 草稿的负责人一栏按生效值**具名**写：产品 QD 是谁就写谁；QD 为空写「未指派（该产品没有 QD）」；用户指名就写他的账号。
+- 建单后回读核对 `assignedTo`，与生效值对不上就如实说明，不要默认识可。
+- 偏好文件不存在或格式坏了 → 当作没设，用随包默认（再缺省就是产品 QD）。
 
 ## 各宿主配置
 
@@ -302,6 +309,7 @@ node <技能目录>/scripts/zentao-query.mjs feedbacks --product 29 --match 切�
 node <技能目录>/scripts/zentao-query.mjs bug --id 1936
 node <技能目录>/scripts/zentao-query.mjs feedback --id 421
 node <技能目录>/scripts/zentao-query.mjs prep --product 瑞辉智能报表平台 --match 切换语言
+node <技能目录>/scripts/zentao-query.mjs qd --product 29    # 产品的默认承接人（QD 账号 + 姓名 + 账号状态）
 node <技能目录>/scripts/zentao-query.mjs check   # 宿主地址是否与技能包一致（只给结论）
 node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao 地址改成技能包的（只改 url）
 ```
@@ -309,7 +317,7 @@ node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao �
 - **前置**：Node.js 18+（用 `fetch`）。没有 node 时没法读写——如实告诉终端用户并给替代路径（禅道 Web 端自提）。
 - **凭据**：脚本自己读本机凭据文件并换当前账号的令牌，密码与令牌不打印、不进上下文。没写凭据时它会提示去跑 `set-credentials.sh`。
 - **地址**：从技能包的 `config.local.json` 读；`check` / `sync` **只输出结论**，不回显地址。`sync` 只改宿主配置里 `zentao` 条目的 `url`，写前备份。宿主不是 Claude Code / pi 时加 `--config <宿主 MCP 配置文件>`（必要时 `--pointer <条目路径>`）。
-- **环境变量**（测试用）：`ZENTAO_MCP_URL` 覆盖禅道 MCP 地址，`ZENTAO_WEB_URL` 覆盖禅道 Web 地址（换令牌用），`ZENTAO_CREDENTIALS_FILE` 覆盖凭据文件路径。
+- **环境变量**（测试用）：`ZENTAO_MCP_URL` 覆盖禅道 MCP 地址，`ZENTAO_WEB_URL` 覆盖禅道 Web 地址（换令牌用），`ZENTAO_CREDENTIALS_FILE` 覆盖凭据文件路径，`ZENTAO_PACKAGE_CONFIG_FILE` 覆盖随包配置路径，`ZENTAO_PREFERENCES_FILE` 覆盖本机偏好文件路径。
 - **写操作不走它**：建单、更新用写入脚本（见下）。
 
 Windows 用 `scripts\zentao-query.ps1`（PowerShell）。
@@ -328,6 +336,7 @@ node <技能目录>/scripts/zentao-write.mjs bug-update      --id <缺陷 ID> --
 - **载荷**：文件里放 payload 的内容本身（**不要再套一层 `payload`**），例如 `{"productID": 42, "title": "…", "openedBuild": ["trunk"], "steps": "<正文 HTML>"}`。也可以用 `--payload '<JSON>'` 或 `--payload-stdin`。
 - **输出**：stdout 一行 JSON。成功：`{"ok":true,"kind":"bug-create","id":"1945","status":"success","message":"保存成功"}`；失败：stderr 一行「错误：…」，退出码非 0；结果不确定：`{"ok":false,"uncertain":true,…}`。
 - **只发一次**：禅道创建接口没有幂等键，重发会造两条记录。脚本不做重试。
+- **缺陷单的负责人由脚本按配置补**（见「默认负责人」）：载荷里没写 `assignedTo` 时，脚本按「终端用户明说 > 本机默认 > 随包默认 > 缺省（产品 QD）」解析——`""` 补空串（不指派）、`"qd"` 不带这个字段（产品 QD 承接）、别的值补该账号。
 - **前置**：Node.js 18+；凭据与地址的读法与查询器一致。
 - **为什么不用宿主里的禅道 MCP 工具写**：那些工具的身份是服务端配置的固定账号，单据会留痕在那个账号名下（见 [zentao-mcp.md](zentao-mcp.md)「身份与认证」）。
 

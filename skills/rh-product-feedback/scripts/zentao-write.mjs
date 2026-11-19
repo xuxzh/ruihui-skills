@@ -123,15 +123,16 @@ function checkRequired(kind, payload) {
 /**
  * 缺陷单的负责人：
  *   - 载荷里写了 assignedTo（终端用户明说指派给谁，或明确不指派）→ 用它
- *   - 否则按配置决定（随包默认 < 本机默认）：
- *       ""     不指派：载荷带空字符串，挡住禅道把单子指派给产品 QD
- *       "qd"   禅道默认：载荷不带这个字段，禅道按产品 QD 指派
+ *   - 否则按配置决定（终端用户明说 > 本机默认 > 随包默认 > 缺省）：
+ *       ""     不指派：载荷带空字符串，挡住接入层把单子指派给产品 QD
+ *       "qd"   产品 QD：载荷不带这个字段，由接入层按产品的 QD 指派
  *       其他值  指给该禅道账号
+ *   两层都没配时按 "qd"：缺省跟着产品的默认承接人走。
  */
 function applyAssignee(kind, payload, prefs, cfg) {
   if (kind.tool !== 'post_bugs') return;
   if (payload.assignedTo !== undefined && payload.assignedTo !== null) return;
-  const configured = String(prefs?.bugAssignee ?? cfg?.bugAssignee ?? '').trim();
+  const configured = String(prefs?.bugAssignee ?? cfg?.bugAssignee ?? 'qd').trim();
   if (configured === 'qd') {
     delete payload.assignedTo;
     return;

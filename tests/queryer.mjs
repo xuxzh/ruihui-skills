@@ -167,3 +167,37 @@ test('Q08 凭据无效时明确报错，不静默按服务端固定身份读', a
     assert.equal(server.state.calls.filter((c) => c.name === 'get_products').length, 0, '不该拿固定身份去读');
   });
 });
+test('Q09 产品的默认承接人：给出 QD 账号、姓名与账号状态', async () => {
+  await withMock(async ({ server, env }) => {
+    const { code, stdout } = await runQueryer(['qd', '--product', '101'], { env });
+    assert.equal(code, 0);
+    assert.match(stdout, /QD账号\tmock-qd/);
+    assert.match(stdout, /姓名\t质量负责人/);
+    assert.match(stdout, /账号状态\t可用/);
+  });
+});
+
+test('Q10 产品没配 QD：说明缺省不指派任何人', async () => {
+  await withMock(async ({ server, env }) => {
+    const { code, stdout } = await runQueryer(['qd', '--product', '102'], { env });
+    assert.equal(code, 0);
+    assert.match(stdout, /QD账号\t（空）/);
+    assert.match(stdout, /不指派任何人/);
+  });
+});
+
+test('Q11 QD 账号已从禅道删除：要看得出来', async () => {
+  const server = await startMockServer({ products: [{ id: 101, name: '示例产品 A', qd: 'gone' }] });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rh-query-'));
+  const credFile = writeCredentials(dir);
+  const env = { ZENTAO_MCP_URL: server.url, ZENTAO_WEB_URL: server.baseUrl, ZENTAO_CREDENTIALS_FILE: credFile };
+  try {
+    const { code, stdout } = await runQueryer(['qd', '--product', '101'], { env });
+    assert.equal(code, 0);
+    assert.match(stdout, /QD账号\tgone/);
+    assert.match(stdout, /账号状态\t已删除/);
+  } finally {
+    await server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

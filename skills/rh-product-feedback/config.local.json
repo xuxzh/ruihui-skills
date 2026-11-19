@@ -2,5 +2,5 @@
   "mcpUrl": "http://192.168.0.149:19090/zentao/mcp",
   "zentaoWebUrl": "http://192.168.0.88:81",
   "defaultProduct": { "id": null, "name": "" },
-  "bugAssignee": ""
+  "bugAssignee": "qd"
 }

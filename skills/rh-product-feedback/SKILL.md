@@ -35,6 +35,7 @@ metadata:
 ```bash
 node <技能目录>/scripts/zentao-query.mjs products --match 报表                            # 可见产品
 node <技能目录>/scripts/zentao-query.mjs prep --product 瑞辉智能报表平台 --match 切换语言  # 产品 + 项目 + 查重候选一次给全
+node <技能目录>/scripts/zentao-query.mjs qd --product 29                                 # 产品的默认承接人（QD 账号 + 账号还能不能用）
 node <技能目录>/scripts/zentao-query.mjs bug --id 1936
 node <技能目录>/scripts/zentao-write.mjs bug-create --payload-file /tmp/rh-payload.json  # 建缺陷单
 ```
@@ -51,7 +52,8 @@ node <技能目录>/scripts/zentao-write.mjs bug-create --payload-file /tmp/rh-p
 - **可见范围**：当前禅道账号能看到的产品的集合；单据只能落在这里面，查重也只覆盖这里面。
 - **随包默认产品**：写在技能包 `config.local.json` 里的公司级默认产品，所有装了这个包的人共享同一份；不是用户自己选的，用它建单前要确认一句。
 - **本机默认产品**：终端用户自己设的默认产品，存在他机器的偏好文件 `~/.config/rh-zentao/preferences.json`，只对本人生效，**绝不写进技能包**（那会随包分发给所有人）。
-- **默认负责人**：建缺陷单时负责人的缺省做法，写在同一份偏好文件里（`bugAssignee`），随包另有一份公司级缺省值；缺省**不指派**。
+- **默认负责人**：建缺陷单时负责人的缺省做法——缺省跟**产品 QD** 走（QD 为空的产品不指派）。可在偏好文件里改（`bugAssignee`），随包另有一份公司级缺省值。
+- **产品 QD**：禅道产品上的质量（缺陷）负责人字段；缺省建单时由它承接。
 - **查询器**：随包的只读查询脚本（`scripts/zentao-query.mjs`），在进程内过滤禅道数据，只把结果表格交给 Agent。
 - **写入脚本**：随包的写单据脚本（`scripts/zentao-write.mjs`），换用户令牌、包 payload、只发一次请求，只把结果 JSON 交给 Agent。
 - **用户令牌**：本机凭据换到的、属于当前禅道账号的令牌；随包脚本带着它访问禅道 MCP，单据就留在这个账号名下。
@@ -92,7 +94,7 @@ node <技能目录>/scripts/zentao-write.mjs bug-create --payload-file /tmp/rh-p
 
 - 必备：标题（一句话说清问题）、所属产品、类型（仅反馈单）、现象或期望、业务场景。
 - 缺陷单追加：复现步骤、实际结果、预期结果；建议追加：现状痛点、期望改进。
-- 只追问真正影响分类、复现或验收的信息，一次问全；终端用户没说的版本号、模块、负责人一律不补写，缺什么就在草稿里写「用户未提供」。
+- 只追问真正影响分类、复现或验收的信息，一次问全；终端用户没说的版本号、模块一律不补写，缺什么就在草稿里写「用户未提供」；负责人按「默认负责人」处理（见 2.5）。
 - 追问按模板的「追问格式」呈现（编号、选项字母、建议与理由）：反馈单见 [references/feedback-templates.md](references/feedback-templates.md)，缺陷单见 [references/bug-templates.md](references/bug-templates.md)。
 - 给了截图 → 记下图片文件路径，正文按 [6. 正文带图片](#6-正文带图片) 处理。
 - 完成标准：模板里每一项都有内容或明确标注缺失。
@@ -103,7 +105,7 @@ node <技能目录>/scripts/zentao-write.mjs bug-create --payload-file /tmp/rh-p
 
 按模板渲染正文。草稿要能独立读懂——终端用户只看草稿就知道禅道里会存下什么。反馈单正文是纯文本 `desc`；缺陷单正文只有一个载体 `steps`，写成结构化 HTML（模板见 [references/bug-templates.md](references/bug-templates.md)「正文模板」）。
 
-草稿一律给终端用户看**纯文本版**（同样的段落转成 Markdown 列表，不要把 HTML 标签甩给用户）。缺陷单的草稿必须包含这一行声明：「即将创建的是禅道正式缺陷单（会进入开发流程），不是反馈单。」
+草稿一律给终端用户看**纯文本版**（同样的段落转成 Markdown 列表，不要把 HTML 标签甩给用户）。缺陷单的草稿必须包含这一行声明：「即将创建的是禅道正式缺陷单（会进入开发流程），不是反馈单。」缺陷单草稿的**负责人一栏要具名**：产品 QD 是谁就写谁（`产品 QD：majiawei（马嘉炜）`），QD 为空写「未指派（该产品没有 QD）」，终端用户指名就写他的账号——查询器 `qd --product <产品ID>` 一次给出 QD 账号、姓名与账号是否还能用。
 
 ### 2.3 查重
 
@@ -135,14 +137,13 @@ node <技能目录>/scripts/zentao-write.mjs bug-create      --payload-file /tmp
 - 脚本输出一行 JSON：`{"ok":true,"kind":"bug-create","id":"1945","status":"success","message":"保存成功"}`。`ok:false` → 按失败处理，并把 `message` 里的服务端原因告诉终端用户；`uncertain:true` → 按「结果不确定」处理（见 2.6）。
 - **只发一次调用**：脚本只发一次请求；禅道创建接口没有幂等键，重发会产生两条记录。
 - 字段名与枚举见 [references/zentao-mcp.md](references/zentao-mcp.md)，两条路径的差异见 [3. 反馈单与缺陷单的差异](#3-反馈单与缺陷单的差异)。
-- **缺陷单不要在载荷里写 `assignedTo`**，除非终端用户明确提到负责人：指名就写他的禅道账号，明确说「不指派」就写 `""`。
-- **不写时由写入脚本按「默认负责人」配置补**：缺省**不指派**（补 `""`，挡住建单时被自动指派给产品 QD）；配成 `qd` 就不带这个字段（由禅道按产品 QD 指派）；配成账号就指给该账号。配置见 [references/setup.md](references/setup.md)「默认负责人」。
+- **缺陷单的负责人按「终端用户明说 > 本机默认 > 随包默认 > 缺省」解析**，缺省是**产品 QD**（QD 为空则不指派）。终端用户明说指派给谁 → 载荷写 `assignedTo`；否则**不要写这个字段**，由写入脚本按配置补（`""` 不指派 / `"qd"` 交给产品 QD / 账号名指给该账号）。配置见 [references/setup.md](references/setup.md)「默认负责人」。
 - `source` / `module` / `feedbackBy` 保持不填：反馈者由禅道按当前禅道账号自动记录，填了反而与实际留痕矛盾。
 - 给了截图 → 建单成功后按 [6](#6-正文带图片) 传图并更新正文。
 
 ### 2.6 回读校验
 
-用返回的 `id` 调查询器 `feedback --id <ID>` / `bug --id <ID>`（**不要用 `get_issues_issueID`**——它解析不了缺陷 ID），核对：产品、标题、完整描述（缺陷单是 `steps`，比较前先剥掉 HTML 标签并归一化换行与空白），以及 `actions` 里**本次新增**了 `opened`（历史上存在过不算）。缺陷单另核对 `openedBuild`（列表显示「主干」、详情显示 `trunk`，两者指同一个值）与 `severity` / `pri`。
+用返回的 `id` 调查询器 `feedback --id <ID>` / `bug --id <ID>`（**不要用 `get_issues_issueID`**——它解析不了缺陷 ID），核对：产品、标题、完整描述（缺陷单是 `steps`，比较前先剥掉 HTML 标签并归一化换行与空白），以及 `actions` 里**本次新增**了 `opened`（历史上存在过不算）。缺陷单另核对 `openedBuild`（列表显示「主干」、详情显示 `trunk`，两者指同一个值）与 `severity` / `pri`，以及 `assignedTo` 是否与生效值一致（生效值是产品 QD 就用查询器 `qd` 取 QD 账号对照，对不上如实说明，不要改单据）。
 
 任一不一致 → 按 [references/error-handling.md](references/error-handling.md) 处理：先查后报，不重复创建。
 
@@ -152,7 +153,7 @@ node <技能目录>/scripts/zentao-write.mjs bug-create      --payload-file /tmp
 
 ### 2.7 交付
 
-给出单据 ID、标题、当前状态、负责人（没有则说明尚未指派）、提交人（当前禅道账号本人）、**禅道直达链接**，以及下一步建议（等待评审 / 需要补充什么信息 / 与哪条既有单重复）。输出样例见 [references/workflow.md](references/workflow.md)。
+给出单据 ID、标题、当前状态、负责人（说清是谁、怎么来的：产品 QD 承接 / 终端用户指名 / 尚未指派）、提交人（当前禅道账号本人）、**禅道直达链接**，以及下一步建议（等待评审 / 需要补充什么信息 / 与哪条既有单重复）。输出样例见 [references/workflow.md](references/workflow.md)。
 
 **链接**：`<禅道 Web 地址>/feedback-view-<反馈 ID>.html` 或 `<禅道 Web 地址>/bug-view-<缺陷 ID>.html`。禅道 Web 地址读技能包内 `config.local.json` 的 `zentaoWebUrl`；读不到或该字段为空 → **不给链接**，只给 ID，并如实说明「技能包里没有配置禅道 Web 地址，给不了直达链接」。不要拿 MCP 地址拼链接，也不要凭印象编一个；给完整 URL，用户点开就能看，不要只写「去禅道看 #421」。
 
@@ -204,7 +205,7 @@ node <技能目录>/scripts/zentao-upload.mjs --file <图片路径> --object-typ
 
 ## 硬约束
 
-1. **写入前确认**：所有业务写入都要终端用户明确确认后执行。指派、关闭、删除、解决、重新打开单据由人来做——Agent 只提交内容与读取状态，缺陷单也不做流转：建缺陷单按「默认负责人」配置走（缺省不指派），终端用户明确指名才指派。
+1. **写入前确认**：所有业务写入都要终端用户明确确认后执行。指派、关闭、删除、解决、重新打开单据由人来做——Agent 只提交内容与读取状态，缺陷单也不流转：**不改变禅道的分配结果**，终端用户明说的负责人写进载荷，其余交给缺省（产品 QD）。
 2. **写只用随包写入脚本**：建单与更新一律走 `scripts/zentao-write.mjs`，它带当前账号的令牌；宿主里的禅道 MCP 工具是服务端固定身份，不用于写单据。
 3. **写入后回读**：按 ID 重新读取并核对内容，「保存成功」的文本不作为落库证据；补充说明还要确认本次**新增**了 `edited` 流水。
 4. **不确定先查**：超时、连接中断、返回与预期不符时，先查询核实再决定下一步，同一份内容不重复创建——禅道创建无幂等，盲目重试会造重复单。结果不确定时只认「查重基线之外、唯一、回读完全一致」的新记录；认不准或复查不完整就报未确认交回终端用户，不把「没查到」说成「没创建」。

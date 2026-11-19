@@ -45,6 +45,13 @@ export const MOCK_PROJECTS = [
   { id: 12, name: '示例项目 B', product: 101, status: 'doing' },
 ];
 
+// 禅道用户表：deleted / locked 是能查到的硬失效；离职查不出来（账号还在，只是没人登录）。
+export const MOCK_USERS = [
+  { account: 'mock-qd', realname: '质量负责人', deleted: '0', locked: '', last: '2026-11-12 09:30' },
+  { account: 'mock-user', realname: '当前用户', deleted: '0', locked: '', last: '2026-11-12 10:00' },
+  { account: 'gone', realname: '离职账号', deleted: '1', locked: '', last: '2026-01-05 09:00' },
+];
+
 export function createMockState(overrides = {}) {
   return {
     feedbacks: new Map(),
@@ -67,6 +74,8 @@ export function createMockState(overrides = {}) {
     loginFails: false,
     // 登录账号 → 可见产品 ID 列表；不设则全部可见
     visibleProducts: null,
+    // 覆盖产品列表（测试注入：比如把 QD 指到已删除的账号上）
+    products: null,
     // tools/list 返回空数组，模拟「宿主里没注册禅道 MCP」
     hideTools: false,
     // 删除类调用是否失败（测试注入）
@@ -100,6 +109,8 @@ async function readBody(req) {
 const TOOLS = [
   { name: 'post_users_login', description: '获取 Token', inputSchema: { type: 'object', properties: { payload: { type: 'object', properties: { account: { type: 'string' }, password: { type: 'string' } } } } } },
   { name: 'get_products', description: '产品列表', inputSchema: { type: 'object', properties: { pageID: { type: 'string' }, recPerPage: { type: 'string' } } } },
+  { name: 'get_products_productID', description: '产品详情', inputSchema: { type: 'object', properties: { productID: { type: 'string' } } } },
+  { name: 'get_users', description: '用户列表', inputSchema: { type: 'object', properties: { pageID: { type: 'string' }, recPerPage: { type: 'string' } } } },
   { name: 'get_products_productID_feedbacks', description: '产品反馈列表', inputSchema: { type: 'object', properties: { productID: { type: 'string' }, pageID: { type: 'string' }, recPerPage: { type: 'string' } } } },
   { name: 'get_feedbacks_feedbackID', description: '反馈详情', inputSchema: { type: 'object', properties: { feedbackID: { type: 'string' } } } },
   { name: 'post_feedbacks', description: '创建反馈', inputSchema: { type: 'object', properties: { payload: { type: 'object', properties: { product: { type: 'integer' }, title: { type: 'string' }, desc: { type: 'string' }, type: { type: 'string' } } } } } },
@@ -141,9 +152,10 @@ function bugView(bug) {
 
 /** 当前登录账号可见的产品；state.visibleProducts 为空时全部可见。 */
 function visibleProducts(state, session) {
-  if (!state.visibleProducts) return MOCK_PRODUCTS;
+  const all = state.products || MOCK_PRODUCTS;
+  if (!state.visibleProducts) return all;
   const ids = state.visibleProducts[session.account] ?? [];
-  return MOCK_PRODUCTS.filter((p) => ids.includes(p.id));
+  return all.filter((p) => ids.includes(p.id));
 }
 
 /** 产品对当前账号不可见时，禅道侧表现为「不存在」。 */
@@ -181,6 +193,19 @@ function handleToolCall(state, session, name, args) {
   if (name === 'get_products') {
     const products = visibleProducts(state, session);
     return { payload: { pager: { recTotal: products.length, pageTotal: 1, pageID: 1, recPerPage: 20 }, products } };
+  }
+
+  if (name === 'get_products_productID') {
+    const productID = Number(args.productID);
+    const product = visibleProducts(state, session).find((p) => p.id === productID);
+    if (!product) return { payload: { message: 'Product does not exist.', status: 'fail' } };
+    // 真实服务端的 QD 是大写字段名。
+    return { payload: { product: { ...product, QD: product.qd || '' } } };
+  }
+
+  if (name === 'get_users') {
+    const users = MOCK_USERS.map((u) => ({ ...u }));
+    return { payload: { pager: { recTotal: users.length, pageTotal: 1, pageID: 1, recPerPage: 20 }, users } };
   }
 
   if (name === 'get_products_productID_feedbacks') {
@@ -336,7 +361,7 @@ function handleToolCall(state, session, name, args) {
         ? `${payload.steps || ''}<p>（禅道侧自动改写）</p>`
         : payload.steps || '';
       // 禅道实测行为：没给负责人就指派给产品的 QD；给了空字符串才是「未指派」。
-      const product = MOCK_PRODUCTS.find((p) => p.id === Number(productID));
+      const product = (state.products || MOCK_PRODUCTS).find((p) => p.id === Number(productID));
       const named = typeof payload.assignedTo === 'string' ? payload.assignedTo.trim() : '';
       const assignedTo = named || (payload.assignedTo === '' ? '' : (product?.qd || ''));
       // 自动指派时禅道会同时记下指派时间与一条 assigned 流水。
