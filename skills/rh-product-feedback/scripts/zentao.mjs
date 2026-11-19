@@ -473,6 +473,282 @@ const COMMANDS = {
 
 // ===== 写子命令 =====
 // ----- 建缺陷单 -----
+
+// 缺陷单的正文载体是 steps（富文本）。回读比对前先剥标签、归一化空白再逐字比：
+// 服务端可能补 <p>、把换行写成 <br>、转义实体，这些都不算内容差异。
+function plainText(html) {
+  return String(html || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .filter((line, index, arr) => line !== '' || (index > 0 && arr[index - 1] !== ''))
+    .join('\n')
+    .trim();
+}
+
+// 回读只取核对要用的字段：原始单据带几十个字段，进上下文没用
+const BUG_READBACK_FIELDS = 'id,title,product,steps,severity,pri,openedBuild,assignedTo,status,openedBy,actions';
+
+/** 读缺陷单载荷：文件里放 bug create 的请求体本身，别再套一层 payload。 */
+function readBugPayload(file) {
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    throw new Error(`读不到载荷文件：${err?.message || err}`);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error('载荷文件不是合法 JSON：放缺陷单的请求体本身，不要再套一层 payload');
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('载荷文件里要放一个 JSON 对象（缺陷单的请求体）');
+  }
+  const missing = [];
+  if (!(Number(payload.productID) > 0)) missing.push('productID');
+  if (!String(payload.title ?? '').trim()) missing.push('title');
+  if (!Array.isArray(payload.openedBuild) || payload.openedBuild.length === 0) missing.push('openedBuild');
+  if (missing.length) throw new Error(`载荷缺必填字段：${missing.join('、')}`);
+  payload.productID = Number(payload.productID);
+  // 禅道 CLI 校验 severity / pri 必须是有限数字，字符串会 E2009；这里先校正成数字
+  for (const key of ['severity', 'pri']) {
+    const value = payload[key];
+    if (value === undefined || value === null || value === '') continue;
+    if (!Number.isFinite(Number(value))) throw new Error(`载荷的 ${key} 要写数字（禅道 CLI 不接受字符串）`);
+    payload[key] = Number(value);
+  }
+  return payload;
+}
+
+/** 本机偏好（默认负责人、默认产品）：只对本机生效，不进技能包。 */
+function loadLocalPreferences(env) {
+  const base = process.platform === 'win32'
+    ? (env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'))
+    : path.join(os.homedir(), '.config');
+  const file = env.ZENTAO_PREFERENCES_FILE || path.join(base, 'rh-zentao', 'preferences.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 缺陷单负责人的生效顺序（ADR-0016 + ADR-0018）：终端用户明说 > 本机默认 > 随包默认 > 代码兜底。
+ *   - 载荷里已经有 assignedTo（终端用户指名，或明确说不指派）→ 照原样
+ *   - 随包默认是 ""＝不指派：载荷显式带空串，挡住禅道侧按产品 QD 的默认指派
+ *   - 代码兜底是 "qd"＝产品 QD：载荷不带这个字段，由禅道按产品的 QD 指派
+ * 返回生效来源，交付时要说明负责人是怎么来的。
+ */
+function resolveBugAssignee(payload, env) {
+  if (payload.assignedTo !== undefined && payload.assignedTo !== null) return 'user';
+  const prefs = loadLocalPreferences(env);
+  const cfg = loadPackageConfig(env);
+  const hasLocal = typeof prefs.bugAssignee === 'string';
+  const hasPackage = typeof cfg.bugAssignee === 'string';
+  const configured = String(hasLocal ? prefs.bugAssignee : hasPackage ? cfg.bugAssignee : 'qd').trim();
+  if (configured === 'qd') {
+    delete payload.assignedTo;
+    return 'qd';
+  }
+  payload.assignedTo = configured;
+  return hasLocal ? 'local' : 'package';
+}
+
+/** 按编号回读缺陷单（只取核对要用的字段）。 */
+async function readBug(id, env) {
+  const { data } = await runCli(['bug', 'get', String(id), '--fields', BUG_READBACK_FIELDS], env);
+  return data && typeof data === 'object' ? data : {};
+}
+
+/** 某产品下的全部缺陷编号：写入前拍的基线，也是结果不确定时找新记录的范围。 */
+async function bugIdsOf(productID, env) {
+  const { data } = await runCli(
+    ['bug', 'list', '--scope', 'products', '--scope-id', String(productID), '--all', '--fields', 'id'],
+    env,
+  );
+  return rowsOf(data)
+    .map((row) => Number(row.id))
+    .filter((id) => Number.isFinite(id));
+}
+
+function versionListOf(value) {
+  const list = Array.isArray(value) ? value : value === undefined || value === null || value === '' ? [] : [value];
+  return list.map((item) => String(item).trim()).filter(Boolean);
+}
+
+/** 回读核对：产品、标题、完整正文、影响版本、严重程度、优先级、负责人、本次新增的「创建」流水。 */
+function bugMismatches(payload, bug) {
+  const mismatches = [];
+  if (Number(bug.product) !== Number(payload.productID)) mismatches.push('产品');
+  if (String(bug.title ?? '').trim() !== String(payload.title).trim()) mismatches.push('标题');
+  if (plainText(bug.steps) !== plainText(payload.steps)) mismatches.push('正文');
+  if (versionListOf(bug.openedBuild).join('\n') !== versionListOf(payload.openedBuild).join('\n')) mismatches.push('影响版本');
+  for (const [key, label] of [['severity', '严重程度'], ['pri', '优先级']]) {
+    if (payload[key] === undefined) continue;
+    if (String(bug[key] ?? '').trim() !== String(payload[key]).trim()) mismatches.push(label);
+  }
+  // 生效值是产品 QD 时负责人由禅道侧指派，拿不到预期值，只记录回读结果
+  if (payload.assignedTo !== undefined && String(bug.assignedTo ?? '').trim() !== String(payload.assignedTo).trim()) {
+    mismatches.push('负责人');
+  }
+  const actions = Array.isArray(bug.actions) ? bug.actions : [];
+  if (!actions.some((action) => String(action?.action) === 'opened')) mismatches.push('操作流水里本次新增的「创建」');
+  return mismatches;
+}
+
+// 交付时要给完整直达链接；站点地址读不到就不给链接，也不编一个
+function bugLink(env, id) {
+  const site = String(env.ZENTAO_URL || '').replace(/\/+$/, '');
+  return site ? `${site}/bug-view-${id}.html` : null;
+}
+
+/** 建单成功的交付要素：编号、标题、状态、负责人及其来源、提交人、直达链接。 */
+function emitBug(bug, assigneeSource, env, verified) {
+  out(
+    JSON.stringify({
+      ok: true,
+      kind: 'bug',
+      id: Number(bug.id),
+      title: bug.title ?? '',
+      status: bug.status ?? '',
+      assignedTo: String(bug.assignedTo ?? ''),
+      assigneeSource,
+      openedBy: bug.openedBy ?? '',
+      url: bugLink(env, bug.id),
+      verified,
+    }),
+  );
+}
+
+/** 单据写进去了但回读对不上：不重建，把现状交回终端用户。 */
+function reportBugMismatches(id, mismatches) {
+  const message = `回读核对没通过（缺陷 #${id} 已经写入）：${mismatches.join('、')}与载荷不一致。不要重建，先把单据现状告诉终端用户。`;
+  process.stderr.write(`错误：${message}\n`);
+  out(JSON.stringify({ ok: false, kind: 'bug', id, created: true, mismatches, message }));
+  process.exitCode = 1;
+}
+
+/** 结果不确定：不重发，交回终端用户。 */
+function reportBugUncertain(message, extra = {}) {
+  process.stderr.write(`错误：${message}\n`);
+  out(JSON.stringify({ ok: false, kind: 'bug', uncertain: true, ...extra, message }));
+  process.exitCode = 1;
+}
+
+// 这些错误说明请求可能已经落到禅道、只是没拿到回执：先查询核实，不重发。
+// CLI 的错误封装里带官方错误码：5001 超时、5003 取消、1002 地址不可达；读不懂响应同理。
+function cliOutcomeUnknown(err) {
+  const message = String(err?.message || '');
+  return /超时/.test(message) || /（E?(500[13]|1002)）/.test(message) || /响应看不懂/.test(message);
+}
+
+/**
+ * 结果不确定（超时 / 断连 / 读不懂响应）时，先查该产品的缺陷列表，只认
+ * 「查重基线之外 + 唯一 + 回读完全一致」的那条；认不准就报未确认。
+ */
+async function confirmBugByQuery(env, payload, assigneeSource, baseline, why) {
+  let ids;
+  try {
+    ids = await bugIdsOf(payload.productID, env);
+  } catch (err) {
+    reportBugUncertain(`${why}；重查产品 ${payload.productID} 的缺陷列表也失败（${err?.message || err}），这条缺陷是否建成都未确认。不要重发。`);
+    return;
+  }
+  const fresh = ids.filter((id) => !baseline.has(id));
+  const matched = [];
+  for (const id of fresh) {
+    let bug;
+    try {
+      bug = await readBug(id, env);
+    } catch {
+      continue;
+    }
+    if (bugMismatches(payload, bug).length === 0) matched.push(bug);
+  }
+  if (matched.length === 1) {
+    emitBug(matched[0], assigneeSource, env, 'query');
+    return;
+  }
+  if (matched.length > 1) {
+    reportBugUncertain(
+      `${why}；重查后找到多条与载荷一致的记录，无法唯一确认是哪一条，先不要重发，把候选交回终端用户。`,
+      { id: null, candidates: matched.map((bug) => Number(bug.id)) },
+    );
+    return;
+  }
+  reportBugUncertain(
+    `${why}；重查产品 ${payload.productID} 也没找到与载荷一致的新记录，这条缺陷是否建成未确认。不要重发，先向终端用户核实。`,
+    { id: null, candidates: [] },
+  );
+}
+
+// 建缺陷单：载荷落文件 → 只发一次创建 → 按返回编号回读核对 → 交付
+async function cmdBugCreate(env, opts) {
+  const file = String(opts['payload-file'] ?? '').trim();
+  if (!file) throw usage('node zentao.mjs bug-create --payload-file <路径>（文件里放缺陷单的请求体）');
+  const payload = readBugPayload(file);
+  const assigneeSource = resolveBugAssignee(payload, env);
+  // 补上负责人的生效载荷写回同一个临时文件：交给 CLI 的永远是文件，正文不进命令行参数
+  fs.writeFileSync(file, JSON.stringify(payload), { mode: 0o600 });
+
+  try {
+    // 写入前拍一次查重基线：结果不确定时，只有基线之外的编号才可能是本次新建的
+    let baseline;
+    try {
+      baseline = new Set(await bugIdsOf(payload.productID, env));
+    } catch (err) {
+      throw new Error(`读不到产品 ${payload.productID} 的缺陷列表，没敢建单（先确认产品与权限）：${err?.message || err}`);
+    }
+
+    let created;
+    try {
+      // 只发一次：禅道创建没有幂等键，重发就是两条记录
+      created = await runCli(['bug', 'create', '--data', `@${file}`], env);
+    } catch (err) {
+      if (!cliOutcomeUnknown(err)) throw err;
+      await confirmBugByQuery(env, payload, assigneeSource, baseline, `创建请求结果不确定（${err.message}）`);
+      return;
+    }
+
+    const id = Number((created.data?.bug ?? created.data)?.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      await confirmBugByQuery(env, payload, assigneeSource, baseline, '创建响应里没有可用的缺陷编号');
+      return;
+    }
+    let bug;
+    try {
+      bug = await readBug(id, env);
+    } catch (err) {
+      await confirmBugByQuery(env, payload, assigneeSource, baseline, `按返回的 #${id} 回读失败（${err.message}）`);
+      return;
+    }
+    const mismatches = bugMismatches(payload, bug);
+    if (mismatches.length) {
+      reportBugMismatches(id, mismatches);
+      return;
+    }
+    emitBug(bug, assigneeSource, env, 'readback');
+  } finally {
+    // 临时载荷文件用完删掉：正文不留在磁盘上
+    fs.rmSync(file, { force: true });
+  }
+}
+
+// 各票的子命令注册放在自己的分区里，免得同改 COMMANDS 字面量
+Object.assign(COMMANDS, {
+  'bug-create': { run: cmdBugCreate, options: ['payload-file'] },
+});
 // ----- 建反馈单 -----
 // ----- 更新单据 -----
 // ----- 传图 -----

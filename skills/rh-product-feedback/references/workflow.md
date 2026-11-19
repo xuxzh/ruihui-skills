@@ -198,7 +198,7 @@
 严重程度 / 优先级：3 / 3（默认值）
 影响版本：trunk（默认值）
 缺陷类型：codeerror
-负责人：产品 QD：majiawei（马嘉炜）
+负责人：未指派（随包默认不指派；生效值是产品 QD 时写「产品 QD：majiawei（马嘉炜）」，用户指名就写他的账号）
 
 正文：
 【步骤】
@@ -248,32 +248,39 @@
 
 用户回复「新建」即可视为对当前草稿的明确确认。草稿里必须带「即将创建的是禅道正式缺陷单（会进入开发流程）」这一行。
 
+只回「嗯」「行吧」而没看到草稿 → **先把草稿贴出来再问一次**；草稿改过（换了产品、加了正文、改了负责人）→ 重新贴新草稿再确认。没拿到明确确认，不调写入命令。
+
 ### 5. 创建
 
+先把载荷写进临时文件，再交入口脚本；**正文只走文件，不进命令行参数**。
+
 ```json
-{"payload": {"productID": 1, "title": "设备列表导出按钮点击后无响应", "openedBuild": ["trunk"], "severity": 3, "pri": 3, "type": "codeerror", "steps": "<正文 HTML>"}}
+{"productID": 1, "title": "设备列表导出按钮点击后无响应", "openedBuild": ["trunk"], "severity": 3, "pri": 3, "type": "codeerror", "steps": "<正文 HTML>"}
 ```
 
-注意字段名是 `productID`（反馈单是 `product`），`openedBuild` 是字符串数组。只发一次。
+```bash
+node <技能目录>/scripts/zentao.mjs bug-create --payload-file /tmp/rh-zentao-payload.json
+```
 
-负责人不写在这个载荷里：写入脚本按「默认负责人」配置补（缺省是产品 QD，载荷不带这个字段；配成 `""` 补空串＝不指派；用户明确指名才写他的账号）——见 [setup.md](setup.md)「默认负责人」。
+- 字段名是 `productID`（反馈单是 `product`），`openedBuild` 是字符串数组，`severity` / `pri` 写数字（CLI 不接受字符串）。文件里放请求体本身，不要再套一层 `payload`。
+- **只发一次**：脚本只发一次创建请求，禅道创建没有幂等键，不要自己再补一次。临时文件由脚本用完即删。
+- 负责人不写在这个载荷里：入口脚本按「默认负责人」配置补——随包默认 `""` 补空串（不指派，挡住禅道侧默认指派），代码兜底 `"qd"` 不带这个字段（由禅道按产品的 QD 指派），用户明确指名才写他的账号。见 [setup.md](setup.md)「默认负责人」。
+- 脚本写入前先拍一次查重基线（该产品下的缺陷编号），结果不确定时只用它判断哪些编号是本次新建的。
 
 ### 6. 回读
 
-查询器 `bug --id <ID>`（用返回的 `id`）→ 核对 `product` / `title` / `steps`（**剥标签 + 归一化空白**后逐字比较）/ `openedBuild`（`trunk` 与「主干」归一化）/ `severity` / `pri` / `actions` 里的 `opened`。
-
-`assignedTo` 也要核对：生效值是产品 QD 就用查询器 `qd --product <产品ID>` 取 QD 账号对照（对不上就如实说明，不要改单据）；生效值是「不指派」就断言它为空。
+`bug-create` 已经按返回的编号做过回读核对：`product` / `title` / `steps`（**剥标签 + 归一化空白**后逐字比较）/ `openedBuild`（`trunk` 与「主干」归一化）/ `severity` / `pri` / `assignedTo`，以及 `actions` 里**本次新增**的 `opened`（历史上存在过不算）。它把结论、交付要素与核对依据打成一行 JSON：
 
 ```
-✓ 创建成功，缺陷 #1935
-状态：active
-严重程度/优先级：3 / 3
-影响版本：trunk
-负责人：majiawei（产品 QD 承接）
-操作流水：opened（2026-03-12 10:22）
+{"ok":true,"kind":"bug","id":1935,"title":"设备列表导出按钮点击后无响应","status":"active","assignedTo":"","assigneeSource":"package","openedBy":"zhangsan","url":"<禅道 Web 地址>/bug-view-1935.html","verified":"readback"}
 ```
 
-创建请求超时、断连时：重查该产品的缺陷列表，只认「基线之外、唯一、回读完全一致」的那条；话术同 F1 第 6 步。
+- `verified: "readback"` → 回读通过。`verified: "query"` → 创建回执丢了（超时 / 断连），结论来自重查该产品后唯一一致的新记录，**交付时要说明「编号来自查询核实」**。
+- `ok:false` + `created:true` + `mismatches` → 单据建出来了但内容对不上：**不要重建**，把不一致项与单据现状告诉终端用户（该改的自己改不了：技能不流转、不改单据）。
+- `ok:false` + `uncertain:true` → 是否建成**未确认**：不重发，把 `candidates` 列给终端用户并请他自己在禅道里看一眼；**不要把「没查到」说成「没创建」**。
+- 终端用户要细节时，再用查询器 `bug --id <ID>` 读一遍正文、流水与历史。
+
+负责人的生效值：`assigneeSource` 为 `qd` 时用查询器 `qd --product <产品ID>` 取 QD 账号与姓名对照回读到的 `assignedTo`（对不上就如实说明，不要改单据）；为 `package` / `local` / `user` 时断言 `assignedTo` 与载荷一致（`""` 就是未指派）。
 
 ### 7. 交付
 
@@ -283,11 +290,14 @@
 - 所属项目：MOMV2.0-RD
 - 严重程度/优先级：3 / 3
 - 影响版本：trunk
-- 当前状态：active，负责人 majiawei（产品 QD 承接）
-- 提交人：以回读到的 `openedBy` 为准（正常就是终端用户本人；不是本人要如实说明原因，见 `zentao-mcp.md` 的「身份与认证」）
-- 链接：<禅道 Web 地址>/bug-view-1935.html（读不到 `zentaoWebUrl` 就不给这一行，只给编号）
+- 当前状态：active
+- 负责人：未指派（随包默认未指派）
+- 提交人：zhangsan（回读到的 openedBy，就是你自己）
+- 链接：<禅道 Web 地址>/bug-view-1935.html
 下一步：等开发认领；要补充信息随时说「补充缺陷 #1935 ...」
 ```
+
+负责人一栏按 `assigneeSource` 说清来源：`user` 终端用户指名 / `local` 本机默认 / `package` 随包默认未指派 / `qd` 产品 QD。`openedBy` 与当前禅道账号不一致时如实说明「禅道里这条单据的提交人是 <另一个人>」。`url` 为 null（技能包没配 `zentaoWebUrl`）就不给链接，只给编号并说明原因。
 
 ### 默认负责人
 
