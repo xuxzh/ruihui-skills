@@ -70,8 +70,11 @@ test('打包产物是一个顶层自洽的技能目录', () => {
 
   // 接入配置里只有地址与随包默认值，没有凭据字段
   const config = JSON.parse(fs.readFileSync(path.join(pkg, 'config.local.json'), 'utf8'));
-  assert.deepEqual(Object.keys(config).sort(), ['bugAssignee', 'defaultProduct', 'zentaoCli', 'zentaoWebUrl']);
-  assert.equal(config.mcpUrl, undefined, '禅道 MCP 地址已不进技能链路');
+  assert.deepEqual(Object.keys(config).sort(), ['bugAssignee', 'defaultProduct', 'mcpUrl', 'zentaoCli', 'zentaoWebUrl']);
+  // 自研禅道 MCP 降级为「给人手动查看」：地址随包带着，但技能卡片里的接入通道只有禅道 CLI
+  assert.match(config.mcpUrl, /^https?:\/\//, 'mcpUrl 是给人手动查看用的地址来源');
+  const skillMd = fs.readFileSync(path.join(pkg, 'SKILL.md'), 'utf8');
+  assert.ok(!skillMd.includes(config.mcpUrl), '技能文档不写这个地址（技能不读它、不依赖它）');
   assert.equal(config.defaultProduct.id, null, '没预置时随包默认产品是空位');
 });
 
