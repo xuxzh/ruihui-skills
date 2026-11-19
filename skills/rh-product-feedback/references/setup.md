@@ -240,7 +240,7 @@ ZENTAO_PASSWORD=<你的禅道密码>
 ```
 
 - 写入脚本在 `bug-create` 时按上面的顺序解析并补字段（见 [SKILL.md](../SKILL.md)「写单据」）；反馈单没有这个字段。
-- 这个设置的来龙去脉见 [ADR-0016](https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/adr/0016-默认负责人跟产品QD走且可配置.md)；随包默认改成不指派的理由见 [ADR-0017](https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/adr/0017-随包默认负责人改为不指派.md)。
+- 这个设置的来龙去脉见 [ADR-0016](https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/adr/0016-默认负责人跟产品QD走且可配置.md)；随包默认改成不指派的理由见 [ADR-0018](https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/adr/0018-随包默认负责人改为不指派.md)。
 - 禅道里查不出「离职」——用户表里只有 `deleted` / `locked` 是硬失效标记，账号还在但人已离职查不出来。所以 QD 指向谁要靠**看得见**：草稿与交付都写出 QD 是谁（查询器 `qd --product <产品ID>` 给 QD 账号、姓名与账号状态）。
 
 ### 怎么设
