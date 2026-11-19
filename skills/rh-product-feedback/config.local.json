@@ -1,6 +1,7 @@
 {
   "mcpUrl": "http://192.168.0.149:19090/zentao/mcp",
   "zentaoWebUrl": "http://192.168.0.88:81",
+  "zentaoCli": { "package": "zentao-cli", "version": "0.4.4" },
   "defaultProduct": { "id": null, "name": "" },
   "bugAssignee": ""
 }
