@@ -103,9 +103,9 @@ export class FeedbackAssistant {
     } catch {
       throw new SkillError('mcp_unreachable', '连不上禅道 MCP：检查网络与内网地址（地址在技能包的 config.local.json 里），不要向用户索要地址。');
     }
-    const hasZentao = tools.some((t) => /post_users_login|post_feedbacks/.test(t.name || ''));
+    const hasZentao = tools.some((t) => /post_feedbacks|post_bugs/.test(t.name || ''));
     if (!hasZentao) {
-      throw new SkillError('mcp_not_configured', '禅道 MCP 未注册：按 references/setup.md 引导安装——读 config.local.json 的地址 → 按宿主登记 MCP → 请用户自己写入凭据；不要向用户索要地址、账号或密码。');
+      throw new SkillError('mcp_not_configured', '禅道 MCP 不可用：按 references/setup.md 核对技能包 config.local.json 里的地址与本机凭据——不要向用户索要地址、账号或密码。');
     }
     return tools;
   }
@@ -115,13 +115,33 @@ export class FeedbackAssistant {
       this.loggedIn = false;
       throw new SkillError('not_authenticated', '本机没有禅道接入凭据：请用户自己运行 references/setup.md 里的凭据写入命令，不要在对话里索要密码或令牌。');
     }
-    const res = await this.client.callTool('post_users_login', { payload: { ...this.credentials } });
-    if (res.status === 'fail' || res.httpStatus === 401) {
+    // 与随包脚本一致：用本机凭据直连禅道换一个属于当前账号的令牌，再带着令牌访问禅道 MCP。
+    // 禅道 MCP 的 post_users_login 不校验凭据（恒返回服务端配置的固定身份），不能用来定身份。
+    const baseUrl = this.client.zentaoBaseUrl;
+    if (!baseUrl) {
       this.loggedIn = false;
+      throw new SkillError('auth_failed', '拿不到禅道地址：地址在技能包 config.local.json 里，不要向用户索要地址。');
+    }
+    let token = null;
+    try {
+      const res = await fetch(`${baseUrl}/api.php/v1/tokens`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ account: this.credentials.account, password: this.credentials.password }),
+      });
+      const body = await res.json().catch(() => null);
+      if (res.ok && body?.token) token = String(body.token);
+    } catch {
+      token = null;
+    }
+    if (!token) {
+      this.loggedIn = false;
+      delete this.client.headers.authorization;
       throw new SkillError('auth_failed', '禅道登录失败');
     }
+    this.client.headers.authorization = `Bearer ${token}`;
     this.loggedIn = true;
-    return res;
+    return { token };
   }
 
   /** 401 → 重新登录一次并重试一次；仍失败则停止。 */

@@ -11,6 +11,8 @@ async function withAssistant(overrides, fn) {
   const server = await startMockServer(overrides);
   const client = new McpClient(server.url, { timeoutMs: 800 });
   await client.initialize();
+  // 与随包脚本一致：直连禅道换令牌需要禅道 Web 地址
+  client.zentaoBaseUrl = server.baseUrl;
   const state = server.state;
   const calls = (name) => state.calls.filter((c) => c.name === name);
   try {
@@ -20,6 +22,7 @@ async function withAssistant(overrides, fn) {
   }
 }
 
+const MOCK_CRED = 'mock-secret-password';
 const PRODUCT_ID = 101;
 const DRAFT = {
   title: '设备列表导出按钮点击后无响应',
@@ -96,14 +99,15 @@ test('T10 补充反馈：保留原文并回读验证', async () => {
   });
 });
 
-test('T11 登录失效：重新登录一次后继续', async () => {
-  await withAssistant({}, async ({ client, calls }) => {
+test('T11 令牌失效：重新换一个令牌后继续', async () => {
+  await withAssistant({}, async ({ client, state, calls }) => {
     const assistant = new FeedbackAssistant({ client, confirm: async () => true });
     await assistant.login();
-    client.sessionId = 'unknown-session'; // 触发 401
+    const mintedBefore = state.tokens.size;
+    client.headers.authorization = 'Bearer stale'; // 触发 401
     const result = await assistant.submit(DRAFT);
     assert.equal(result.status, 'created');
-    assert.ok(calls('post_users_login').length >= 2, '应重新登录一次');
+    assert.ok(state.tokens.size > mintedBefore, '应重新换一个令牌');
   });
 });
 
@@ -112,6 +116,35 @@ test('T11 登录持续失败：停止操作且不写入', async () => {
     const assistant = new FeedbackAssistant({ client, confirm: async () => true });
     await assert.rejects(() => assistant.submit(DRAFT), (err) => err.code === 'auth_failed');
     assert.equal(calls('post_feedbacks').length, 0);
+  });
+});
+
+// 回归：单据留痕在提交人自己名下（禅道 MCP 的 post_users_login 不校验凭据，
+// 恒返回服务端配置的固定身份；靠它写会留痕在那个账号名下——见 issue #7）
+test('写入留痕在当前账号名下，不在服务端固定身份名下', async () => {
+  await withAssistant({}, async ({ client, state }) => {
+    const assistant = new FeedbackAssistant({
+      client,
+      credentials: { account: 'mock-user', password: MOCK_CRED },
+      confirm: async () => true,
+    });
+    const result = await assistant.submit(DRAFT);
+    assert.equal(result.status, 'created');
+    const created = [...state.feedbacks.values()][0];
+    assert.equal(created.feedbackBy, 'mock-user', '提交人应是当前账号');
+    assert.notEqual(created.feedbackBy, state.serviceAccount, '不应落在服务端固定身份名下');
+  });
+});
+
+test('不写用户令牌时，单据落在服务端配置的固定身份名下', async () => {
+  await withAssistant({}, async ({ client, state }) => {
+    // 不带 Authorization 头：禅道 MCP 用服务端配置的固定身份对外服务
+    const res = await client.callTool('post_feedbacks', {
+      payload: { product: PRODUCT_ID, title: '固定身份下的单据', desc: 'x', type: 'bug' },
+    });
+    assert.equal(res.status, 'success');
+    const created = [...state.feedbacks.values()][0];
+    assert.equal(created.feedbackBy, state.serviceAccount);
   });
 });
 
@@ -147,7 +180,7 @@ test('业务失败（status: fail）按失败处理', async () => {
 
 test('扁平参数（未包 payload）会被服务端忽略并报业务错', async () => {
   await withAssistant({}, async ({ client, calls }) => {
-    await client.callTool('post_users_login', { payload: { account: 'mock', password: 'mock' } });
+    await client.callTool('post_users_login', { payload: { account: 'mock', password: MOCK_CRED } });
     const res = await client.callTool('post_feedbacks', { title: '扁平参数', product: PRODUCT_ID });
     assert.equal(res.status, 'fail');
     assert.match(JSON.stringify(res.data.message), /反馈名称/);
@@ -497,7 +530,7 @@ test('B03 缺陷查重：给出相近候选，仍可新建', async () => {
 
 test('B04 字段名写错（传 product 而不是 productID）：参数校验拦下，请求未执行', async () => {
   await withAssistant({}, async ({ client, calls }) => {
-    await client.callTool('post_users_login', { payload: { account: 'mock', password: 'mock' } });
+    await client.callTool('post_users_login', { payload: { account: 'mock', password: MOCK_CRED } });
     const res = await client.callTool('post_bugs', {
       payload: { product: PRODUCT_ID, title: '字段名写错', openedBuild: ['trunk'] },
     });
@@ -510,7 +543,7 @@ test('B04 字段名写错（传 product 而不是 productID）：参数校验拦
 
 test('B04b payload 整个缺失：落到禅道业务校验，报所属产品为空', async () => {
   await withAssistant({}, async ({ client, calls }) => {
-    await client.callTool('post_users_login', { payload: { account: 'mock', password: 'mock' } });
+    await client.callTool('post_users_login', { payload: { account: 'mock', password: MOCK_CRED } });
     const res = await client.callTool('post_bugs', { productID: PRODUCT_ID, title: '扁平参数' });
     assert.equal(res.status, 'fail');
     assert.match(JSON.stringify(res.data.message), /所属产品|缺陷标题/);
@@ -520,7 +553,7 @@ test('B04b payload 整个缺失：落到禅道业务校验，报所属产品为�
 
 test('B05 缺必填开销版本：服务端参数错误，按失败处理且不重试', async () => {
   await withAssistant({}, async ({ client, calls }) => {
-    await client.callTool('post_users_login', { payload: { account: 'mock', password: 'mock' } });
+    await client.callTool('post_users_login', { payload: { account: 'mock', password: MOCK_CRED } });
     const res = await client.callTool('post_bugs', { payload: { productID: PRODUCT_ID, title: '缺开销版本' } });
     assert.ok(res.error, '应返回 JSON-RPC 参数错误');
     assert.equal(res.error.code, -32602);

@@ -1,16 +1,20 @@
 // 本地 mock 的禅道 MCP：复刻真实服务端的关键行为，用于在没有禅道环境时验证技能流程。
 //
-// 复刻的行为（均来自 Issue #1 的实测）：
+// 复刻的行为：
 //   1. 创建/更新类工具的参数必须包在 payload 内；扁平参数被静默忽略 → 报业务错「『反馈名称』不能为空。」
 //   2. 业务失败返回 HTTP 200 + {"status":"fail","message":...}
-//   3. 未登录调用数据接口返回 HTTP 401
-//   4. 创建接口无幂等：同一 payload 调两次产生两个 id
-//   5. 「保存成功」不等于落库：__NOOP__ 场景返回成功但记录不存在
-//   6. 创建可能超时：__TIMEOUT__ 场景不返回响应
-//   7. 落库但没有 opened 流水：__NO_OPENED__
-//   8. 落库但描述被服务端改写：__ALTERED_DESC__
-//   9. 更新返回成功但没生效：__NOOP_UPDATE__（不改描述，也不新增 edited 流水）
-//  10. payload 在、但缺必填字段：返回 JSON-RPC 参数错误（HTTP 200，正文是 error），
+//   3. post_users_login 不校验传入凭据：传真实的、传不存在的、传空的，都返回服务端配置的固定身份，
+//      并给出一个属于那个固定账号的真令牌（实测 2026-11-19）
+//   4. 请求头带 Authorization: Bearer <禅道令牌> 时，服务端按这个令牌的身份对外服务；
+//      令牌无效直接 401 {"message":"Not allowed"}；不带这个头则用服务端配置的固定身份（实测：不带也返回 200）
+//   5. 禅道自己的取令牌接口 POST /api.php/v1/tokens：账号密码对就发一个用户令牌，错了返回 400
+//   6. 创建接口无幂等：同一 payload 调两次产生两个 id
+//   7. 「保存成功」不等于落库：__NOOP__ 场景返回成功但记录不存在
+//   8. 创建可能超时：__TIMEOUT__ 场景不返回响应
+//   9. 落库但没有 opened 流水：__NO_OPENED__
+//  10. 落库但描述被服务端改写：__ALTERED_DESC__
+//  11. 更新返回成功但没生效：__NOOP_UPDATE__（不改描述，也不新增 edited 流水）
+//  12. payload 在、但缺必填字段：返回 JSON-RPC 参数错误（HTTP 200，正文是 error），
 //      没有业务响应——请求根本没被执行
 //
 // 场景通过标题标记注入：
@@ -28,6 +32,7 @@
 //   - 字段名是 productID（反馈单是 product），openedBuild 是必填的字符串数组
 //   - 正文载体是 steps，且按富文本 HTML 存储（裸换行会被压掉）
 import http from 'node:http';
+import crypto from 'node:crypto';
 
 export const MOCK_PRODUCTS = [
   { id: 101, name: '示例产品 A' },
@@ -47,6 +52,17 @@ export function createMockState(overrides = {}) {
     bugNextId: 1900,
     calls: [],
     sessions: new Map(),
+    // 服务端配置的固定身份：post_users_login 不校验凭据时对外用的就是这个账号
+    serviceAccount: 'service-account',
+    // 禅道令牌 → 账号名（令牌由 POST /api.php/v1/tokens 发出）
+    tokens: new Map(),
+    // 禅道认可的账号 → 密码
+    accounts: {
+      'mock-user': 'mock-secret-password',
+      mock: 'mock',
+      tester: 'tester-secret',
+    },
+    // 取令牌失败（凭据无效 / 账号被锁定）
     loginFails: false,
     // 登录账号 → 可见产品 ID 列表；不设则全部可见
     visibleProducts: null,
@@ -71,6 +87,13 @@ function toolText(res, body, status = 200) {
 
 function businessFail(res, body, message) {
   toolText(res, { payload: { message, status: 'fail' } }, 200);
+}
+
+/** 读请求体（文本）。 */
+async function readBody(req) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 const TOOLS = [
@@ -127,15 +150,32 @@ function productVisible(state, session, productId) {
   return visibleProducts(state, session).some((p) => p.id === Number(productId));
 }
 
+/** 发一个禅道令牌：真实服务端的令牌是一段随机串，归属一个账号。 */
+function mintToken(state, account) {
+  const token = crypto.randomBytes(16).toString('hex');
+  state.tokens.set(token, account);
+  return token;
+}
+
+/**
+ * 请求头里的身份：带 Authorization: Bearer <令牌> 就按令牌归属的账号对外服务，
+ * 令牌无效直接 401；不带这个头则用服务端配置的固定身份（实测：不带也返回 200）。
+ */
+function sessionIdentity(state, req) {
+  const raw = String(req.headers['authorization'] || '').trim();
+  const matched = /^Bearer\s+(.+)$/i.exec(raw);
+  if (!matched) return { account: state.serviceAccount, unauthorized: false };
+  const account = state.tokens.get(matched[1].trim());
+  if (!account) return { account: null, unauthorized: true };
+  return { account, unauthorized: false };
+}
+
 function handleToolCall(state, session, name, args) {
   if (name === 'post_users_login') {
-    if (state.loginFails) return { payload: { message: '账号或密码错误', status: 'fail' } };
-    session.loggedIn = true;
-    session.account = args?.payload?.account || 'unknown';
-    return { payload: { status: 'success', token: '{{SECRET_mock}}', user: { account: session.account, admin: false } } };
+    // 实测行为 3：不校验传入凭据，恒返回服务端配置的固定身份与属于它的令牌
+    const token = mintToken(state, state.serviceAccount);
+    return { payload: { status: 'success', token, user: { account: state.serviceAccount, admin: false } } };
   }
-
-  if (!session.loggedIn) return { httpStatus: 401, payload: { message: 'Unauthorized', status: 'fail' } };
 
   if (name === 'get_products') {
     const products = visibleProducts(state, session);
@@ -361,6 +401,20 @@ export function startMockServer(overrides = {}) {
   const state = createMockState(overrides);
 
   const server = http.createServer(async (req, res) => {
+    // 禅道自己的取令牌接口：账号密码对就发一个用户令牌
+    if (req.url === '/api.php/v1/tokens' && req.method === 'POST') {
+      const raw = await readBody(req);
+      let payload = {};
+      try { payload = JSON.parse(raw || '{}'); } catch { payload = {}; }
+      const account = String(payload.account || '');
+      const password = String(payload.password || '');
+      const expected = state.accounts[account];
+      if (state.loginFails || !expected || expected !== password) {
+        return ok(res, { message: '登录失败，请检查您的用户名或密码是否填写正确。' }, 400);
+      }
+      return ok(res, { token: mintToken(state, account), account }, 201);
+    }
+
     if (req.method !== 'POST') return ok(res, { error: 'method not allowed' }, 405);
     const chunks = [];
     for await (const c of req) chunks.push(c);
@@ -387,6 +441,13 @@ export function startMockServer(overrides = {}) {
 
     const session = state.sessions.get(sessionId) || { loggedIn: false };
     state.sessions.set(sessionId, session);
+
+    // 身份按请求头定：带用户令牌就是那个用户，不带就是服务端配置的固定身份
+    const identity = sessionIdentity(state, req);
+    if (identity.unauthorized) {
+      return ok(res, { jsonrpc: '2.0', id: body.id, error: { code: -32001, message: 'Not allowed' } }, 401);
+    }
+    session.account = identity.account;
 
     if (body.method === 'tools/list') {
       return ok(res, { jsonrpc: '2.0', id: body.id, result: { tools: state.hideTools ? [] : TOOLS } });
@@ -418,6 +479,7 @@ export function startMockServer(overrides = {}) {
       const { port } = server.address();
       resolve({
         url: `http://127.0.0.1:${port}/mcp`,
+        baseUrl: `http://127.0.0.1:${port}`,
         state,
         close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }),
       });

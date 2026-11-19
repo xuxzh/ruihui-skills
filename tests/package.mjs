@@ -42,6 +42,8 @@ test('打包产物是一个顶层自洽的技能目录', () => {
     assert.ok(fs.existsSync(path.join(pkg, 'scripts', script)), `缺 scripts/${script}`);
   }
   assert.ok(fs.existsSync(path.join(pkg, 'scripts', 'zentao-upload.mjs')), '缺 scripts/zentao-upload.mjs');
+  assert.ok(fs.existsSync(path.join(pkg, 'scripts', 'zentao-client.mjs')), '缺 scripts/zentao-client.mjs');
+  assert.ok(fs.existsSync(path.join(pkg, 'scripts', 'zentao-write.mjs')), '缺 scripts/zentao-write.mjs');
 
   // 技能文件与仓库里的一致
   assert.equal(
@@ -111,6 +113,8 @@ test('技能目录随包分发凭据脚本与查询器（skills.sh 装的就是�
   for (const script of ['set-credentials.sh', 'set-credentials.ps1', 'zentao-query.mjs', 'zentao-query.sh', 'zentao-query.ps1', 'zentao-upload.mjs']) {
     assert.ok(fs.existsSync(path.join(SCRIPTS_DIR, script)), `技能目录缺 scripts/${script}`);
   }
+  assert.ok(fs.existsSync(path.join(SCRIPTS_DIR, 'zentao-client.mjs')), '技能目录缺 scripts/zentao-client.mjs');
+  assert.ok(fs.existsSync(path.join(SCRIPTS_DIR, 'zentao-write.mjs')), '技能目录缺 scripts/zentao-write.mjs');
 });
 
 test('技能目录不再随包分发安装脚本（登记交给当前宿主里的 Agent）', () => {

@@ -3,34 +3,34 @@
 本文只覆盖 `rh-product-feedback` 实际调用的工具。全部结论来自仓库 Issue #1 的实测试证 + 线上复核。
 工具总数 121 个（`serverInfo.name = zentao`），本文不复制全部 Schema——按需读本文即可。
 
-## 接入与认证
+## 接入与认证（实测，2026-11-19 复核）
 
-- 接入方式：Streamable HTTP MCP（HTTP POST + SSE 响应）。
-- 工具名前缀随宿主而异：有的宿主暴露 `post_feedbacks`，有的暴露 `mcp__zentao__post_feedbacks`。用宿主实际暴露的名字。
-- **每个会话先登录一次**：`post_users_login`，参数包在 `payload` 内 `{"payload": {"account": "...", "password": "..."}}`。
-  - 账号是**用户本人的禅道账号**，凭据来自本机接入凭据文件（见 [setup.md](setup.md)）；不要在对话里索要密码或令牌。
-  - 未登录时所有数据调用返回 **HTTP 401**。
-  - 登录返回的 `user` 是该账号本人；所有工具入参都没有 `user` / `account` 参数——**当前会话的身份在登录时确定，之后所有操作都以它进行**。
-  - 账号通常是 `admin=false` 的普通用户权限：可见的产品、项目、反馈因人而异，见下文「权限随账号」。
+禅道 MCP 是 Streamable HTTP 服务（HTTP POST + SSE 响应）。**它的登录接口不校验传入凭据，但接受调用方自带的禅道令牌**——这两件事决定了单据留痕在谁名下。
 
-### 实测偏差（2026-11-17 复核，与上面的描述不一致）
-
-在真实禅道 MCP 上直接验证，发现当前实现与上文两处描述不符：
+### 实测结果
 
 | 验证项 | 实测结果 |
 | --- | --- |
-| 不调用 `post_users_login`，直接调 `get_products` | **HTTP 200**，正常返回 18 个产品（不是 401） |
-| `post_users_login` 传**真实账号** | `status: success`，返回 `user` = 服务端身份 |
-| `post_users_login` 传**不存在的账号** | `status: success`，返回**同一个** `user` |
-| `post_users_login` 传**空账号空密码** | `status: success`，返回**同一个** `user` |
+| `post_users_login` 传**真实账号** | `status: success`，返回**服务端固定身份** |
+| `post_users_login` 传**不存在的账号** | `status: success`，返回**同一个**身份 |
+| `post_users_login` 传**空账号空密码** | `status: success`，返回**同一个**身份 |
+| `post_users_login` 返回的令牌拿去直连禅道 | **HTTP 200**——它给的是服务端那个账号的真令牌，不是调用方的 |
+| 不调用 `post_users_login`，直接调 `get_products` | **HTTP 200**，正常返回产品（不是 401） |
+| 请求头带 `Authorization: Bearer <无效令牌>` | **HTTP 401** `{"message":"Not allowed"}` |
+| 请求头带 `Authorization: Bearer <有效禅道令牌>` | **HTTP 200**，按**那个令牌的归属账号**对外服务 |
+| 请求头带 `Token: <有效禅道令牌>` | 同上，有效 |
+| 请求头带 `Authorization: Basic <账号:密码>` | **HTTP 401**——不支持 Basic |
 
-即：**当前 MCP 的登录接口不校验传入凭据，恒以服务端配置的一个固定身份对外服务**。后果：
+### 结论与本技能的做法
 
-- 「每用户独立账号、反馈留痕在提交人名下」目前**无法由客户端保证**——所有经该 MCP 提交的反馈都留痕在同一个服务端账号名下。
-- 「登录失败」这个分支目前**触发不了**：认证失败、账号被锁定这些错误不会以登录失败的形式出现。
-- 技能侧仍然会读取本机凭据文件并发起登录（凭据暴露面照旧存在），但那一步并不决定操作身份。
+- **服务端配置的固定身份**：MCP 侧带着一个共享账号对外服务，客户端传的账号密码完全不参与认证。**经宿主 MCP 工具提交的单据会留痕在那个账号名下**，不是提交人自己。
+- **调用方令牌通道**：服务端会用请求头里的禅道令牌去调禅道。带上属于当前用户的令牌，操作身份就是那个用户。
+- **本技能的做法**：随包脚本用本机凭据直连禅道换一个**属于当前账号**的令牌，再带着 `Authorization: Bearer <令牌>` 访问禅道 MCP。读到的可见范围是当前账号的，写入的单据留痕在当前账号名下（见 [setup.md](setup.md)「禅道写入脚本」）。
+- **登录失败现在真会触发**：直连禅道换令牌时，账号密码错或账号被锁定都会拿到明确错误（HTTP 400）；不像从前那样恒返回成功。
+- **权限随账号**：每个用户用自己的账号登录，能看到的产品、项目、反馈都不同；看不见不等于不存在（见下文「已知限制」）。
+- **上游依赖**：MCP 服务端补上「按传入凭据登录」后，写入脚本可以改回直接调宿主工具（[issue #7](https://github.com/xuxzh/ruihui-skills/issues/7)）。
 
-这是禅道 MCP 侧的问题，已另开 issue 跟踪；技能侧的对策是：回读时核对 `feedbackBy`，与当前禅道账号不一致就如实告诉用户「这条反馈的提交人是 <另一个人>」，不要把服务端的提交人当成用户本人。
+> 凭据与令牌只在脚本进程内使用，不打印、不进 Agent 上下文；也不要用 curl 直调登录接口调试——那会把会话令牌打进终端日志。
 
 ## 参数包装：`payload` 不可省
 
@@ -48,7 +48,7 @@
 
 | 用途 | 工具 | 参数 | 返回要点 |
 | --- | --- | --- | --- |
-| 登录 | `post_users_login` | `payload.account`、`payload.password` | `status`、`token`（输出里是占位符）、`user` |
+| 换令牌（不走它） | `POST <禅道 Web 地址>/api.php/v1/tokens` | `account`、`password` | `token`；密码错或账号被锁定时 400 |
 | 产品列表 | `get_products` | `pageID`、`recPerPage`、`orderBy` | `products[]` + `pager` |
 | 项目列表 | `get_projects` | `pageID`、`recPerPage` | `projects[]` + `pager` |
 | 用户列表 | `get_users` | `pageID`、`recPerPage`、`browseType` | `users[]` + `pager` |

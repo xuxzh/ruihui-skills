@@ -43,7 +43,8 @@ async function withMock(fn) {
   const server = await startMockServer();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rh-query-'));
   const credFile = writeCredentials(dir);
-  const env = { ZENTAO_MCP_URL: server.url, ZENTAO_CREDENTIALS_FILE: credFile };
+  // ZENTAO_WEB_URL：脚本用它直连禅道换当前用户的令牌（禅道 MCP 的登录不校验凭据）
+  const env = { ZENTAO_MCP_URL: server.url, ZENTAO_WEB_URL: server.baseUrl, ZENTAO_CREDENTIALS_FILE: credFile };
   try {
     await fn({ server, env, dir });
   } finally {
@@ -151,4 +152,18 @@ test('Q07 地址检查只给结论，不回显地址', async () => {
   assert.equal(code, 0);
   assert.match(stdout, /宿主 MCP 地址检查/);
   assert.ok(!/https?:\/\//.test(stdout), '检查结论里不该出现地址');
+});
+
+test('Q08 凭据无效时明确报错，不静默按服务端固定身份读', async () => {
+  await withMock(async ({ server, env, dir }) => {
+    const badFile = path.join(dir, 'bad-credentials');
+    fs.writeFileSync(badFile, 'ZENTAO_ACCOUNT=mock-user\nZENTAO_PASSWORD=wrong-password\n');
+    const { code, stderr } = await runQueryer(['products'], {
+      env: { ...env, ZENTAO_CREDENTIALS_FILE: badFile },
+    });
+    assert.notEqual(code, 0, '凭据无效不该当成成功');
+    assert.match(stderr, /凭据|锁定/);
+    assert.ok(!/wrong-password/.test(stderr), '报错里不该回显密码');
+    assert.equal(server.state.calls.filter((c) => c.name === 'get_products').length, 0, '不该拿固定身份去读');
+  });
 });

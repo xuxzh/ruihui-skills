@@ -6,16 +6,20 @@
 
 当前宿主里的 Agent 按这四步走；终端用户只参与第 3 步（在自己终端里写凭据）。
 
-### 1. 检测工具是否可用
+### 1. 能不能连上禅道
 
-宿主里存在禅道 MCP 的工具就算可用：工具名带 `zentao` 前缀，或至少存在 `post_users_login` 与 `get_products`。
+随包脚本直连禅道 MCP，不依赖宿主里是否登记了 MCP 工具。先跑一次：
 
-- **可用** → 跳到第 4 步。
-- **不可用** → 继续第 2、3 步。**不要**向终端用户索要禅道地址、IP、端口或账号密码——这些都能自己拿到。
+```bash
+node <技能目录>/scripts/zentao-query.mjs products
+```
+
+- **成功** → 跳到第 4 步；输出的产品列表就是当前账号的可见范围。
+- **失败** → 继续第 2、3 步。**不要**向终端用户索要禅道地址、IP、端口或账号密码——这些都能自己拿到。
 
 ### 2. 核对地址（按需触发）
 
-不要每次会话都去读宿主配置（那里可能有凭据类文件）。核对只在三种情况下发生：工具不可用、登录或首调失败、走安装流程。
+不要每次会话都去读宿主配置（那里可能有凭据类文件）。核对只在两种情况下发生：连不上、或走安装流程。
 
 ```bash
 node <技能目录>/scripts/zentao-query.mjs check    # 只给结论（一致 / 不一致）
@@ -24,24 +28,32 @@ node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao �
 
 当前宿主不是 Claude Code / pi 时加 `--config <宿主 MCP 配置文件>`（必要时再加 `--pointer <条目路径>`）。`sync` 只改 `zentao` 条目的 `url`，写前备份。
 
-**不要为了让两边一致去改技能包里的 `config.local.json`**——那是分发下来的文件，终端用户没同意不要动（见 SKILL.md 硬约束 7）。
+**不要为了让两边一致去改技能包里的 `config.local.json`**——那是分发下来的文件，终端用户没同意不要动（见 SKILL.md 硬约束 8）。
 
-### 3. 在当前宿主里登记禅道 MCP
+### 3. 写本机凭据
 
-地址来自技能包内的 `config.local.json`（`mcpUrl`）。**你在当前宿主里自己登记**——程序不认识宿主，宿主配置在哪、怎么写，见下面「各宿主配置」。
+`bash <技能目录>/scripts/set-credentials.sh --path` 给出本机凭据文件位置。在 → 跳到第 4 步；不在 → 请终端用户**在自己终端**跑一次 `bash <技能目录>/scripts/set-credentials.sh`（Agent 的命令环境没有可交互的输入，替用户输密码会把密码带进对话）。Windows 用 `scripts\set-credentials.ps1`。
+
+### 4. 登记禅道 MCP 到宿主（可选）
+
+地址来自技能包内的 `config.local.json`（`mcpUrl`）。**登记与否都不影响技能自己的读写**——随包脚本自己连禅道。登记的价值是：终端用户在自己的对话里也能直接调禅道工具。
+
+**但要记住一条**：宿主里那些工具的身份是禅道 MCP 服务端配置的固定账号，**经它们提交的禅道单据会留痕在那个账号名下**，不是终端用户自己。所以它们只适合随便看看，**建单与更新一律走随包的写入脚本**。
+
+要登记时：**你在当前宿主里自己登记**——程序不认识宿主，宿主配置在哪、怎么写，见下面「各宿主配置」。
 
 1. 优先用宿主自己的 MCP 命令：`claude mcp add --transport http zentao <地址> --scope user`、`pi mcp add zentao --url <地址>`、`codex mcp add zentao --url <地址>`。
 2. 条目已存在但地址不同、或宿主没有这类命令 → 改宿主配置文件：只动 `zentao` 这一个条目（不存在就新增，已存在就只改 `url`，保留 `headers` 等其他字段），**写回前先备份**，写回后复核。
 3. 回读复核：读回宿主配置里的 `zentao` 条目，确认地址与 `config.local.json` 一致；不一致就只改 `url`（`check` 给结论、`sync` 修正）。
-4. 凭据：`bash <技能目录>/scripts/set-credentials.sh --path` 给出本机凭据文件位置。在 → 跳到第 4 步；不在 → 请终端用户**在自己终端**跑一次 `bash <技能目录>/scripts/set-credentials.sh`（Agent 的命令环境没有可交互的输入，替用户输密码会把密码带进对话）。Windows 用 `scripts\set-credentials.ps1`。
-5. 提示生效方式：Claude Code 退出重开；pi 执行 `/reload`；其它宿主按「各宿主配置」的对照表。**生效之后**再验证。
+4. 提示生效方式：Claude Code 退出重开；pi 执行 `/reload`；其它宿主按「各宿主配置」的对照表。**生效之后**再验证。
 
-如实汇报：分别说清「禅道 MCP 已登记」「凭据已写入 / 还没写入」「需要让宿主重载」。没验证过不要说「装好了、能提反馈了」。
+如实汇报：分别说清「禅道 MCP 已登记 / 没登记（不影响技能读写）」「凭据已写入 / 还没写入」「需要让宿主重载」。没验证过不要说「装好了、能提反馈了」。
 
-### 4. 认证与接入自检
+### 5. 认证与接入自检
 
-- **认证是懒触发**：只在真的要写入禅道时（建单、更新）才调 `post_users_login`，参数包在 `payload` 内：`{"payload": {"account": "<账号>", "password": "<密码或令牌>"}}`。只读查询由查询器自己登录，Agent 不用管。收到 HTTP 401 → 重新登录一次并重试该调用一次；仍失败就停下并报告（连续失败可能触发账号锁定）。不要用 curl 或直连 HTTP 去调试登录接口——那会把会话令牌打进终端日志。当前 MCP 的 `post_users_login` 不校验传入凭据（见 [zentao-mcp.md](zentao-mcp.md)「实测偏差」），所以「登录失败」目前基本触发不了；一旦 MCP 改为按用户凭据登录，401 的处理规则照旧。
-- **接入自检**：调一次查询器 `products`，确认真的连上了，并用它列出**当前账号可见的产品**——这批产品就是后续选产品的候选范围。失败按 [error-handling.md](error-handling.md) 处理。
+- **认证在脚本里做，Agent 不插手**：本机凭据 → 直连禅道换一个属于当前账号的令牌 → 随令牌访问禅道 MCP。密码与令牌只在脚本进程内，不打印、不进上下文（见 [zentao-mcp.md](zentao-mcp.md)「身份与认证」）。Agent 不调 `post_users_login`、不用 curl 调试登录接口。
+- **接入自检**：跑一次查询器 `products`，确认真的连上了，并用它列出**当前账号可见的产品**——这批产品就是后续选产品的候选范围。失败按 [error-handling.md](error-handling.md) 处理。
+- **凭据无效**时脚本会报错退出（如「禅道拒绝了本机凭据」）：让终端用户在自己机器上重写凭据，不要在对话里索要密码；连续失败可能触发禅道锁号，不要反复试。
 
 自检通过就直接进入终端用户的诉求（收集要素、查重、草稿），不要插入「自检报告 → 等确认」的往返；只在认证失败、产品不可见时停下来。
 
@@ -54,7 +66,7 @@ node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao �
 ```
 帮我装上 ruihui 的产品反馈助手（rh-product-feedback），并接上禅道：
 1. 技能没装的话，先运行 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`，然后读它输出的路径下的 `SKILL.md`。
-2. 按这份 `SKILL.md` 的「0. 环境自检」，把禅道 MCP 登记到**你这个宿主**里：地址在技能包的 `config.local.json`，优先用宿主自己的 MCP 命令；已有条目就只改它的 `url`，写前备份、写后复核。
+2. 按这份 `SKILL.md` 的「0. 环境自检」确认能连上禅道：地址在技能包的 `config.local.json`。顺便也把禅道 MCP 登记到**你这个宿主**里（可选，只是让我在对话里也能直接调禅道工具；登记不登记都不影响我提单据）。
 3. 告诉我怎么写入我自己的禅道账号密码——密码必须由我在自己的终端里输入，别替我输、也别写进对话。
 4. 告诉我怎么让配置生效（重启你，还是执行 `/reload`）。
 ```
@@ -81,7 +93,7 @@ bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
 
 > 验证一下禅道连接
 
-它会登录禅道、读一次产品列表（这就是你的可见范围），并如实告诉你凭据此刻起没起作用——当前禅道 MCP 恒以服务端固定身份服务（见「实测补充」），所以它会说明「凭据已写入，但提交人暂时是服务端账号」。
+它会用你的凭据换一个属于你账号的令牌，读一次产品列表（这就是你的可见范围），并如实告诉你凭据此刻起没起作用。提单后单据留痕在你的账号名下——交付时会核对提交人是不是你。
 
 之后直接说要提什么就行。提交成功后会给你一条可点的禅道直达链接，想自己核对时点开即可。
 
@@ -134,13 +146,12 @@ ZENTAO_PASSWORD=<你的禅道密码>
 
 | 模式 | 凭据是否进入 Agent 上下文 | 说明 |
 | --- | --- | --- |
-| **会话登录**（写操作的默认） | 会 | Agent 读本机凭据文件 → 调 `post_users_login` 换会话令牌 → 后续写入沿用。优先用可单独撤销的令牌，泄露面小 |
-| **查询器登录**（读操作的默认） | 不会 | 随包的 `scripts/zentao-query.mjs` 自己读凭据文件并登录，密码与令牌只在它的进程内，不打印、不进上下文 |
-| **请求头令牌** | 不会 | 若禅道 MCP 支持 `Authorization: Bearer <令牌>`，凭据由宿主客户端从环境变量注入，Agent 全程不碰凭据文件。当前 MCP 是否支持，见「管理员」一节 |
+| **随包脚本换令牌**（读写都用它） | 不会 | 随包的 `scripts/zentao-query.mjs`（读）与 `scripts/zentao-write.mjs`（写）自己读凭据文件、直连禅道换一个属于当前账号的令牌，再带着令牌访问禅道 MCP。密码与令牌只在脚本进程内，不打印、不进上下文 |
+| **个人令牌**（可选，更易撤销） | 不会 | 凭据文件里写 `ZENTAO_TOKEN` 时直接用它，不再换令牌。禅道「个人 → 令牌」生成，可单独撤销、可设有效期 |
 
-「Agent 完全看不到你的令牌」是**不准确**的说法：会话登录模式下 Agent 会读取凭据文件。准确的说法是——凭据由你自己写入，Agent 不会主动展示、回显或外传它。
+单据留痕在**换到令牌的禅道账号**名下——这就是「每用户独立账号」在服务端的落点。
 
-> 实测补充：当前禅道 MCP 的登录接口**不校验**传入凭据，恒以服务端配置的一个固定身份对外服务（见 `zentao-mcp.md` 的「实测偏差」）。也就是说会话登录这一步目前既不决定操作身份，也基本不会报「登录失败」；「每用户独立账号」要等 MCP 侧修好才成立。凭据读取本身带来的暴露面照旧存在。
+> 实测补充：禅道 MCP 的 `post_users_login` **不校验**传入凭据，恒以服务端配置的一个固定身份对外服务（见 [zentao-mcp.md](zentao-mcp.md)「身份与认证」）。但它**接受调用方自带的禅道令牌**：请求头带 `Authorization: Bearer <用户令牌>` 时，它就按那个令牌的身份去调禅道。随包脚本走的就是这条路；宿主里直接调 MCP 工具则走不到——那些工具的身份是服务端的固定账号。
 
 ## 默认产品
 
@@ -256,13 +267,30 @@ node <技能目录>/scripts/zentao-query.mjs check   # 宿主地址是否与技�
 node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao 地址改成技能包的（只改 url）
 ```
 
-- **前置**：Node.js 18+（用 `fetch`）。没有 node 时改用 MCP 工具分小页取，只把需要的字段抄下来。
-- **凭据**：脚本自己读本机凭据文件并登录，密码与令牌不打印、不进上下文。没写凭据时它会提示去跑 `set-credentials.sh`。
+- **前置**：Node.js 18+（用 `fetch`）。没有 node 时没法读写——如实告诉终端用户并给替代路径（禅道 Web 端自提）。
+- **凭据**：脚本自己读本机凭据文件并换当前账号的令牌，密码与令牌不打印、不进上下文。没写凭据时它会提示去跑 `set-credentials.sh`。
 - **地址**：从技能包的 `config.local.json` 读；`check` / `sync` **只输出结论**，不回显地址。`sync` 只改宿主配置里 `zentao` 条目的 `url`，写前备份。宿主不是 Claude Code / pi 时加 `--config <宿主 MCP 配置文件>`（必要时 `--pointer <条目路径>`）。
-- **环境变量**（测试用）：`ZENTAO_MCP_URL` 覆盖禅道地址，`ZENTAO_CREDENTIALS_FILE` 覆盖凭据文件路径。
-- **写操作不走它**：建单、更新、流转一律用 MCP 工具，保留用户确认链路。
+- **环境变量**（测试用）：`ZENTAO_MCP_URL` 覆盖禅道 MCP 地址，`ZENTAO_WEB_URL` 覆盖禅道 Web 地址（换令牌用），`ZENTAO_CREDENTIALS_FILE` 覆盖凭据文件路径。
+- **写操作不走它**：建单、更新用写入脚本（见下）。
 
 Windows 用 `scripts\zentao-query.ps1`（PowerShell）。
+
+## 禅道写入脚本
+
+随包的 `scripts/zentao-write.mjs` 负责**写**：建反馈单、建缺陷单、更新正文。它用本机凭据换一个属于当前账号的令牌，带着令牌调禅道 MCP，只发一次请求，只把结果 JSON 交给 Agent。
+
+```bash
+node <技能目录>/scripts/zentao-write.mjs feedback-create --payload-file <路径>
+node <技能目录>/scripts/zentao-write.mjs feedback-update --id <反馈 ID> --payload-file <路径>
+node <技能目录>/scripts/zentao-write.mjs bug-create      --payload-file <路径>
+node <技能目录>/scripts/zentao-write.mjs bug-update      --id <缺陷 ID> --payload-file <路径>
+```
+
+- **载荷**：文件里放 payload 的内容本身（**不要再套一层 `payload`**），例如 `{"productID": 42, "title": "…", "openedBuild": ["trunk"], "steps": "<正文 HTML>"}`。也可以用 `--payload '<JSON>'` 或 `--payload-stdin`。
+- **输出**：stdout 一行 JSON。成功：`{"ok":true,"kind":"bug-create","id":"1945","status":"success","message":"保存成功"}`；失败：stderr 一行「错误：…」，退出码非 0；结果不确定：`{"ok":false,"uncertain":true,…}`。
+- **只发一次**：禅道创建接口没有幂等键，重发会造两条记录。脚本不做重试。
+- **前置**：Node.js 18+；凭据与地址的读法与查询器一致。
+- **为什么不用宿主里的禅道 MCP 工具写**：那些工具的身份是服务端配置的固定账号，单据会留痕在那个账号名下（见 [zentao-mcp.md](zentao-mcp.md)「身份与认证」）。
 
 ## 禅道上传脚本（图片）
 
@@ -282,9 +310,9 @@ node <技能目录>/scripts/zentao-upload.mjs --file <图片路径> --object-typ
 
 只做只读调用，不写任何反馈单。
 
-1. 工具列表里有 `post_users_login`、`get_products`、`post_feedbacks`（工具名可能带 `mcp__zentao__` 前缀）。
-2. 跑一次查询器 `products`：能返回产品列表即说明连上了——这份列表就是当前账号的**可见范围**，之后提反馈只能选这里面的产品。
-3. 要写入时再登录（`post_users_login`），登录失败只重试一次就停。
+1. 跑一次查询器 `products`：能返回产品列表即说明连上了——这份列表就是当前账号的**可见范围**，之后提反馈只能选这里面的产品。
+2. 凭据无效时脚本会报错退出，按 [error-handling.md](error-handling.md) 的「认证失败」处理。
+3. 想在宿主里直接调禅道工具（可选）：工具列表里有 `post_users_login`、`get_products`、`post_feedbacks`（工具名可能带 `mcp__zentao__` 前缀）。这些工具的身份是服务端固定账号，只适合查看。
 
 ## 管理员
 

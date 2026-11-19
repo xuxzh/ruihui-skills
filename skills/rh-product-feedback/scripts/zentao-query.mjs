@@ -8,8 +8,9 @@
 // 进程内做完，只把十几行表格打印出来，原始 JSON 不进上下文。
 //
 // 边界：
-//   - 只读。建单、更新、流转一律走 MCP 工具（保留用户确认链路）。
-//   - 凭据由脚本自己从本机凭据文件读并登录，密码与令牌不打印、不进 Agent 上下文。
+//   - 只读。建单、更新、流转走随包的写入脚本 zentao-write.mjs（保留用户确认链路）。
+//   - 凭据由脚本自己从本机凭据文件读并换用户令牌，密码与令牌不打印、不进 Agent 上下文。
+//   - 请求带用户令牌，读到的范围是当前账号可见的范围（不是服务端固定账号的）。
 //   - 不回显禅道地址；地址一致性检查只给结论。
 //
 // 用法：node zentao-query.mjs <命令> [选项]，详见 --help。
@@ -17,11 +18,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PKG_DIR = path.resolve(HERE, '..');
-const CONFIG_PATH = path.join(PKG_DIR, 'config.local.json');
+import { connectAsUser, loadPackageConfig } from './zentao-client.mjs';
 
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_MAX_PAGES = 3; // 与技能里的查重范围一致：最多 3 页、300 条
@@ -53,146 +50,12 @@ function parseArgs(argv) {
   }
   return { cmd, opts, positional };
 }
-// ---------------------------------------------------------------- 配置与凭据
+// ---------------------------------------------------------------- 连接
 
-function loadPackageConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-  } catch {
-    throw new Error(`读不到技能包配置：${path.basename(CONFIG_PATH)}`);
-  }
-}
-
-function credentialsPath() {
-  if (process.env.ZENTAO_CREDENTIALS_FILE) return process.env.ZENTAO_CREDENTIALS_FILE;
-  if (process.platform === 'win32') {
-    const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-    return path.join(base, 'rh-zentao', 'credentials');
-  }
-  return path.join(os.homedir(), '.config', 'rh-zentao', 'credentials');
-}
-
-function loadCredentials() {
-  const file = credentialsPath();
-  if (!fs.existsSync(file)) return null;
-  const out = {};
-  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const eq = line.indexOf('=');
-    if (eq <= 0) continue;
-    const key = line.slice(0, eq).trim();
-    const value = line.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
-    if (key) out[key] = value;
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------- MCP 客户端
-
-class McpClient {
-  constructor(url, timeoutMs = 30000) {
-    this.url = url;
-    this.timeoutMs = timeoutMs;
-    this.sessionId = null;
-    this.seq = 0;
-  }
-
-  async post(body) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      const headers = {
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
-      };
-      if (this.sessionId) headers['mcp-session-id'] = this.sessionId;
-      const res = await fetch(this.url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      const sid = res.headers.get('mcp-session-id');
-      if (sid) this.sessionId = sid;
-      const raw = await res.text();
-      const dataLines = raw.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim());
-      let payload = null;
-      if (dataLines.length) {
-        try { payload = JSON.parse(dataLines.join('')); } catch { payload = null; }
-      } else if (raw.trim()) {
-        try { payload = JSON.parse(raw); } catch { payload = null; }
-      }
-      return { httpStatus: res.status, payload };
-    } catch (err) {
-      if (err?.name === 'AbortError') throw new Error('禅道 MCP 请求超时');
-      throw new Error(`连不上禅道 MCP：${err?.message || err}`);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  async rpc(method, params) {
-    const res = await this.post({ jsonrpc: '2.0', id: ++this.seq, method, params });
-    const payload = res.payload;
-    if (!payload) throw new Error(`禅道 MCP 响应无法解析（HTTP ${res.httpStatus}）`);
-    if (payload.error) {
-      throw new Error(`禅道 MCP 报错：${payload.error.code} ${payload.error.message || ''}`.trim());
-    }
-    return payload.result;
-  }
-
-  async notify(method, params) {
-    await this.post({ jsonrpc: '2.0', method, params });
-  }
-
-  async initialize() {
-    await this.rpc('initialize', {
-      protocolVersion: '2024-11-05',
-      capabilities: {},
-      clientInfo: { name: 'rh-zentao-query', version: '1.0.0' },
-    });
-    await this.notify('notifications/initialized', {});
-  }
-
-  // 返回服务端正文里的 JSON 对象（禅道的 MCP 把业务数据放在 content[1].text）
-  async call(tool, args) {
-    const result = await this.rpc('tools/call', { name: tool, arguments: args });
-    const content = result?.content || [];
-    const text = content.map((c) => c.text ?? '').join('\n');
-    const statusLine = (content[0]?.text || '').trim();
-    const brace = text.indexOf('{');
-    let body = null;
-    if (brace >= 0) {
-      try { body = JSON.parse(text.slice(brace)); } catch { body = null; }
-    }
-    return { statusLine, body, raw: text };
-  }
-}
-
+// 连上禅道：换当前用户的令牌，再带令牌建 MCP 会话。
+// 令牌在进程内使用；读到的产品、项目、单据都是当前账号可见的，不是服务端固定账号的。
 async function connect() {
-  const cfg = loadPackageConfig();
-  const url = process.env.ZENTAO_MCP_URL || cfg.mcpUrl;
-  if (!url) throw new Error('技能包里没有配置禅道 MCP 地址');
-
-  const creds = loadCredentials();
-  if (!creds || !creds.ZENTAO_ACCOUNT) {
-    throw new Error(
-      '本机没有禅道接入凭据。在你自己的终端跑一次 `bash <技能目录>/scripts/set-credentials.sh` 写入账号密码；' +
-      '不要在对话里把密码告诉 Agent。'
-    );
-  }
-
-  const client = new McpClient(url);
-  await client.initialize();
-  const login = await client.call('post_users_login', {
-    payload: {
-      account: creds.ZENTAO_ACCOUNT,
-      password: creds.ZENTAO_PASSWORD || creds.ZENTAO_TOKEN || '',
-    },
-  });
-  const status = login.body?.status;
-  if (status && status !== 'success') {
-    throw new Error(`禅道登录失败：${login.body?.message || status}`);
-  }
+  const { client, cfg } = await connectAsUser();
   return Object.assign(client, { cfg });
 }
 
@@ -610,7 +473,9 @@ const HELP = `禅道只读查询器（rh-product-feedback）
 选项：--match 关键词（查重/选品用，中英文都支持）  --limit 条数  --no-body（详情里不打印正文）
 check/sync 选项：--config 宿主 MCP 配置文件（不给则查内置的 Claude Code 与 pi 两处）
                  --pointer 条目在文件里的位置（默认 mcpServers.zentao）  --host 宿主名（只影响输出）
-环境变量：ZENTAO_MCP_URL 覆盖禅道地址（测试用）  ZENTAO_CREDENTIALS_FILE 覆盖凭据文件路径`;
+环境变量：ZENTAO_MCP_URL 覆盖禅道 MCP 地址  ZENTAO_WEB_URL 覆盖禅道 Web 地址（换令牌用）
+          ZENTAO_CREDENTIALS_FILE 覆盖本机凭据文件路径
+认证：脚本用本机凭据直连禅道换当前用户的令牌，再带令牌读——可见范围是当前账号的。`;
 
 async function main() {
   const { cmd, opts } = parseArgs(process.argv.slice(2));

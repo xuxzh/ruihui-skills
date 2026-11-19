@@ -30,6 +30,8 @@ if (!url) {
 }
 const client = new McpClient(url, { timeoutMs: 20000 });
 await client.initialize();
+// 换用户令牌要直连禅道：地址在 .env 的 ZENTAO_BASE_URL（禅道 Web 根地址）
+client.zentaoBaseUrl = env.ZENTAO_BASE_URL || '';
 const credentials = { account: env.ZENTAO_ACCOUNT || '', password: env.ZENTAO_PASSWORD || '' };
 const stamp = () => new Date().toISOString().slice(0, 10);
 const log = (line) => console.log(line);
