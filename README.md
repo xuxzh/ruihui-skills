@@ -12,6 +12,8 @@
 
 完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的提示词、三个示例和常见问题。概览：
 
+> 直接发给别人（可贴进 IM / 邮件）：<https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/quick-start.md#三步速查>
+
 1. **粘一段提示词给你正在用的 Agent**（pi、Claude Code、Codex 都行）：它会装好技能（`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`），再按自己的宿主登记禅道 MCP——**登记做在你在用的那个 Agent 里，不用挑、不用填 IP、不用改配置文件**。
 2. **在你的终端里写账号密码**：Agent 会把 `set-credentials.sh` 那条命令原样贴给你，密码只在你自己的机器上输入，不进对话。
 3. **让 Agent 重载后验证**：Claude Code 退出重开，pi 执行 `/reload`；在 Agent 里说「验证一下禅道连接」。
