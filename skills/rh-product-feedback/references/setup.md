@@ -38,10 +38,10 @@ node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao �
 
 如实汇报：分别说清「禅道 MCP 已登记」「凭据已写入 / 还没写入」「需要让宿主重载」。没验证过不要说「装好了、能提反馈了」。
 
-### 4. 认证与只读自检
+### 4. 认证与接入自检
 
 - **认证是懒触发**：只在真的要写入禅道时（建单、更新）才调 `post_users_login`，参数包在 `payload` 内：`{"payload": {"account": "<账号>", "password": "<密码或令牌>"}}`。只读查询由查询器自己登录，Agent 不用管。收到 HTTP 401 → 重新登录一次并重试该调用一次；仍失败就停下并报告（连续失败可能触发账号锁定）。不要用 curl 或直连 HTTP 去调试登录接口——那会把会话令牌打进终端日志。当前 MCP 的 `post_users_login` 不校验传入凭据（见 [zentao-mcp.md](zentao-mcp.md)「实测偏差」），所以「登录失败」目前基本触发不了；一旦 MCP 改为按用户凭据登录，401 的处理规则照旧。
-- **只读自检**：调一次查询器 `products`，确认真的连上了，并用它列出**当前账号可见的产品**——这批产品就是后续选产品的候选范围。失败按 [error-handling.md](error-handling.md) 处理。
+- **接入自检**：调一次查询器 `products`，确认真的连上了，并用它列出**当前账号可见的产品**——这批产品就是后续选产品的候选范围。失败按 [error-handling.md](error-handling.md) 处理。
 
 自检通过就直接进入终端用户的诉求（收集要素、查重、草稿），不要插入「自检报告 → 等确认」的往返；只在认证失败、产品不可见时停下来。
 
@@ -49,12 +49,12 @@ node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao �
 
 ### 1. 安装提示词
 
-把下面这段发给你正在用的 Agent：
+把下面这段发给你正在用的 Agent（与仓库的 [`docs/quick-start.md`](https://github.com/xuxzh/ruihui-skills/blob/main/docs/quick-start.md) 速查逐字一致，由 `tests/validate-skills.mjs` 校验）：
 
 ```
 帮我装上 ruihui 的产品反馈助手（rh-product-feedback），并接上禅道：
-1. 技能没装的话，先运行 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`（它会按你所在的宿主建好入口），然后读它输出的路径下的 `SKILL.md`。
-2. 按这份 `SKILL.md` 的「0. 环境自检」，把禅道 MCP 登记到**你这个宿主**的配置里：地址在技能包的 `config.local.json`，优先用宿主自己的 MCP 命令；已有条目就只改它的 `url`，其它字段别动；写前备份、写后复核。
+1. 技能没装的话，先运行 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`，然后读它输出的路径下的 `SKILL.md`。
+2. 按这份 `SKILL.md` 的「0. 环境自检」，把禅道 MCP 登记到**你这个宿主**里：地址在技能包的 `config.local.json`，优先用宿主自己的 MCP 命令；已有条目就只改它的 `url`，写前备份、写后复核。
 3. 告诉我怎么写入我自己的禅道账号密码——密码必须由我在自己的终端里输入，别替我输、也别写进对话。
 4. 告诉我怎么让配置生效（重启你，还是执行 `/reload`）。
 ```

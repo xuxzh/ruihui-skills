@@ -154,6 +154,88 @@ if (fs.existsSync(quickStart)) {
   check('快速上手写了粘贴给当前 Agent 的安装提示词', quickText.includes('npx skills add xuxzh/ruihui-skills'));
   check('快速上手写了写凭据的命令（留在用户自己的终端）', quickText.includes('set-credentials.sh'));
   check('快速上手不再让用户跑安装脚本', !quickText.includes('install.sh'));
+
+  // 速查段必须自足：业务用户只看这一段就能装好并提第一条单（ADR-0014）。
+  const quickLines = quickText.split('\n');
+  const quickStartAt = quickLines.findIndex((l) => /^## 三步速查\s*$/.test(l));
+  check('快速上手有「三步速查」段', quickStartAt >= 0);
+  if (quickStartAt >= 0) {
+    let quickEnd = quickLines.length;
+    for (let i = quickStartAt + 1; i < quickLines.length; i++) {
+      if (/^## /.test(quickLines[i])) {
+        quickEnd = i;
+        break;
+      }
+    }
+    const seg = quickLines.slice(quickStartAt, quickEnd);
+    while (seg.length && !seg[seg.length - 1].trim()) seg.pop();
+    check('三步速查 ≤ 40 行', seg.length <= 40, `${seg.length} 行`);
+
+    // 内容块 = 围栏代码块 / 引用块 / 列表块，各算一块。
+    let blocks = 0;
+    let inFence = false;
+    let inQuote = false;
+    let inList = false;
+    for (const raw of seg) {
+      const line = raw.trim();
+      if (line.startsWith('```')) {
+        if (inFence) {
+          inFence = false;
+          blocks++;
+        } else {
+          inFence = true;
+          inQuote = false;
+          inList = false;
+        }
+        continue;
+      }
+      if (inFence) continue;
+      if (line.startsWith('> ')) {
+        if (!inQuote) {
+          inQuote = true;
+          inList = false;
+          blocks++;
+        }
+        continue;
+      }
+      inQuote = false;
+      if (/^([-*]|\d+\.)\s/.test(line)) {
+        if (!inList) {
+          inList = true;
+          blocks++;
+        }
+        continue;
+      }
+      inList = false;
+    }
+    check('三步速查 ≤ 5 个内容块', blocks <= 5, `${blocks} 块`);
+
+    const segText = seg.join('\n');
+    for (const [label, needle] of [
+      ['写凭据的命令', 'set-credentials.sh'],
+      ['让 Agent 验证连接的话术', '验证一下禅道连接'],
+      ['提单的示例句', '帮我提个 Bug'],
+      ['提交人不是本人的提示', '提交人'],
+    ]) {
+      check(`三步速查里写了${label}`, segText.includes(needle));
+    }
+  }
+
+  // 安装提示词只有一份真相：quick-start 与随包 setup.md 逐字一致（ADR-0014）。
+  const setupPath = path.join(SKILLS_DIR, 'rh-product-feedback', 'references', 'setup.md');
+  if (fs.existsSync(setupPath)) {
+    const promptOf = (text) => {
+      const m = text.match(/```\n(帮我装上 ruihui 的产品反馈助手[\s\S]*?)```/);
+      return m ? m[1] : '';
+    };
+    const inQuickStart = promptOf(quickText);
+    const inSetup = promptOf(fs.readFileSync(setupPath, 'utf8'));
+    check(
+      '安装提示词与随包 setup.md 逐字一致',
+      !!inQuickStart && inQuickStart === inSetup,
+      !inQuickStart || !inSetup ? '找不到提示词块' : inQuickStart === inSetup ? '' : '两处不一致',
+    );
+  }
 } else {
   check('存在 docs/quick-start.md', false);
 }
