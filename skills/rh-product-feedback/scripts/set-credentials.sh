@@ -8,8 +8,12 @@
 #
 # 凭据文件（macOS / Linux）：~/.config/rh-zentao/credentials
 #   内容两行：ZENTAO_ACCOUNT=<账号> / ZENTAO_PASSWORD=<密码>
-#   用令牌时第二行是 ZENTAO_TOKEN=<令牌>
+#   用令牌时第二行是 ZENTAO_TOKEN=<令牌>（个人令牌直接用，不再换）
+#   这三个键就是入口脚本与官方禅道 CLI 认的全部凭据（ZENTAO_URL 从技能的
+#   config.local.json 读，不在这里写）。
 #
+# 只做**交互式**写入：账号与密码/令牌由本人当场在终端输入。
+# Agent 不代劳、不索要、不回显——不要用管道或参数替用户传凭据进来。
 # 脚本不回显、不打印、不上传任何凭据内容，也不依赖当前工作目录。
 # 用 bash 显式调用：macOS 默认 shell 是 zsh，zsh 的 read 不支持这套隐藏输入写法。
 set -eu
@@ -82,6 +86,7 @@ main() {
   chmod 600 "$target"
 
   printf '已写入 %s\n' "$target"
+  printf '接着让 Agent 跑一次接入自检（技能包里的 scripts/zentao.mjs products，只读），它会报出你账号可见的产品。\n'
 }
 
 main
