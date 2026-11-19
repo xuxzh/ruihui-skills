@@ -8,14 +8,14 @@
 
 ### 1. 能不能连上禅道
 
-随包脚本直连禅道 MCP，不依赖宿主里是否登记了 MCP 工具。先跑一次：
+随包入口脚本换到当前账号的令牌，再把取数交给**官方禅道 CLI**（`zentao` 命令），不依赖宿主里是否登记了 MCP 工具。先跑一次：
 
 ```bash
-node <技能目录>/scripts/zentao-query.mjs products
+node <技能目录>/scripts/zentao.mjs products
 ```
 
-- **成功** → 跳到第 4 步；输出的产品列表就是当前账号的可见范围。
-- **失败** → 继续第 2、3 步。**不要**向终端用户索要禅道地址、IP、端口或账号密码——这些都能自己拿到。
+- **成功** → 输出里那批产品就是**当前账号可见的产品，也就是后续选品范围**（选产品、查重、建单都只能落在这里面）；跳到第 4 步。
+- **失败** → 先看禅道 CLI 装没装（报「找不到 zentao 命令」就是没装或不在 PATH），再按第 3 步写本机凭据。**不要**向终端用户索要禅道地址、IP、端口或账号密码——这些都能自己拿到。
 
 ### 2. 核对地址（按需触发）
 
@@ -51,8 +51,8 @@ node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao �
 
 ### 5. 认证与接入自检
 
-- **认证在脚本里做，Agent 不插手**：本机凭据 → 直连禅道换一个属于当前账号的令牌 → 随令牌访问禅道 MCP。密码与令牌只在脚本进程内，不打印、不进上下文（见 [zentao-mcp.md](zentao-mcp.md)「身份与认证」）。Agent 不调 `post_users_login`、不用 curl 调试登录接口。
-- **接入自检**：跑一次查询器 `products`，确认真的连上了，并用它列出**当前账号可见的产品**——这批产品就是后续选产品的候选范围。失败按 [error-handling.md](error-handling.md) 处理。
+- **认证在脚本里做，Agent 不插手**：本机凭据 → 换一个属于当前账号的当次令牌 → 经环境变量注入官方禅道 CLI（`ZENTAO_URL` / `ZENTAO_ACCOUNT` / `ZENTAO_TOKEN`）。密码与令牌只在脚本进程内，不进命令行参数、不打印、不进上下文（见 [zentao-cli.md](zentao-cli.md)「认证」）。Agent 不碰密码与令牌，也不用 curl 调试登录接口。
+- **接入自检**：跑一次入口脚本的 `products`，确认真的连上了，并用它列出**当前账号可见的产品**——这批产品就是后续选品范围。失败按 [error-handling.md](error-handling.md) 处理。
 - **凭据无效**时脚本会报错退出（如「禅道拒绝了本机凭据」）：让终端用户在自己机器上重写凭据，不要在对话里索要密码；连续失败可能触发禅道锁号，不要反复试。
 
 自检通过就直接进入终端用户的诉求（收集要素、查重、草稿），不要插入「自检报告 → 等确认」的往返；只在认证失败、产品不可见时停下来。
@@ -328,32 +328,26 @@ node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao �
 
 ## 禅道查询器（只读）
 
-随包的 `scripts/zentao-query.mjs` 负责**读**：产品、项目、缺陷/反馈列表、单据详情。它把取数、过滤、投影放在脚本进程内做完，只打印十几行表格——禅道列表接口的原始响应是几十 KB 到上百 KB 的 JSON，直接进 Agent 上下文会被截断（实测一次提单据有 8 分钟耗在这上面）。
+读路径由随包**入口脚本** `scripts/zentao.mjs` 承担：换当次令牌 → 经环境变量注入官方禅道 CLI → 由 CLI 取数 → 脚本投影成十几行表格。禅道列表接口的原始响应是几十 KB 到上百 KB 的 JSON，直接进 Agent 上下文会被截断（实测一次提单据有 8 分钟耗在这上面），所以取值与投影都在进程内做完，Agent 只拿表格。
 
 ```bash
-node <技能目录>/scripts/zentao-query.mjs products --match 报表
-node <技能目录>/scripts/zentao-query.mjs projects --match 报表
-node <技能目录>/scripts/zentao-query.mjs bugs --product 29 --match 切换语言
-node <技能目录>/scripts/zentao-query.mjs feedbacks --product 29 --match 切换语言
-node <技能目录>/scripts/zentao-query.mjs bug --id 1936
-node <技能目录>/scripts/zentao-query.mjs feedback --id 421
-node <技能目录>/scripts/zentao-query.mjs prep --product 瑞辉智能报表平台 --match 切换语言
-node <技能目录>/scripts/zentao-query.mjs qd --product 29    # 产品的默认承接人（QD 账号 + 姓名 + 账号状态）
-node <技能目录>/scripts/zentao-query.mjs check   # 宿主地址是否与技能包一致（只给结论）
-node <技能目录>/scripts/zentao-query.mjs sync     # 把宿主里的 zentao 地址改成技能包的（只改 url）
+node <技能目录>/scripts/zentao.mjs products                    # 当前账号可见的产品（就是后续选品范围）
+node <技能目录>/scripts/zentao.mjs projects                    # 可见项目
+node <技能目录>/scripts/zentao.mjs projects --product 29       # 只看某个产品下面的项目
 ```
 
-- **前置**：Node.js 18+（用 `fetch`）。没有 node 时没法读写——如实告诉终端用户并给替代路径（禅道 Web 端自提）。
-- **凭据**：脚本自己读本机凭据文件并换当前账号的令牌，密码与令牌不打印、不进上下文。没写凭据时它会提示去跑 `set-credentials.sh`。
-- **地址**：从技能包的 `config.local.json` 读；`check` / `sync` **只输出结论**，不回显地址。`sync` 只改宿主配置里 `zentao` 条目的 `url`，写前备份。宿主不是 Claude Code / pi 时加 `--config <宿主 MCP 配置文件>`（必要时 `--pointer <条目路径>`）。
-- **环境变量**（测试用）：`ZENTAO_MCP_URL` 覆盖禅道 MCP 地址，`ZENTAO_WEB_URL` 覆盖禅道 Web 地址（换令牌用），`ZENTAO_CREDENTIALS_FILE` 覆盖凭据文件路径，`ZENTAO_PACKAGE_CONFIG_FILE` 覆盖随包配置路径，`ZENTAO_PREFERENCES_FILE` 覆盖本机偏好文件路径。
-- **写操作不走它**：建单、更新用写入脚本（见下）。
-
-Windows 用 `scripts\zentao-query.ps1`（PowerShell）。
+- **前置**：Node.js 18+（用 `fetch`）与**官方禅道 CLI**（`zentao` 命令，npm 包 `zentao-cli`）装好且在 PATH 里。没有 node 或没有 CLI 时如实告诉终端用户并给替代路径（禅道 Web 端自提）；CLI 不在 PATH 时脚本报「找不到 zentao 命令」并退出非 0。
+- **凭据**：脚本自己读本机凭据文件并换当前账号的当次令牌，密码与令牌不打印、不进命令行参数、不进上下文。没写凭据时它会提示去跑 `set-credentials.sh`。
+- **地址**：从技能包的 `config.local.json`（`zentaoWebUrl`）读，不回显；交付单据链接时才拼给终端用户。
+- **环境变量**（测试用）：`ZENTAO_WEB_URL` 覆盖禅道站点地址（换令牌用），`ZENTAO_CREDENTIALS_FILE` 覆盖凭据文件路径，`ZENTAO_PACKAGE_CONFIG_FILE` 覆盖随包配置路径。
+- **写操作不走它**：建单、更新暂时仍用写入脚本（见下），后续并入入口脚本。
+- **迁移期**：旧的 `scripts/zentao-query.mjs`（含 `bugs` / `feedbacks` / `bug` / `feedback` / `prep` / `qd` / `check` / `sync`）仍在包里、仍然可用，但技能默认不再走它；Windows 的 `scripts\zentao-query.ps1` 同理。
 
 ## 禅道写入脚本
 
 随包的 `scripts/zentao-write.mjs` 负责**写**：建反馈单、建缺陷单、更新正文。它用本机凭据换一个属于当前账号的令牌，带着令牌调禅道 MCP，只发一次请求，只把结果 JSON 交给 Agent。
+
+迁移期它仍是写入的主力（读路径已经换到 `scripts/zentao.mjs`）；写子命令随后并入同一个入口脚本，届时本节整体下移到入口脚本。
 
 ```bash
 node <技能目录>/scripts/zentao-write.mjs feedback-create --payload-file <路径>

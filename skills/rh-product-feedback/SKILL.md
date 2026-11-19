@@ -26,7 +26,7 @@ metadata:
 | 拿话术、输出样例 | [references/workflow.md](references/workflow.md) |
 | 装技能 / 连不上禅道 / 登记 MCP / 改默认产品 | [references/setup.md](references/setup.md) |
 | 报错了、超时了、结果对不上 | [references/error-handling.md](references/error-handling.md) |
-| 不确定字段名、枚举、返回结构 | [references/zentao-mcp.md](references/zentao-mcp.md) |
+| 不确定字段名、枚举、返回结构 | [references/zentao-cli.md](references/zentao-cli.md)（默认通道）· [references/zentao-mcp.md](references/zentao-mcp.md)（旧直连通道） |
 
 ## 读写都走随包脚本：查询器读、写入脚本写
 
@@ -62,11 +62,10 @@ node <技能目录>/scripts/zentao-write.mjs bug-create --payload-file /tmp/rh-p
 
 ## 0. 会话第一步：环境自检
 
-1. **脚本能连上吗**：跑一次 `node <技能目录>/scripts/zentao-query.mjs products`。成功 → 可见产品就是后续选品的候选范围，直接进终端用户的诉求。失败 → 按 [references/error-handling.md](references/error-handling.md) 处理，并按 [references/setup.md](references/setup.md)「Agent 执行路径」引导：核对地址、写本机凭据。**不要**向终端用户索要禅道地址、IP、端口或账号密码。
-2. **地址核对按需触发**：脚本能连上就不用核对；连不上、或走安装流程时，核对一次——`node <技能目录>/scripts/zentao-query.mjs check` 只给结论（一致 / 不一致），不一致就 `sync` 修正（只改 `zentao` 条目的 `url`，写前备份）。当前宿主不是 Claude Code / pi 时加 `--config <宿主 MCP 配置文件>`。**不要为了让两边一致去改技能包里的 `config.local.json`**——那是分发下来的文件，用户没同意不要动。
-3. **认证由脚本做，Agent 不插手**：本机凭据 → 禅道用户令牌 → 随令牌访问禅道 MCP，这一步全在脚本进程内完成（见 [references/zentao-mcp.md](references/zentao-mcp.md)）。Agent 不调 `post_users_login`、不碰密码与令牌，也不用 curl 调试登录接口（那会把令牌打进终端日志）。凭据无效时脚本报错并退出非 0 → 按 [references/error-handling.md](references/error-handling.md)「认证失败」处理：让终端用户在自己机器上重写凭据，不要在对话里索要密码；连续失败可能触发禅道锁号，不要反复试。
-4. **宿主里的禅道 MCP 工具（可选）**：登记后可以直接调禅道工具，但它们的身份是服务端配置的那个固定账号——**只用于无关紧要的查看，不用于建单与更新**。技能自己的读写一律走随包脚本。
-4. **只读自检**：调一次查询器 `products`，确认真的连上了，并用它列出**当前账号可见的产品**——这批产品就是后续选产品的候选范围。失败按 [references/error-handling.md](references/error-handling.md) 处理。
+1. **脚本能连上吗**：跑一次 `node <技能目录>/scripts/zentao.mjs products`。成功 → 打印出来的**当前账号可见的产品就是后续选品范围**（选产品、查重、建单都只能落在这里面），直接进终端用户的诉求。失败 → 按 [references/error-handling.md](references/error-handling.md) 处理，并按 [references/setup.md](references/setup.md)「Agent 执行路径」引导：先看禅道 CLI 装没装，再写本机凭据。**不要**向终端用户索要禅道地址、IP、端口或账号密码。
+2. **认证由入口脚本做，Agent 不插手**：本机凭据 → 当次禅道令牌 → 经环境变量注入**官方禅道 CLI** → 由 CLI 进程取数并投影，全在 `scripts/zentao.mjs` 进程内完成（见 [references/zentao-cli.md](references/zentao-cli.md)）。Agent 不碰密码与令牌，也不用 curl 调试登录接口（那会把令牌打进终端日志）。凭据无效时脚本报错并退出非 0 → 按 [references/error-handling.md](references/error-handling.md)「认证失败」处理：让终端用户在自己机器上重写凭据，不要在对话里索要密码；连续失败可能触发禅道锁号，不要反复试。
+3. **禅道 CLI 不在 PATH**：脚本会如实报「找不到 zentao 命令」并退出非 0——照 [references/setup.md](references/setup.md) 把它装好再试，不要临时改用旧脚本顶替，也不要因此向终端用户索要地址或凭据。
+4. **宿主里的禅道 MCP 工具（可选）**：登记后可以直接调禅道工具，但它们的身份是服务端配置的那个固定账号——**只用于无关紧要的查看，不用于建单与更新**。技能自己的读写一律走随包脚本；要核对宿主里的登记地址时，仍用旧查询器的 `check` / `sync`（只给结论，只改 `zentao` 条目的 `url`，写前备份）。**不要为了让两边一致去改技能包里的 `config.local.json`**——那是分发下来的文件，用户没同意不要动。
 
 自检通过就**直接进入终端用户的诉求**（收集要素、查重、草稿），不要插入「自检报告 → 等确认」的往返；只在认证失败、产品不可见时停下来给下一步。
 
