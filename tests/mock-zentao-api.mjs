@@ -11,17 +11,21 @@
 //   7. 「保存成功」不等于落库：__NOOP__ 返回成功但记录不存在；更新版是 __NOOP_UPDATE__
 //   8. 创建可能超时：__TIMEOUT__ 已落库但不返回响应
 //   9. 落库但正文被服务端改写：__ALTERED_DESC__
+//  10. 产品的默认承接人（qd）：建单不指定负责人时按产品 QD 指派，显式空字符串则挡住
 //
 // 场景通过单据标题里的标记注入（沿用旧 mock 的做法）：
 //   __FAIL__  __NOOP__  __TIMEOUT__  __NOOP_UPDATE__  __ALTERED_DESC__
 // 另有状态注入：loginFails（换令牌一律 400）、tokenFails（API 一律 401）、
-// failPaths / hangPaths（按路径注入业务失败或超时）、products / projects（换数据集）。
+// failPaths / hangPaths（按路径注入业务失败或超时）、products / projects（换数据集）、
+// visibleProducts（按账号限定可见产品）、createHang（'ghost' / 'persist'）、
+// noopWrites / noopUpdate（写接口返回成功但不落库/不生效）、deleteFails（删除一律失败）。
 import http from 'node:http';
 import crypto from 'node:crypto';
 
+// qd 是产品默认承接人：建单不指定负责人时，禅道会指派给他（ADR-0016 / ADR-0018 的语义）
 export const MOCK_API_PRODUCTS = [
-  { id: 101, name: '示例产品 A', code: 'demo-a', status: 'normal' },
-  { id: 102, name: '示例产品 B', code: 'demo-b', status: 'normal' },
+  { id: 101, name: '示例产品 A', code: 'demo-a', status: 'normal', qd: 'mock-qd' },
+  { id: 102, name: '示例产品 B', code: 'demo-b', status: 'normal', qd: '' },
 ];
 
 export const MOCK_API_PROJECTS = [
@@ -65,6 +69,14 @@ export function createMockApiState(overrides = {}) {
     hangPaths: [],
     // 写接口返回成功但不落库（等同于标题带 __NOOP__ 的全局开关）
     noopWrites: false,
+    // 更新接口返回成功但不生效（等同于标题带 __NOOP_UPDATE__ 的全局开关）
+    noopUpdate: false,
+    // 创建接口挂住不返回：'ghost' = 没落库，'persist' = 已落库（等同标题带 __TIMEOUT__）
+    createHang: '',
+    // 删除接口一律业务失败（模拟没有删除权限）
+    deleteFails: false,
+    // 账号 → 可见产品：给了就按它过滤产品列表与写入目标
+    visibleProducts: null,
     ...overrides,
   };
 }
@@ -127,13 +139,39 @@ function newRecord(state, account, payload, kind) {
   };
 }
 
+// 产品的默认承接人（QD）：建单不指定负责人时，禅道按产品的 QD 指派
+function qdOf(state, productId) {
+  const product = state.products.find((p) => Number(p.id) === Number(productId));
+  return String(product?.qd || '');
+}
+
+// 当前账号看不见这个产品：读列表过滤、写入报业务失败（权限边界，不静默换个产品）
+function visibleProductsOf(state, account) {
+  const visible = state.visibleProducts?.[account];
+  return Array.isArray(visible) ? visible.map(Number) : null;
+}
+
+function canSeeProduct(state, account, productId) {
+  const visible = visibleProductsOf(state, account);
+  return !visible || visible.includes(Number(productId));
+}
+
+// 创建接口的挂起：__TIMEOUT__ / createHang 都表示「已落库但不返回响应」
+function createdResult(state, record) {
+  if (state.createHang === 'ghost') return { record, persist: false, hang: true };
+  if (state.createHang === 'persist') return { record, persist: true, hang: true };
+  return { record, persist: true };
+}
+
 // 缺陷单：产品字段叫 productID，正文载体是 steps（富文本），openedBuild 是必填的字符串数组
 function createBug(state, account, payload) {
   const marker = scenarioOf(payload.title);
   if (marker === '__FAIL__') return { fail: '『标题』不能为空。' };
+  const productId = Number(payload.productID) || 0;
+  if (!canSeeProduct(state, account, productId)) return { fail: '所属产品不存在，或当前账号没有权限。' };
   const record = {
     ...newRecord(state, account, payload, 'bug'),
-    product: Number(payload.productID) || 0,
+    product: productId,
     steps: String(payload.steps || ''),
     severity: String(payload.severity || '3'),
     pri: String(payload.pri || '3'),
@@ -141,20 +179,23 @@ function createBug(state, account, payload) {
     openedBuild: Array.isArray(payload.openedBuild) ? payload.openedBuild : [],
     project: Number(payload.project) || 0,
     execution: Number(payload.execution) || 0,
-    assignedTo: String(payload.assignedTo || ''),
+    // 载荷显式带了 assignedTo（含空串 = 不指派）就照它；没带就按产品 QD 指派
+    assignedTo: payload.assignedTo === undefined ? qdOf(state, productId) : String(payload.assignedTo),
   };
   if (marker === '__ALTERED_DESC__') record.steps = '<p>服务端改写过的正文</p>';
   if (marker === '__NOOP__' || state.noopWrites) return { record, persist: false };
   if (marker === '__TIMEOUT__') return { record, persist: true, hang: true };
-  return { record, persist: true };
+  return createdResult(state, record);
 }
 
 function createFeedback(state, account, payload) {
   const marker = scenarioOf(payload.title);
   if (marker === '__FAIL__') return { fail: '『反馈名称』不能为空。' };
+  const productId = Number(payload.product) || 0;
+  if (!canSeeProduct(state, account, productId)) return { fail: '所属产品不存在，或当前账号没有权限。' };
   const record = {
     ...newRecord(state, account, payload, 'feedback'),
-    product: Number(payload.product) || 0,
+    product: productId,
     desc: String(payload.desc || ''),
     type: String(payload.type || ''),
     feedbackBy: String(payload.feedbackBy || ''),
@@ -162,7 +203,7 @@ function createFeedback(state, account, payload) {
   if (marker === '__ALTERED_DESC__') record.desc = '服务端改写过的正文';
   if (marker === '__NOOP__' || state.noopWrites) return { record, persist: false };
   if (marker === '__TIMEOUT__') return { record, persist: true, hang: true };
-  return { record, persist: true };
+  return createdResult(state, record);
 }
 
 // 更新：__NOOP_UPDATE__ 与全局 noopUpdate 都表示「响应成功但没生效」
@@ -199,6 +240,17 @@ function route(state, req, pathname, query, token, payload) {
     return { status: 201, body: { token: mintToken(state, account), account } };
   }
 
+  // 官方 CLI 用账号密码登录时走的是 v2 的 users/login（与 v1 的 tokens 等价地发一个用户令牌）
+  if (req.method === 'POST' && pathname === '/api.php/v2/users/login') {
+    const account = String(payload.account || '');
+    const password = String(payload.password || '');
+    state.tokenRequests.push({ account });
+    if (state.loginFails || state.accounts[account] !== password) {
+      return { status: 401, body: { status: 'fail', message: '登录失败，请检查您的用户名或密码是否填写正确。' } };
+    }
+    return { body: { status: 'success', token: mintToken(state, account) } };
+  }
+
   // 以下全部要令牌
   const account = token ? state.tokens.get(token) : undefined;
   if (!token || state.tokenFails || !account) {
@@ -213,7 +265,9 @@ function route(state, req, pathname, query, token, payload) {
   }
 
   if (req.method === 'GET' && pathname === '/api.php/v2/products') {
-    return { body: listBody('products', state.products, query) };
+    const visible = visibleProductsOf(state, account);
+    const products = visible ? state.products.filter((p) => visible.includes(Number(p.id))) : state.products;
+    return { body: listBody('products', products, query) };
   }
   if (req.method === 'GET' && pathname === '/api.php/v2/projects') {
     return { body: listBody('projects', state.projects, query) };
@@ -230,8 +284,15 @@ function route(state, req, pathname, query, token, payload) {
   if (m) {
     const record = state.bugs.get(Number(m[1]));
     if (req.method === 'GET') return record ? { body: { bug: record } } : { status: 404, body: { message: '记录不存在' } };
+    if (req.method === 'DELETE') {
+      if (!record) return { status: 404, body: { message: '记录不存在' } };
+      if (state.deleteFails) return { body: { status: 'fail', message: '没有删除该缺陷的权限。' } };
+      state.bugs.delete(record.id);
+      return { body: { status: 'success' } };
+    }
     if (req.method === 'PUT') {
       if (!record) return { status: 404, body: { message: '记录不存在' } };
+      if (!canSeeProduct(state, account, record.product)) return { body: { status: 'fail', message: '所属产品不存在，或当前账号没有权限。' } };
       const result = updateRecord(state, record, payload, 'bug');
       if (result.persist) state.bugs.set(record.id, result.record);
       return { body: { bug: result.record } };
@@ -257,8 +318,15 @@ function route(state, req, pathname, query, token, payload) {
   if (m) {
     const record = state.feedbacks.get(Number(m[1]));
     if (req.method === 'GET') return record ? { body: { feedback: record } } : { status: 404, body: { message: '记录不存在' } };
+    if (req.method === 'DELETE') {
+      if (!record) return { status: 404, body: { message: '记录不存在' } };
+      if (state.deleteFails) return { body: { status: 'fail', message: '没有删除该反馈的权限。' } };
+      state.feedbacks.delete(record.id);
+      return { body: { status: 'success' } };
+    }
     if (req.method === 'PUT') {
       if (!record) return { status: 404, body: { message: '记录不存在' } };
+      if (!canSeeProduct(state, account, record.product)) return { body: { status: 'fail', message: '所属产品不存在，或当前账号没有权限。' } };
       const result = updateRecord(state, record, payload, 'feedback');
       if (result.persist) state.feedbacks.set(record.id, result.record);
       return { body: { feedback: result.record } };
@@ -280,6 +348,14 @@ function route(state, req, pathname, query, token, payload) {
     return { body: { file: state.files.get(id) } };
   }
 
+  m = pathname.match(/^\/api\.php\/v2\/files\/(\d+)$/);
+  if (req.method === 'DELETE' && m) {
+    const id = Number(m[1]);
+    if (!state.files.has(id)) return { status: 404, body: { message: '文件不存在' } };
+    state.files.delete(id);
+    return { body: { status: 'success' } };
+  }
+
   return { status: 404, body: { message: `mock 没有实现这个路由：${req.method} ${pathname}` } };
 }
 
@@ -299,7 +375,7 @@ export function startMockApi(state = createMockApiState()) {
         payload = { __raw: raw };
       }
     }
-    state.calls.push({ method: req.method, path: pathname, query, token, body: raw });
+    state.calls.push({ method: req.method, path: pathname, query, token, headers: req.headers, body: raw });
 
     const result = route(state, req, pathname, query, token, payload);
     if (result.hang) return; // 故意不响应，模拟超时

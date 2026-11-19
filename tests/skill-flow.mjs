@@ -1,17 +1,18 @@
 // rh-product-feedback 技能流程的可执行参考实现。
 //
-// 这份代码把 SKILL.md 里的硬约束固化成行为，供 tests/e2e-mock.mjs 在 mock MCP 上验证：
+// 这份代码把 SKILL.md 里的硬约束固化成行为，供 tests/e2e-mock.mjs 在假禅道 API v2 服务上验证：
 //   - 写入前必须有用户确认（confirm 回调返回 false → 一次写入都不发生）
-//   - 创建/更新的参数必须包在 payload 内
-//   - 写入后必须按 ID 回读校验
+//   - 正文经载荷文件交给入口脚本，不进命令行参数
+//   - 写入后必须按 ID 回读校验（回读字段由入口脚本投影，Agent 只见投影后的结果）
 //   - 结果不确定时先查询核实，不重复创建；只认写入前不存在、现在唯一存在的记录
 //   - 业务失败（status: fail）不当作成功
-//   - 补充说明保留原文，走改 desc 的路径；写前二次回读，原文被改就停手
+//   - 补充说明保留原文，走改正文的路径；写前二次回读，原文被改就停手
 //   - 缺陷单（bug 对象）走同一套硬约束，差异在字段名（productID）与正文载体（steps）
-//     - 创建/更新同样必须包在 payload 内，且 openedBuild 必填
-//     - 回读比较前要剥掉 HTML 标签并归一化空白
-//     - 查重、结果不确定时的“先查后报”规则与反馈单一致
+//     - openedBuild 必填；回读比较前要剥掉 HTML 标签并归一化空白
+//     - 查重、结果不确定时的「先查后报」规则与反馈单一致
 //
+// 通道：一切读写都经随包入口脚本（scripts/zentao.mjs）的子命令——它换令牌、注入官方禅道 CLI、
+// 落载荷、回读核对。这里不直连禅道，也不碰令牌。
 // 技能本身由 Agent 按 SKILL.md 执行；本模块不是技能的一部分，只用于测试与文档化流程。
 export const FEEDBACK_TYPES = ['bug', 'story', 'advice'];
 export const BUG_TYPES = [
@@ -28,28 +29,9 @@ export class SkillError extends Error {
 
 const SEPARATOR = '──────────────';
 
-function normalize(text) {
-  return String(text || '').toLowerCase().replace(/\s+/g, '');
-}
-
 /** 禅道会把描述里的 \n 存成 \r\n（真实 E2E 实测确认），回读比较前先归一化换行符。 */
 function normalizeNewlines(text) {
   return String(text ?? '').replace(/\r\n/g, '\n');
-}
-function sameText(a, b) {
-  const norm = (t) => normalizeNewlines(t).trim();
-  return norm(a) === norm(b);
-}
-/** 标题按去除首尾空白后精确比较。 */
-function sameTitle(a, b) {
-  return String(a ?? '').trim() === String(b ?? '').trim();
-}
-/**
- * JSON-RPC 层面的拒绝：参数不合法（-32602）或工具不存在（-32601）。
- * 这类是「请求根本没被执行」，不是「结果不确定」——不能拿它去做恢复扫描。
- */
-function isRejected(res) {
-  return !!res?.error && (res.error.code === -32602 || res.error.code === -32601);
 }
 
 /** 标题关键词：中文按 2-gram 切分，英文按单词切分。 */
@@ -73,145 +55,105 @@ function similarity(a, b) {
   return hit / tokens.size;
 }
 
+/** 入口脚本给出的失败原文：stdout 的 JSON 里带 error，stderr 是给人看的那一行。 */
+function failureMessage(res) {
+  const data = res?.data || {};
+  if (data.error) return String(data.error);
+  if (data.message) return String(data.message);
+  return String(res?.stderr || '').trim().replace(/^错误：/, '') || '未知错误';
+}
+
+/** 禅道 CLI 没装：报错原文来自入口脚本的「找不到 zentao 命令」。 */
+function cliMissing(res) {
+  return /找不到 zentao 命令/.test(failureMessage(res));
+}
+
+/** 凭据/令牌类失败：这几类要引导用户自己写凭据，而不是在对话里索要密码。 */
+function credentialProblem(res) {
+  return /凭据|锁定|Token|令牌|认证|登录/.test(failureMessage(res));
+}
+
+/** 凭据类失败统一抛 not_authenticated，其余按脚本给的原文抛 auth_failed。 */
+function throwIfCredentialProblem(res) {
+  if (!credentialProblem(res)) return;
+  throw new SkillError(
+    'not_authenticated',
+    `${failureMessage(res)} 按 references/setup.md 让终端用户在自己的终端写接入凭据，不要在对话里索要密码或令牌。`,
+  );
+}
+
 export class FeedbackAssistant {
   /**
    * @param {object} opts
-   * @param {import('./mcp-client.mjs').McpClient} opts.client
+   * @param {import('./zentao-client.mjs').ZentaoEntry} opts.zentao 入口脚本适配器
    * @param {(payload: any) => Promise<boolean>} opts.confirm 用户确认回调
-   * @param {{account: string, password: string}} opts.credentials
    * @param {() => string} [opts.stamp] 追加说明的时间戳
    */
-  constructor({ client, confirm, credentials = { account: 'mock', password: 'mock' }, stamp = () => '2026-03-12' }) {
-    this.client = client;
+  constructor({ zentao, confirm, stamp = () => '2026-03-12' }) {
+    this.zentao = zentao;
     this.confirm = confirm;
-    this.credentials = credentials;
     this.stamp = stamp;
-    this.loggedIn = false;
-    this.writes = 0;
   }
 
-  // ---- 会话与认证 -------------------------------------------------
+  // ---- 会话与环境自检 -----------------------------------------------
 
   /**
-   * 环境自检：宿主里必须已经注册禅道 MCP。
-   * 未注册时给出的是「照 setup.md 引导安装」的指引，不是让用户自己去填地址。
+   * 环境自检：入口脚本能连上禅道、能看到产品。
+   * 未通过时给的是「照 setup.md 引导安装/写凭据」的指引，不是让用户自己去填地址。
    */
   async ensureEnvironment() {
-    let tools = [];
-    try {
-      tools = await this.client.toolsList();
-    } catch {
-      throw new SkillError('mcp_unreachable', '连不上禅道 MCP：检查网络与内网地址（地址在技能包的 config.local.json 里），不要向用户索要地址。');
+    const res = await this.zentao.products();
+    if (res.code === 0) return res.rows;
+    if (cliMissing(res)) {
+      throw new SkillError(
+        'cli_missing',
+        `${failureMessage(res)} 装好后按 references/setup.md「Agent 执行路径」核对，不要向用户索要禅道地址、账号或密码。`,
+      );
     }
-    const hasZentao = tools.some((t) => /post_feedbacks|post_bugs/.test(t.name || ''));
-    if (!hasZentao) {
-      throw new SkillError('mcp_not_configured', '禅道 MCP 不可用：按 references/setup.md 核对技能包 config.local.json 里的地址与本机凭据——不要向用户索要地址、账号或密码。');
+    if (credentialProblem(res)) {
+      throw new SkillError(
+        'not_authenticated',
+        `${failureMessage(res)} 让终端用户自己按 references/setup.md 写接入凭据，不要在对话里索要密码。`,
+      );
     }
-    return tools;
+    throw new SkillError(
+      'zentao_unreachable',
+      `${failureMessage(res)} 先确认内网连通（禅道地址在技能包的 config.local.json 里），不要向用户索要地址。`,
+    );
   }
 
+  /** 认证自检：入口脚本每次调用都会用本机凭据换一个属于当前账号的令牌。 */
   async login() {
-    if (!this.credentials || !this.credentials.account) {
-      this.loggedIn = false;
-      throw new SkillError('not_authenticated', '本机没有禅道接入凭据：请用户自己运行 references/setup.md 里的凭据写入命令，不要在对话里索要密码或令牌。');
-    }
-    // 与随包脚本一致：用本机凭据直连禅道换一个属于当前账号的令牌，再带着令牌访问禅道 MCP。
-    // 禅道 MCP 的 post_users_login 不校验凭据（恒返回服务端配置的固定身份），不能用来定身份。
-    const baseUrl = this.client.zentaoBaseUrl;
-    if (!baseUrl) {
-      this.loggedIn = false;
-      throw new SkillError('auth_failed', '拿不到禅道地址：地址在技能包 config.local.json 里，不要向用户索要地址。');
-    }
-    let token = null;
-    try {
-      const res = await fetch(`${baseUrl}/api.php/v1/tokens`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ account: this.credentials.account, password: this.credentials.password }),
-      });
-      const body = await res.json().catch(() => null);
-      if (res.ok && body?.token) token = String(body.token);
-    } catch {
-      token = null;
-    }
-    if (!token) {
-      this.loggedIn = false;
-      delete this.client.headers.authorization;
-      throw new SkillError('auth_failed', '禅道登录失败');
-    }
-    this.client.headers.authorization = `Bearer ${token}`;
-    this.loggedIn = true;
-    return { token };
-  }
-
-  /** 401 → 重新登录一次并重试一次；仍失败则停止。 */
-  async withAuth(run) {
-    if (!this.loggedIn) await this.login();
-    let res = await run();
-    if (res.unauthorized || res.httpStatus === 401) {
-      await this.login();
-      res = await run();
-      if (res.unauthorized || res.httpStatus === 401) {
-        throw new SkillError('auth_failed', '重新登录后仍然 401，停止操作');
-      }
-    }
-    return res;
+    const res = await this.zentao.products();
+    if (res.code === 0) return { ok: true };
+    throwIfCredentialProblem(res);
+    throw new SkillError('auth_failed', failureMessage(res));
   }
 
   // ---- 只读 ---------------------------------------------------------
 
   /** 当前账号可见的产品：后续选产品的候选范围。 */
   async listProducts() {
-    const res = await this.withAuth(() => this.client.callTool('get_products', { pageID: '1', recPerPage: '100' }));
-    if (res.status === 'fail' || !res.data) return [];
-    return res.data.products || [];
+    const res = await this.zentao.products();
+    if (res.code !== 0) return [];
+    return res.rows;
   }
 
-  async scanFeedbacks(productId, { recPerPage = 100, maxPages = 3 } = {}) {
-    const items = [];
-    let complete = true;
-    let error = null;
-    for (let page = 1; page <= maxPages; page++) {
-      let res;
-      try {
-        res = await this.withAuth(() => this.client.callTool('get_products_productID_feedbacks', {
-          productID: String(productId), pageID: String(page), recPerPage: String(recPerPage),
-        }));
-      } catch (err) {
-        // 认证类失败直接往上抛；只有网络类失败才当作「扫描不完整」。
-        if (err instanceof SkillError) throw err;
-        complete = false;
-        error = `读取反馈列表失败：${err.message}`;
-        break;
-      }
-      if (res.status === 'fail' || !res.data) {
-        complete = false;
-        error = `读取反馈列表失败：${describeFailure(res.data)}`;
-        break;
-      }
-      const list = res.data.feedbacks || [];
-      items.push(...list);
-      const pager = res.data.pager || {};
-      if (list.length === 0) break;
-      if (pager.pageTotal && page >= pager.pageTotal) break;
-      if (!pager.pageTotal && list.length >= recPerPage) {
-        complete = false;
-        error = '响应未给出总页数，无法确认已覆盖全部反馈';
-        break;
-      }
-      if (page === maxPages) {
-        complete = false;
-        error = `扫描达到 ${maxPages} 页上限，未覆盖该产品的全部反馈`;
-      }
+  /** 反馈列表：入口脚本用 --all 翻完全部页，投影成 id/标题/状态/负责人。 */
+  async scanFeedbacks(productId) {
+    const res = await this.zentao.feedbacks(productId);
+    if (res.code !== 0) {
+      return { items: [], complete: false, error: `读取反馈列表失败：${failureMessage(res)}` };
     }
-    return { items, complete, error };
+    return { items: res.rows, complete: true, error: null };
   }
-  async listFeedbacks(productId, { recPerPage = 100, maxPages = 3 } = {}) {
-    const { items } = await this.scanFeedbacks(productId, { recPerPage, maxPages });
+
+  async listFeedbacks(productId) {
+    const { items } = await this.scanFeedbacks(productId);
     return items;
   }
 
-  /** 客户端查重：分页拉取 + 标题关键词匹配。 */
+  /** 客户端查重：拉取该产品的反馈 + 标题关键词匹配。 */
   async findDuplicates(productId, title, { threshold = 0.5 } = {}) {
     const { items } = await this.scanFeedbacks(productId);
     return items
@@ -220,74 +162,35 @@ export class FeedbackAssistant {
       .sort((a, b) => b.score - a.score);
   }
 
+  /** 按编号回读：入口脚本把字段投影成一行 JSON，正文已经剥掉标签。 */
   async readBack(id) {
-    const res = await this.withAuth(() => this.client.callTool('get_feedbacks_feedbackID', { feedbackID: String(id) }));
-    if (res.status === 'fail' || !res.data?.feedback) {
-      return { found: false, raw: res.data, httpStatus: res.httpStatus, actions: [] };
+    const res = await this.zentao.feedback(id);
+    const data = res.data;
+    if (res.code !== 0 || data?.ok !== true) {
+      return { found: false, raw: data, actions: [] };
     }
-    const fb = res.data.feedback;
     return {
       found: true,
-      feedback: fb,
-      status: fb.status,
-      assignedTo: fb.assignedTo || '',
-      actions: (res.data.actions || fb.actions || []).map((a) => a.action),
-      raw: res.data,
+      feedback: {
+        id: data.id,
+        product: data.product,
+        title: data.title,
+        desc: data.body,
+        status: data.status,
+        assignedTo: data.assignee || '',
+        openedBy: data.openedBy || '',
+        reviewedDate: data.reviewedDate || '',
+        solution: data.resolution || '',
+      },
+      status: data.status,
+      assignedTo: data.assignee || '',
+      actions: (data.actions || []).map((a) => a.action),
+      raw: data,
     };
   }
 
   // ---- 写入 ---------------------------------------------------------
-  /** 回读结果是否与本次提交的草稿完全一致：产品、标题、完整描述、opened 流水。 */
-  matchesDraft(detail, { productId, title, desc }) {
-    if (!detail?.found) return false;
-    const fb = detail.feedback || {};
-    if (Number(fb.product) !== Number(productId)) return false;
-    if (!sameTitle(fb.title, title)) return false;
-    if (!sameText(fb.desc, desc)) return false;
-    if (!detail.actions.includes('opened')) return false;
-    return true;
-  }
-  /**
-   * 创建结果不确定时的核实：只认「写入前不存在、现在唯一存在、且回读完全一致」的记录。
-   * 写入前已存在的同名反馈不在候选里——只看同名会把旧记录误当成新建成功。
-   */
-  async recoverCreate({ productId, title, desc, baselineIds, baselineComplete, duplicates }) {
-    if (!baselineComplete) {
-      return {
-        status: 'unknown', reason: 'baseline_incomplete', writes: 1, duplicates,
-        message: '创建未拿到确认，写入前的扫描不完整，无法区分本次新建与既有反馈；未重复创建，请人工核对禅道',
-      };
-    }
-    const after = await this.scanFeedbacks(productId);
-    if (!after.complete) {
-      return {
-        status: 'unknown', reason: 'scan_incomplete', writes: 1, duplicates,
-        message: `创建未拿到确认，复查反馈列表不完整（${after.error || '未知原因'}）；未重复创建，请人工核对禅道`,
-      };
-    }
-    const candidates = after.items.filter(
-      (f) => !baselineIds.has(String(f.id)) && sameTitle(f.title, title),
-    );
-    const verified = [];
-    for (const candidate of candidates) {
-      const detail = await this.readBack(candidate.id);
-      if (this.matchesDraft(detail, { productId, title, desc })) verified.push({ id: candidate.id, detail });
-    }
-    if (verified.length === 1) {
-      return { status: 'created', recovered: true, id: verified[0].id, writes: 1, detail: verified[0].detail, duplicates };
-    }
-    if (verified.length > 1) {
-      return {
-        status: 'ambiguous', reason: 'multiple_candidates', writes: 1, duplicates,
-        candidates: verified.map((v) => v.id),
-        message: `创建未拿到确认，查到 ${verified.length} 条可能本次创建的反馈（${verified.map((v) => `#${v.id}`).join('、')}），无法唯一确认；未重复创建`,
-      };
-    }
-    return {
-      status: 'unknown', reason: 'no_match', writes: 1, duplicates,
-      message: '创建未拿到确认，复查未发现本次写入的新记录，不能断定禅道是否已落库；未重复创建，请人工核对后再决定',
-    };
-  }
+
   async submit({ title, desc, type, productId }) {
     if (!FEEDBACK_TYPES.includes(type)) throw new SkillError('bad_type', `未知反馈类型：${type}`);
     // 写入前先把该产品的反馈扫一遍：既是查重，也是「本次新建」的 ID 基线。
@@ -296,41 +199,45 @@ export class FeedbackAssistant {
       .map((f) => ({ ...f, score: similarity(title, f.title) }))
       .filter((f) => f.score >= 0.5)
       .sort((a, b) => b.score - a.score);
-    const baselineIds = new Set(scan.items.map((f) => String(f.id)));
     const approved = await this.confirm({ kind: 'submit', draft: { title, desc, type, productId }, duplicates });
     if (!approved) return { status: 'cancelled', writes: 0, duplicates };
-    let created;
-    try {
-      created = await this.withAuth(() => this.client.callTool('post_feedbacks', {
-        payload: { product: productId, title, desc, type },
-      }));
-    } catch (err) {
-      if (err instanceof SkillError) throw err;
-      created = { timedOut: true, httpStatus: 0, status: null, data: null };
+
+    const res = await this.zentao.createFeedback({ product: Number(productId), title, desc, type });
+    throwIfCredentialProblem(res);
+    const data = res.data || {};
+    if (data.ok === true) {
+      const detail = await this.readBack(data.id);
+      return {
+        status: 'created',
+        id: data.id,
+        writes: 1,
+        detail,
+        duplicates,
+        // 结论来自查询核实（创建超时后恢复），不是创建回执
+        ...(data.verified === 'query' ? { recovered: true } : {}),
+      };
     }
-    // 请求被服务端拒绝（参数不合法、工具不存在）：根本没执行，按失败处理
-    if (isRejected(created)) {
-      return { status: 'failed', message: `请求被服务端拒绝：${created.error.message}`, writes: 1, duplicates };
+    const message = failureMessage(res);
+    // 超时/断连后没能在基线之外找到唯一一致的新记录：不重发，报未确认
+    if (data.uncertain) {
+      const candidates = Array.isArray(data.candidates) ? data.candidates : [];
+      return {
+        status: 'unknown',
+        reason: candidates.length > 1 ? 'multiple_candidates' : 'no_match',
+        writes: 1,
+        duplicates,
+        candidates,
+        message,
+      };
     }
-    // 结果不确定：先查后报，绝不重复创建
-    if (created.timedOut || created.httpStatus === 0 || created.status === null) {
-      return await this.recoverCreate({
-        productId, title, desc, baselineIds, baselineComplete: scan.complete, duplicates,
-      });
+    // 单据写进去了但回读对不上：不重建，把现状交回终端用户
+    if (data.created) {
+      return { status: 'inconsistent', id: data.id, writes: 1, detail: await this.readBack(data.id), duplicates, message };
     }
-    if (created.status === 'fail') {
-      return { status: 'failed', message: describeFailure(created.data), writes: 1, duplicates };
-    }
-    const id = created.data?.id;
-    if (!id) {
-      return { status: 'inconsistent', writes: 1, duplicates, message: '创建响应没有给出反馈 ID，无法回读确认' };
-    }
-    const detail = await this.readBack(id);
-    if (!this.matchesDraft(detail, { productId, title, desc })) {
-      return { status: 'inconsistent', id, writes: 1, detail, duplicates };
-    }
-    return { status: 'created', id, writes: 1, detail, duplicates };
+    // 参数/业务失败：请求被拒绝（usage 连请求都没发），按失败处理，不重试
+    return { status: 'failed', writes: res.code === 1 ? 1 : 0, duplicates, message };
   }
+
   async supplement({ id, addition }) {
     const before = await this.readBack(id);
     if (!before.found) return { status: 'not_found', writes: 0 };
@@ -338,60 +245,46 @@ export class FeedbackAssistant {
     const nextDesc = `${original}\n\n${SEPARATOR}\n【补充说明 · ${this.stamp()} · 用户口述，AI 整理】\n${addition}`;
     const approved = await this.confirm({ kind: 'supplement', id, original, next: nextDesc });
     if (!approved) return { status: 'cancelled', writes: 0 };
-    // 用户确认后、写入前再读一次：原文被他人改动时停止写入，不覆盖新内容。
-    const recheck = await this.readBack(id);
-    if (!recheck.found) return { status: 'not_found', writes: 0, message: '写入前复核时反馈已不存在' };
-    const current = normalizeNewlines(recheck.feedback.desc || '');
-    const changed =
-      !sameText(current, original)
-      || !sameTitle(recheck.feedback.title, before.feedback.title)
-      || Number(recheck.feedback.product) !== Number(before.feedback.product);
-    if (changed) {
+
+    // 写前复核在入口脚本里做：原文被他人改动时它停手并把现状交回，不覆盖新内容。
+    const res = await this.zentao.updateFeedback(id, { desc: nextDesc, expectedBody: original });
+    throwIfCredentialProblem(res);
+    const data = res.data || {};
+    const message = failureMessage(res);
+    if (data.ok === true) {
       return {
-        status: 'conflict', needsUserDecision: true, writes: 0,
-        message: '写入前复核发现该反馈已被他人修改，本次补充未写入；请确认重新合并后的草稿',
-        current: { title: recheck.feedback.title, product: recheck.feedback.product, desc: current },
+        status: 'updated',
+        id,
+        writes: 1,
+        detail: await this.readBack(id),
+        ...(data.verified === 'query' ? { recovered: true } : {}),
       };
     }
-    const editedBefore = (recheck.actions || []).filter((a) => a === 'edited').length;
-    let updated;
-    try {
-      updated = await this.withAuth(() => this.client.callTool('put_feedbacks_feedbackID', {
-        feedbackID: String(id),
-        // product 必须是数字：传字符串会被服务端静默忽略，回读才发现没生效。
-        payload: { product: Number(before.feedback.product), title: before.feedback.title, desc: nextDesc },
-      }));
-    } catch (err) {
-      if (err instanceof SkillError) throw err;
-      updated = { timedOut: true, httpStatus: 0, status: null, data: null };
-    }
-    if (isRejected(updated)) {
-      return { status: 'failed', message: `请求被服务端拒绝：${updated.error.message}`, writes: 1 };
-    }
-    if (updated.status === 'fail') {
-      return { status: 'failed', message: describeFailure(updated.data), writes: 1 };
-    }
-    const uncertain = updated.timedOut || updated.httpStatus === 0 || updated.status === null;
-    const after = await this.readBack(id);
-    const storedDesc = normalizeNewlines(after.feedback?.desc || '');
-    // 完整预期描述归一化后精确比较；流水看本次是否新增 edited，而不是历史上有没有。
-    const descMatched = after.found && sameText(storedDesc, nextDesc);
-    const editedAfter = (after.actions || []).filter((a) => a === 'edited').length;
-    const editedAdded = editedAfter > editedBefore;
-    if (descMatched && editedAdded) {
-      return { status: 'updated', id, writes: 1, detail: after, ...(uncertain ? { recovered: true } : {}) };
-    }
-    if (uncertain) {
+    if (data.conflict) {
       return {
-        status: 'unknown', reason: 'update_unconfirmed', id, writes: 1, detail: after,
-        message: '更新未拿到确认，已只读核实；未重放更新，请人工核对后再决定',
+        status: 'conflict',
+        needsUserDecision: true,
+        writes: 0,
+        message,
+        current: { desc: data.currentBody, mergedDraft: data.mergedDraft, changed: data.changed },
       };
     }
-    return {
-      status: 'inconsistent', id, writes: 1, detail: after,
-      message: descMatched ? '描述已更新，但操作流水没有新增 edited' : '回读描述与本次预期不一致',
-    };
+    if (data.uncertain) {
+      return {
+        status: 'unknown',
+        reason: 'update_unconfirmed',
+        id,
+        writes: 1,
+        detail: await this.readBack(id),
+        message,
+      };
+    }
+    if (data.updated) {
+      return { status: 'inconsistent', id, writes: 1, detail: await this.readBack(id), message };
+    }
+    return { status: 'failed', writes: res.code === 1 ? 1 : 0, message };
   }
+
   // ---- 解释 ---------------------------------------------------------
 
   /** 事实 / 推断 / 无法确定 三段式。 */
@@ -399,7 +292,7 @@ export class FeedbackAssistant {
     const detail = await this.readBack(id);
     if (!detail.found) return { status: 'not_found', facts: [], inferences: [], unknown: [] };
     const fb = detail.feedback;
-    const actions = detail.raw?.actions || fb.actions || [];
+    const actions = detail.raw?.actions || [];
 
     const facts = [`当前状态：${fb.status || '未知'}`, `负责人：${fb.assignedTo || '未指派'}`];
     for (const a of actions) {
@@ -407,8 +300,8 @@ export class FeedbackAssistant {
     }
 
     const inferences = [];
-    if (fb.reviewedDate && !fb.result && !fb.solution) {
-      inferences.push('评审动作已发生，但结论字段仍为空，推断评审尚未给出结论（依据：reviewedDate 有值而 result/solution 为空）');
+    if (fb.reviewedDate && !fb.solution) {
+      inferences.push('评审动作已发生，但结论字段仍为空，推断评审尚未给出结论（依据：reviewedDate 有值而 solution 为空）');
     }
     if (!fb.version && !fb.plan) {
       inferences.push('禅道里没有版本/计划记录，推断尚未进入排期（依据：version 与 plan 均为空）');
@@ -418,46 +311,12 @@ export class FeedbackAssistant {
     if (!fb.version && !fb.plan) {
       unknown.push('未排期的原因：接口没有该字段，也没有可引用的评论说明');
     }
-    if (!fb.result && !fb.solution) {
-      unknown.push('最终处理结论：result / solution 均为空');
+    if (!fb.solution) {
+      unknown.push('最终处理结论：solution 为空');
     }
 
     return { status: 'ok', facts, inferences, unknown, detail };
   }
-}
-
-function describeFailure(data) {
-  if (!data) return '未知错误';
-  const msg = data.message;
-  if (typeof msg === 'string') return msg;
-  if (msg && typeof msg === 'object') {
-    return Object.entries(msg).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join('; ') : v}`).join(' | ');
-  }
-  return String(msg);
-}
-
-/** 缺陷单的正文是富文本 HTML：比较前剥掉标签、归一化空白。 */
-export function normalizeHtml(text) {
-  return String(text ?? '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{2,}/g, '\n')
-    .trim();
-}
-
-/** 主干版本：列表视图显示「主干」、详情视图显示 trunk，指同一个值。 */
-export function normalizeBuild(value) {
-  const raw = Array.isArray(value) ? value : [value];
-  return raw
-    .map((v) => (String(v).trim() === '主干' ? 'trunk' : String(v).trim()))
-    .join(',');
 }
 
 /**
@@ -531,46 +390,15 @@ export function pickProduct({
 export class DefectAssistant extends FeedbackAssistant {
   // ---- 只读 ---------------------------------------------------------
 
-  async scanBugs(productId, { recPerPage = 100, maxPages = 3 } = {}) {
-    const items = [];
-    let complete = true;
-    let error = null;
-    for (let page = 1; page <= maxPages; page++) {
-      let res;
-      try {
-        res = await this.withAuth(() => this.client.callTool('get_products_productID_bugs', {
-          productID: String(productId), pageID: String(page), recPerPage: String(recPerPage),
-        }));
-      } catch (err) {
-        if (err instanceof SkillError) throw err;
-        complete = false;
-        error = `读取缺陷列表失败：${err.message}`;
-        break;
-      }
-      if (res.status === 'fail' || !res.data) {
-        complete = false;
-        error = `读取缺陷列表失败：${describeFailure(res.data)}`;
-        break;
-      }
-      const list = res.data.bugs || [];
-      items.push(...list);
-      const pager = res.data.pager || {};
-      if (list.length === 0) break;
-      if (pager.pageTotal && page >= pager.pageTotal) break;
-      if (!pager.pageTotal && list.length >= recPerPage) {
-        complete = false;
-        error = '响应未给出总页数，无法确认已覆盖全部缺陷';
-        break;
-      }
-      if (page === maxPages) {
-        complete = false;
-        error = `扫描达到 ${maxPages} 页上限，未覆盖该产品的全部缺陷`;
-      }
+  async scanBugs(productId) {
+    const res = await this.zentao.bugs(productId);
+    if (res.code !== 0) {
+      return { items: [], complete: false, error: `读取缺陷列表失败：${failureMessage(res)}` };
     }
-    return { items, complete, error };
+    return { items: res.rows, complete: true, error: null };
   }
 
-  /** 缺陷查重：分页拉取 + 标题关键词匹配。 */
+  /** 缺陷查重：拉取该产品的缺陷 + 标题关键词匹配。 */
   async findBugDuplicates(productId, title, { threshold = 0.5 } = {}) {
     const { items } = await this.scanBugs(productId);
     return items
@@ -580,78 +408,36 @@ export class DefectAssistant extends FeedbackAssistant {
   }
 
   async readBackBug(id) {
-    const res = await this.withAuth(() => this.client.callTool('get_bugs_bugID', { bugID: String(id) }));
-    if (res.status === 'fail' || !res.data?.bug) {
-      return { found: false, raw: res.data, httpStatus: res.httpStatus, actions: [] };
+    const res = await this.zentao.bug(id);
+    const data = res.data;
+    if (res.code !== 0 || data?.ok !== true) {
+      return { found: false, raw: data, actions: [] };
     }
-    const bug = res.data.bug;
     return {
       found: true,
-      bug,
-      status: bug.status,
-      assignedTo: bug.assignedTo || '',
-      openedBy: bug.openedBy || '',
-      actions: (res.data.actions || bug.actions || []).map((a) => a.action),
-      raw: res.data,
+      bug: {
+        id: data.id,
+        product: data.product,
+        title: data.title,
+        steps: data.body,
+        status: data.status,
+        assignedTo: data.assignee || '',
+        openedBy: data.openedBy || '',
+        severity: data.severity,
+        pri: data.pri,
+        openedBuild: data.openedBuild,
+        resolvedDate: data.processedDate || '',
+        resolution: data.resolution || '',
+      },
+      status: data.status,
+      assignedTo: data.assignee || '',
+      openedBy: data.openedBy || '',
+      actions: (data.actions || []).map((a) => a.action),
+      raw: data,
     };
   }
 
   // ---- 写入 ---------------------------------------------------------
-
-  /** 回读结果是否与本次提交的草稿完全一致。 */
-  matchesBugDraft(detail, { productId, title, steps, openedBuild, severity, pri }) {
-    if (!detail?.found) return false;
-    const bug = detail.bug || {};
-    if (Number(bug.product) !== Number(productId)) return false;
-    if (!sameTitle(bug.title, title)) return false;
-    if (normalizeHtml(bug.steps) !== normalizeHtml(steps)) return false;
-    if (normalizeBuild(bug.openedBuild) !== normalizeBuild(openedBuild)) return false;
-    if (severity !== undefined && Number(bug.severity) !== Number(severity)) return false;
-    if (pri !== undefined && Number(bug.pri) !== Number(pri)) return false;
-    if (!detail.actions.includes('opened')) return false;
-    return true;
-  }
-
-  /** 创建结果不确定时的核实：只认基线之外、唯一、回读完全一致的缺陷。 */
-  async recoverBugCreate({ productId, title, steps, openedBuild, severity, pri, baselineIds, baselineComplete, duplicates }) {
-    if (!baselineComplete) {
-      return {
-        status: 'unknown', reason: 'baseline_incomplete', writes: 1, duplicates,
-        message: '创建未拿到确认，写入前的扫描不完整，无法区分本次新建与既有缺陷；未重复创建，请人工核对禅道',
-      };
-    }
-    const after = await this.scanBugs(productId);
-    if (!after.complete) {
-      return {
-        status: 'unknown', reason: 'scan_incomplete', writes: 1, duplicates,
-        message: `创建未拿到确认，复查缺陷列表不完整（${after.error || '未知原因'}）；未重复创建，请人工核对禅道`,
-      };
-    }
-    const candidates = after.items.filter(
-      (b) => !baselineIds.has(String(b.id)) && sameTitle(b.title, title),
-    );
-    const verified = [];
-    for (const candidate of candidates) {
-      const detail = await this.readBackBug(candidate.id);
-      if (this.matchesBugDraft(detail, { productId, title, steps, openedBuild, severity, pri })) {
-        verified.push({ id: candidate.id, detail });
-      }
-    }
-    if (verified.length === 1) {
-      return { status: 'created', recovered: true, id: verified[0].id, writes: 1, detail: verified[0].detail, duplicates };
-    }
-    if (verified.length > 1) {
-      return {
-        status: 'ambiguous', reason: 'multiple_candidates', writes: 1, duplicates,
-        candidates: verified.map((v) => v.id),
-        message: `创建未拿到确认，查到 ${verified.length} 条可能本次创建的缺陷（${verified.map((v) => `#${v.id}`).join('、')}），无法唯一确认；未重复创建`,
-      };
-    }
-    return {
-      status: 'unknown', reason: 'no_match', writes: 1, duplicates,
-      message: '创建未拿到确认，复查未发现本次写入的新记录，不能断定禅道是否已落库；未重复创建，请人工核对后再决定',
-    };
-  }
 
   async submitBug({ title, steps, productId, openedBuild = ['trunk'], severity = 3, pri = 3, type = 'others', project, assignedTo }) {
     if (!BUG_TYPES.includes(type)) throw new SkillError('bad_type', `未知缺陷类型：${type}`);
@@ -662,103 +448,94 @@ export class DefectAssistant extends FeedbackAssistant {
       .filter((b) => b.score >= 0.5)
       .sort((a, b) => b.score - a.score);
 
-    const baselineIds = new Set(scan.items.map((b) => String(b.id)));
     const draft = { title, steps, productId, openedBuild, severity, pri, type, project };
     const approved = await this.confirm({ kind: 'submitBug', draft, duplicates });
     if (!approved) return { status: 'cancelled', writes: 0, duplicates };
 
-    // 载荷里没有 assignedTo = 缺省跟产品 QD 走（由接入层按产品 QD 指派）；
+    // 载荷里没有 assignedTo = 缺省跟产品 QD 走（由禅道侧按产品指派）；
     // 终端用户指名时才写这个字段。
     const payload = { productID: Number(productId), title, steps, openedBuild, severity, pri, type };
     if (assignedTo !== undefined) payload.assignedTo = assignedTo;
     if (project !== undefined && project !== null) payload.project = Number(project);
 
-    let created;
-    try {
-      created = await this.withAuth(() => this.client.callTool('post_bugs', { payload }));
-    } catch (err) {
-      if (err instanceof SkillError) throw err;
-      created = { timedOut: true, httpStatus: 0, status: null, data: null };
+    const res = await this.zentao.createBug(payload);
+    throwIfCredentialProblem(res);
+    const data = res.data || {};
+    if (data.ok === true) {
+      const detail = await this.readBackBug(data.id);
+      return {
+        status: 'created',
+        id: data.id,
+        writes: 1,
+        detail,
+        duplicates,
+        ...(data.verified === 'query' ? { recovered: true } : {}),
+      };
     }
-    if (isRejected(created)) {
-      return { status: 'failed', message: `请求被服务端拒绝：${created.error.message}`, writes: 1, duplicates };
+    const message = failureMessage(res);
+    if (data.uncertain) {
+      const candidates = Array.isArray(data.candidates) ? data.candidates : [];
+      return {
+        status: 'unknown',
+        reason: candidates.length > 1 ? 'multiple_candidates' : 'no_match',
+        writes: 1,
+        duplicates,
+        candidates,
+        message,
+      };
     }
-    if (created.timedOut || created.httpStatus === 0 || created.status === null) {
-      return await this.recoverBugCreate({
-        productId, title, steps, openedBuild, severity, pri, baselineIds, baselineComplete: scan.complete, duplicates,
-      });
+    if (data.created) {
+      return { status: 'inconsistent', id: data.id, writes: 1, detail: await this.readBackBug(data.id), duplicates, message };
     }
-    if (created.status === 'fail') {
-      return { status: 'failed', message: describeFailure(created.data), writes: 1, duplicates };
-    }
-    const id = created.data?.id;
-    if (!id) {
-      return { status: 'inconsistent', writes: 1, duplicates, message: '创建响应没有给出缺陷 ID，无法回读确认' };
-    }
-    const detail = await this.readBackBug(id);
-    if (!this.matchesBugDraft(detail, { productId, title, steps, openedBuild, severity, pri })) {
-      return { status: 'inconsistent', id, writes: 1, detail, duplicates };
-    }
-    return { status: 'created', id, writes: 1, detail, duplicates };
+    return { status: 'failed', writes: res.code === 1 ? 1 : 0, duplicates, message };
   }
 
   async supplementBug({ id, addition }) {
     const before = await this.readBackBug(id);
     if (!before.found) return { status: 'not_found', writes: 0 };
     const original = String(before.bug.steps || '');
-    const nextSteps = `${original}<p><strong>──────────────</strong></p><p><strong>[补充说明 · ${this.stamp()} · 用户口述，AI 整理]</strong></p><p>${addition}</p>`;
+    // 草稿形态固定（见 references/workflow.md F4）：原文 + 分隔行 + 标注 + 追加段落
+    const nextSteps = `${original}\n\n${SEPARATOR}\n【补充说明 · ${this.stamp()} · 用户口述，AI 整理】\n${addition}`;
     const approved = await this.confirm({ kind: 'supplementBug', id, original, next: nextSteps });
     if (!approved) return { status: 'cancelled', writes: 0 };
-    // 用户确认后、写入前再读一次：正文被他人改动时停止写入，不覆盖新内容。
-    const recheck = await this.readBackBug(id);
-    if (!recheck.found) return { status: 'not_found', writes: 0, message: '写入前复核时缺陷已不存在' };
-    const current = String(recheck.bug.steps || '');
-    const changed =
-      normalizeHtml(current) !== normalizeHtml(original)
-      || !sameTitle(recheck.bug.title, before.bug.title)
-      || Number(recheck.bug.product) !== Number(before.bug.product);
-    if (changed) {
+
+    // 写前复核在入口脚本里做：正文被他人改动时它停手并把现状交回，不覆盖新内容。
+    const res = await this.zentao.updateBug(id, { steps: nextSteps, expectedBody: original });
+    throwIfCredentialProblem(res);
+    const data = res.data || {};
+    const message = failureMessage(res);
+    if (data.ok === true) {
       return {
-        status: 'conflict', needsUserDecision: true, writes: 0,
-        message: '写入前复核发现该缺陷已被他人修改，本次补充未写入；请确认重新合并后的草稿',
-        current: { title: recheck.bug.title, product: recheck.bug.product, steps: current },
+        status: 'updated',
+        id,
+        writes: 1,
+        detail: await this.readBackBug(id),
+        ...(data.verified === 'query' ? { recovered: true } : {}),
       };
     }
-    const editedBefore = (recheck.actions || []).filter((a) => a === 'edited').length;
-    let updated;
-    try {
-      updated = await this.withAuth(() => this.client.callTool('put_bugs_bugID', {
-        bugID: String(id),
-        payload: { productID: Number(before.bug.product), title: before.bug.title, steps: nextSteps },
-      }));
-    } catch (err) {
-      if (err instanceof SkillError) throw err;
-      updated = { timedOut: true, httpStatus: 0, status: null, data: null };
-    }
-    if (isRejected(updated)) {
-      return { status: 'failed', message: `请求被服务端拒绝：${updated.error.message}`, writes: 1 };
-    }
-    if (updated.status === 'fail') {
-      return { status: 'failed', message: describeFailure(updated.data), writes: 1 };
-    }
-    const uncertain = updated.timedOut || updated.httpStatus === 0 || updated.status === null;
-    const after = await this.readBackBug(id);
-    const stepsMatched = after.found && normalizeHtml(after.bug?.steps || '') === normalizeHtml(nextSteps);
-    const editedAfter = (after.actions || []).filter((a) => a === 'edited').length;
-    const editedAdded = editedAfter > editedBefore;
-    if (stepsMatched && editedAdded) {
-      return { status: 'updated', id, writes: 1, detail: after, ...(uncertain ? { recovered: true } : {}) };
-    }
-    if (uncertain) {
+    if (data.conflict) {
       return {
-        status: 'unknown', reason: 'update_unconfirmed', id, writes: 1, detail: after,
-        message: '更新未拿到确认，已只读核实；未重放更新，请人工核对后再决定',
+        status: 'conflict',
+        needsUserDecision: true,
+        writes: 0,
+        message,
+        current: { steps: data.currentBody, mergedDraft: data.mergedDraft, changed: data.changed },
       };
     }
-    return {
-      status: 'inconsistent', id, writes: 1, detail: after,
-      message: stepsMatched ? '正文已更新，但操作流水没有新增 edited' : '回读正文与本次预期不一致',
-    };
+    if (data.uncertain) {
+      return {
+        status: 'unknown',
+        reason: 'update_unconfirmed',
+        id,
+        writes: 1,
+        detail: await this.readBackBug(id),
+        message,
+      };
+    }
+    if (data.updated) {
+      return { status: 'inconsistent', id, writes: 1, detail: await this.readBackBug(id), message };
+    }
+    return { status: 'failed', writes: res.code === 1 ? 1 : 0, message };
   }
 
   // ---- 解释 ---------------------------------------------------------
@@ -767,7 +544,7 @@ export class DefectAssistant extends FeedbackAssistant {
     const detail = await this.readBackBug(id);
     if (!detail.found) return { status: 'not_found', facts: [], inferences: [], unknown: [] };
     const bug = detail.bug;
-    const actions = detail.raw?.actions || bug.actions || [];
+    const actions = detail.raw?.actions || [];
 
     const facts = [`当前状态：${bug.status || '未知'}`, `负责人：${bug.assignedTo || '未指派'}`];
     for (const a of actions) {
