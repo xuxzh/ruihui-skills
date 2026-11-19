@@ -19,6 +19,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
+// 查重助手：切词与变体生成在这里，取数与匹配在入口脚本里做
+import { matchScore, rankByMatch, variantGroups } from './zentao-dedupe.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PKG_DIR = path.resolve(HERE, '..');
@@ -753,6 +755,77 @@ Object.assign(COMMANDS, {
 // ----- 更新单据 -----
 // ----- 传图 -----
 // ===== 查重子命令 =====
+
+// 查重只投影这四个字段：候选要列编号、标题、状态、负责人，正文不进上下文
+const DUP_LIST_FIELDS = 'id,title,status,assignedTo';
+// 候选最多列多少行：候选是给人挑的，列太多挑不动
+const DUP_CANDIDATE_LIMIT = 10;
+
+// 查重扫描：标题切成关键词变体组，交给禅道 CLI 在客户端匹配（组内=且、组间=或，只在标题里找）。
+// 匹配一律在客户端做——服务端 filters 在当前禅道版本上会被忽略（证据见 issue #13）。
+async function cmdDup(env, opts) {
+  const kind = String(opts.kind ?? '').trim();
+  if (kind !== 'bug' && kind !== 'feedback') {
+    throw usage('node zentao.mjs dup --kind <bug|feedback> --product <产品ID> --title <标题>');
+  }
+  const productId = productIdOf(opts, 'dup');
+  const title = String(opts.title ?? '').trim();
+  if (!title) throw usage('node zentao.mjs dup --kind <bug|feedback> --product <产品ID> --title <标题>');
+
+  const groups = variantGroups(title);
+  if (!groups.length) throw usage('--title 里没有可用于查重的关键词');
+
+  const listArgs =
+    kind === 'bug'
+      ? ['bug', 'list', '--scope', 'products', '--scope-id', productId]
+      : ['feedback', 'list', '--product-id', productId];
+
+  // 全量扫描：既是候选的来源，也是写入时的查重基线
+  const all = await runCli([...listArgs, '--all', '--fields', DUP_LIST_FIELDS], env);
+  const rows = rowsOf(all.data);
+  const baseline = rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
+
+  // 变体组交给 CLI：一次 --search 一组（组内=且），多组之间=或；--search-fields title 把检索范围限制在标题
+  const searchArgs = [];
+  for (const group of groups) searchArgs.push('--search', group);
+  searchArgs.push('--search-fields', 'title');
+  const found = await runCli([...listArgs, '--all', '--fields', DUP_LIST_FIELDS, ...searchArgs], env);
+  const hits = rowsOf(found.data);
+
+  // 精确度自己把关：CLI 只给候选，覆盖比例不到门槛的丢掉，剩下的按匹配度降序
+  const candidates = rankByMatch(title, hits, (row) => row.title, hits.length).map((row) => ({
+    row,
+    score: matchScore(title, row.title),
+  }));
+
+  const label = kind === 'bug' ? '缺陷' : '反馈';
+  out(`# 查重（产品 ${productId} · ${label}单；标题关键词匹配，客户端完成）`);
+  for (const { row, score } of candidates.slice(0, DUP_CANDIDATE_LIMIT)) {
+    out(
+      [cell(row.id), cell(row.title), cell(row.status), assignee(row.assignedTo), `${Math.round(score * 100)}%`].join('\t')
+    );
+  }
+  const scope = candidates.length
+    ? `在你可见的 ${rows.length} 条${label}中发现 ${candidates.length} 条相近记录`
+    : `在你可见的 ${rows.length} 条${label}中未发现重复`;
+  out(`# 覆盖范围：${scope}（在标题里命中 ${hits.length} 条）`);
+  out(`# 基线（本次扫描到的 ${baseline.length} 个单据 ID；基线之外的编号才可能是本次新建）`);
+  out(
+    JSON.stringify({
+      ok: true,
+      kind,
+      product: Number(productId),
+      scanned: rows.length,
+      candidateIds: candidates.map((entry) => Number(entry.row.id)),
+      baseline,
+    })
+  );
+}
+
+// 各票的子命令注册放在自己的分区里，免得同改 COMMANDS 字面量
+Object.assign(COMMANDS, {
+  dup: { run: cmdDup, options: ['kind', 'product', 'title'] },
+});
 
 // ---------------------------------------------------------------- 入口
 
