@@ -9,7 +9,8 @@
 // 纪律：
 //   - 一次调用只发一次请求：禅道创建接口没有幂等键，重复发会产生两条记录
 //   - 令牌与密码只在进程内使用，不打印、不进 Agent 上下文
-//   - 载荷由调用方给（文件或内联 JSON），脚本只包 payload、只发一次、不做业务判断
+//   - 载荷由调用方给（文件或内联 JSON），脚本只包 payload、只发一次，不做业务判断
+//     （唯一例外：缺陷单的负责人按配置补，见 applyAssignee）
 //
 // 用法：
 //   node zentao-write.mjs feedback-create --payload-file <路径>
@@ -18,7 +19,7 @@
 //   node zentao-write.mjs bug-update --id <ID> --payload-file <路径>
 
 import fs from 'node:fs';
-import { connectAsUser } from './zentao-client.mjs';
+import { connectAsUser, loadPreferences } from './zentao-client.mjs';
 
 /** 子命令 → MCP 工具名、ID 参数名、必填字段。 */
 const KINDS = {
@@ -119,6 +120,25 @@ function checkRequired(kind, payload) {
   }
 }
 
+/**
+ * 缺陷单的负责人：
+ *   - 载荷里写了 assignedTo（终端用户明说指派给谁，或明确不指派）→ 用它
+ *   - 否则按配置决定（随包默认 < 本机默认）：
+ *       ""     不指派：载荷带空字符串，挡住禅道把单子指派给产品 QD
+ *       "qd"   禅道默认：载荷不带这个字段，禅道按产品 QD 指派
+ *       其他值  指给该禅道账号
+ */
+function applyAssignee(kind, payload, prefs, cfg) {
+  if (kind.tool !== 'post_bugs') return;
+  if (payload.assignedTo !== undefined && payload.assignedTo !== null) return;
+  const configured = String(prefs?.bugAssignee ?? cfg?.bugAssignee ?? '').trim();
+  if (configured === 'qd') {
+    delete payload.assignedTo;
+    return;
+  }
+  payload.assignedTo = configured;
+}
+
 function fail(message, extra = {}) {
   process.stderr.write(`错误：${message}\n`);
   const payload = { ok: false, ...extra, message };
@@ -142,6 +162,9 @@ async function main() {
   const payload = readPayload(opts);
   checkRequired(kind, payload);
 
+  const { client, cfg } = await connectAsUser();
+  applyAssignee(kind, payload, loadPreferences(), cfg);
+
   const args = {};
   if (kind.idKey) {
     const id = String(opts.id ?? '').trim();
@@ -150,7 +173,6 @@ async function main() {
   }
   args.payload = payload;
 
-  const { client } = await connectAsUser();
   const res = await client.call(kind.tool, args);
 
   const body = res.body;

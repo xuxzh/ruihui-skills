@@ -35,8 +35,9 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 
 export const MOCK_PRODUCTS = [
-  { id: 101, name: '示例产品 A' },
-  { id: 102, name: '示例产品 B' },
+  // qd = 质量（缺陷）负责人：禅道建缺陷单时收不到负责人就把单子指派给它（实测）。
+  { id: 101, name: '示例产品 A', qd: 'mock-qd' },
+  { id: 102, name: '示例产品 B', qd: '' },
 ];
 
 export const MOCK_PROJECTS = [
@@ -334,6 +335,14 @@ function handleToolCall(state, session, name, args) {
       const steps = payload.title.includes('__ALTERED_STEPS__')
         ? `${payload.steps || ''}<p>（禅道侧自动改写）</p>`
         : payload.steps || '';
+      // 禅道实测行为：没给负责人就指派给产品的 QD；给了空字符串才是「未指派」。
+      const product = MOCK_PRODUCTS.find((p) => p.id === Number(productID));
+      const named = typeof payload.assignedTo === 'string' ? payload.assignedTo.trim() : '';
+      const assignedTo = named || (payload.assignedTo === '' ? '' : (product?.qd || ''));
+      // 自动指派时禅道会同时记下指派时间与一条 assigned 流水。
+      if (assignedTo) {
+        actions.push({ action: 'assigned', actor: session.account, comment: '', date: '2026-03-12 10:22' });
+      }
       state.bugs.set(String(id), {
         id,
         product: Number(productID),
@@ -346,7 +355,8 @@ function handleToolCall(state, session, name, args) {
         pri: payload.pri === undefined ? 3 : payload.pri,
         type: payload.type || 'others',
         status: 'active',
-        assignedTo: '',
+        assignedTo,
+        assignedDate: assignedTo ? '2026-03-12 10:22' : '',
         openedBy: session.account,
         actions,
       });

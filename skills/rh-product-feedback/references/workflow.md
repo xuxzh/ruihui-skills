@@ -255,9 +255,11 @@
 
 注意字段名是 `productID`（反馈单是 `product`），`openedBuild` 是字符串数组。只发一次。
 
+负责人不写在这个载荷里：禅道建单时收不到负责人会自动指派给产品的 QD（质量负责人），写入脚本按「默认负责人」配置补（缺省补 `""` = 不指派；配成 `qd` 就不带这个字段；用户明确指名才写他的账号）——见 [setup.md](setup.md)「默认负责人」。
+
 ### 6. 回读
 
-查询器 `bug --id <ID>`（用返回的 `id`）→ 核对 `product` / `title` / `steps`（**剥标签 + 归一化空白**后逐字比较）/ `openedBuild`（`trunk` 与「主干」归一化）/ `severity` / `pri` / `actions` 里的 `opened`。
+查询器 `bug --id <ID>`（用返回的 `id`）→ 核对 `product` / `title` / `steps`（**剥标签 + 归一化空白**后逐字比较）/ `openedBuild`（`trunk` 与「主干」归一化）/ `severity` / `pri` / `assignedTo`（与「默认负责人」的生效值一致）/ `actions` 里的 `opened`。
 
 ```
 ✓ 创建成功，缺陷 #1935
@@ -283,6 +285,10 @@
 - 链接：<禅道 Web 地址>/bug-view-1935.html（读不到 `zentaoWebUrl` 就不给这一行，只给编号）
 下一步：等开发认领；要补充信息随时说「补充缺陷 #1935 ...」
 ```
+
+### 默认负责人
+
+用户说「以后提 bug 默认指派给 QD」或「默认不指派」时，把值合并写进偏好文件的 `bugAssignee`（别覆盖文件里已有的 `defaultProduct`），回读复核后告知用户。取值含义与生效顺序见 [setup.md](setup.md)「默认负责人」。
 
 ### 默认产品
 

@@ -20,11 +20,12 @@ const PKG_DIR = path.resolve(HERE, '..');
 const CONFIG_PATH = path.join(PKG_DIR, 'config.local.json');
 
 /** 技能包配置（地址与默认产品都在这里，不回显）。 */
-export function loadPackageConfig() {
+export function loadPackageConfig(env = process.env) {
+  const file = env.ZENTAO_PACKAGE_CONFIG_FILE || CONFIG_PATH;
   try {
-    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
-    throw new Error(`读不到技能包配置：${path.basename(CONFIG_PATH)}`);
+    throw new Error(`读不到技能包配置：${path.basename(file)}`);
   }
 }
 
@@ -36,6 +37,26 @@ export function credentialsPath(env = process.env) {
     return path.join(base, 'rh-zentao', 'credentials');
   }
   return path.join(os.homedir(), '.config', 'rh-zentao', 'credentials');
+}
+
+/** 本机偏好文件路径（默认产品、默认负责人）：只对本机生效，不进技能包。 */
+export function preferencesPath(env = process.env) {
+  if (env.ZENTAO_PREFERENCES_FILE) return env.ZENTAO_PREFERENCES_FILE;
+  if (process.platform === 'win32') {
+    const base = env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(base, 'rh-zentao', 'preferences.json');
+  }
+  return path.join(os.homedir(), '.config', 'rh-zentao', 'preferences.json');
+}
+
+/** 读本机偏好；没有文件或读不懂时返回空对象（用缺省值继续）。 */
+export function loadPreferences(env = process.env) {
+  try {
+    const data = JSON.parse(fs.readFileSync(preferencesPath(env), 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch {
+    return {};
+  }
 }
 
 /** 读本机凭据；没有文件时返回空对象（调用方给可执行指引，不要索要密码）。 */
@@ -203,7 +224,7 @@ export class McpClient {
  * 返回 { client, account, source }；account 是当前登录的禅道账号名。
  */
 export async function connectAsUser(env = process.env) {
-  const cfg = loadPackageConfig();
+  const cfg = loadPackageConfig(env);
   const mcpUrl = resolveMcpUrl(cfg, env);
   if (!mcpUrl) throw new Error('技能包里没有配置禅道 MCP 地址');
   const creds = loadCredentials(env);

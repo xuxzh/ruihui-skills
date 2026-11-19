@@ -4,6 +4,7 @@
 // 关注点：
 //   - 单据留痕在当前账号名下（禅道 MCP 的 post_users_login 不校验凭据，恒用服务端配置的固定身份）
 //   - 写入参数只包一层 payload
+//   - 缺陷单的负责人：缺省不指派（挡住禅道按产品 QD 自动指派），可按配置改
 //   - 令牌与密码不进输出、不进报错
 //   - 凭据无效、载荷不合法、业务失败都要明确失败，不能静默当成功
 import test from 'node:test';
@@ -38,10 +39,20 @@ async function withMock(fn, overrides = {}) {
   const server = await startMockServer(overrides);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rh-write-'));
   const credFile = writeCredentials(dir);
+  // 随包配置与本机偏好都用临时文件：测试不碰仓库里的 config.local.json，也不碰用户机器。
+  const pkgFile = path.join(dir, 'package-config.json');
+  fs.writeFileSync(pkgFile, JSON.stringify({
+    mcpUrl: server.url,
+    zentaoWebUrl: server.baseUrl,
+    defaultProduct: { id: null, name: '' },
+    bugAssignee: '',
+  }));
   const env = {
     ZENTAO_MCP_URL: server.url,
     ZENTAO_WEB_URL: server.baseUrl,
     ZENTAO_CREDENTIALS_FILE: credFile,
+    ZENTAO_PACKAGE_CONFIG_FILE: pkgFile,
+    ZENTAO_PREFERENCES_FILE: path.join(dir, 'preferences.json'),
   };
   try {
     await fn({ server, state: server.state, env, dir });
@@ -153,6 +164,83 @@ test('W07 业务失败：按失败处理，不当成成功', async () => {
   });
 });
 
+test('W12 默认负责人配成 qd：载荷不带 assignedTo，交给禅道按产品 QD 指派', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: 'qd' }));
+    const file = writePayload(dir, BUG_PAYLOAD);
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const call = state.calls.find((c) => c.name === 'post_bugs');
+    assert.equal('assignedTo' in call.args.payload, false, '配置成 qd 时载荷不该带这个字段');
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, 'mock-qd', '禅道按产品 QD 指派');
+  });
+});
+
+test('W13 默认负责人配成账号：按配置指给该账号', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: 'zhangsan' }));
+    const file = writePayload(dir, BUG_PAYLOAD);
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const call = state.calls.find((c) => c.name === 'post_bugs');
+    assert.equal(call.args.payload.assignedTo, 'zhangsan');
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, 'zhangsan');
+  });
+});
+
+test('W14 终端用户明说不指派：盖过 qd 配置', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: 'qd' }));
+    const file = writePayload(dir, { ...BUG_PAYLOAD, assignedTo: '' });
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, '', '用户明说的不指派优先于配置');
+  });
+});
+
+test('W15 随包默认负责人配成 qd：没有本机设置时按随包配置', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    fs.writeFileSync(env.ZENTAO_PACKAGE_CONFIG_FILE, JSON.stringify({
+      mcpUrl: env.ZENTAO_MCP_URL,
+      zentaoWebUrl: env.ZENTAO_WEB_URL,
+      bugAssignee: 'qd',
+    }));
+    const file = writePayload(dir, BUG_PAYLOAD);
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const call = state.calls.find((c) => c.name === 'post_bugs');
+    assert.equal('assignedTo' in call.args.payload, false, '随包配置成 qd 时载荷不该带这个字段');
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, 'mock-qd');
+  });
+});
+
+test('W16 本机默认负责人盖过随包默认负责人', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    fs.writeFileSync(env.ZENTAO_PACKAGE_CONFIG_FILE, JSON.stringify({
+      mcpUrl: env.ZENTAO_MCP_URL,
+      zentaoWebUrl: env.ZENTAO_WEB_URL,
+      bugAssignee: 'qd',
+    }));
+    fs.writeFileSync(env.ZENTAO_PREFERENCES_FILE, JSON.stringify({ bugAssignee: '' }));
+    const file = writePayload(dir, BUG_PAYLOAD);
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const call = state.calls.find((c) => c.name === 'post_bugs');
+    assert.equal(call.args.payload.assignedTo, '', '本机设置优先');
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, '');
+  });
+});
+
 test('W08 更新缺陷单：带上单据 ID 与 payload', async () => {
   await withMock(async ({ state, env, dir }) => {
     state.bugs.set('1900', {
@@ -181,3 +269,29 @@ test('W09 更新缺 ID：明确报错，不发请求', async () => {
     assert.equal(state.calls.filter((c) => c.name === 'put_bugs_bugID').length, 0, '不该发起写入');
   });
 });
+test('W10 缺陷单不指派：载荷没写负责人时，单据不会被指派给产品 QD', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    const file = writePayload(dir, BUG_PAYLOAD);
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const call = state.calls.find((c) => c.name === 'post_bugs');
+    assert.equal(call.args.payload.assignedTo, '', '载荷要显式带空字符串');
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, '', '禅道侧不应把单子指派给产品 QD');
+    assert.equal(bug.assignedDate, '');
+    assert.ok(!bug.actions.some((a) => a.action === 'assigned'), '不应多出一条指派流水');
+  });
+});
+
+test('W11 缺陷单用户明确指名时：按他给的禅道账号指派', async () => {
+  await withMock(async ({ state, env, dir }) => {
+    const file = writePayload(dir, { ...BUG_PAYLOAD, assignedTo: 'zhangsan' });
+    const { code, stdout } = await runWrite(['bug-create', '--payload-file', file], { env });
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.trim());
+    const bug = state.bugs.get(String(result.id));
+    assert.equal(bug.assignedTo, 'zhangsan', '用户点名的负责人要保留');
+  });
+});
+

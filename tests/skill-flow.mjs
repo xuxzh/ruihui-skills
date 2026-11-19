@@ -653,7 +653,7 @@ export class DefectAssistant extends FeedbackAssistant {
     };
   }
 
-  async submitBug({ title, steps, productId, openedBuild = ['trunk'], severity = 3, pri = 3, type = 'others', project }) {
+  async submitBug({ title, steps, productId, openedBuild = ['trunk'], severity = 3, pri = 3, type = 'others', project, assignedTo = '' }) {
     if (!BUG_TYPES.includes(type)) throw new SkillError('bad_type', `未知缺陷类型：${type}`);
     // 写入前先把该产品的缺陷扫一遍：既是查重，也是「本次新建」的 ID 基线。
     const scan = await this.scanBugs(productId);
@@ -667,7 +667,7 @@ export class DefectAssistant extends FeedbackAssistant {
     const approved = await this.confirm({ kind: 'submitBug', draft, duplicates });
     if (!approved) return { status: 'cancelled', writes: 0, duplicates };
 
-    const payload = { productID: Number(productId), title, steps, openedBuild, severity, pri, type };
+    const payload = { productID: Number(productId), title, steps, openedBuild, severity, pri, type, assignedTo };
     if (project !== undefined && project !== null) payload.project = Number(project);
 
     let created;

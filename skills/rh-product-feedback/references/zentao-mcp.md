@@ -86,17 +86,18 @@
 | --- | --- | --- | --- |
 | 产品缺陷列表 | `get_products_productID_bugs` | `productID`、`pageID`、`recPerPage` | `bugs[]` + `pager` |
 | 缺陷详情 | `get_bugs_bugID` | `bugID` | `bug{...}` + 顶层 **`actions[]`** + `status` |
-| 创建缺陷 | `post_bugs` | `payload.productID`（整数，必填）、`payload.title`（必填）、`payload.openedBuild`（字符串数组，必填）、`payload.steps`、`payload.severity`、`payload.pri`、`payload.type`、`payload.project`、`payload.execution` | `id`、`message`、`status` |
+| 创建缺陷 | `post_bugs` | `payload.productID`（整数，必填）、`payload.title`（必填）、`payload.openedBuild`（字符串数组，必填）、`payload.steps`、`payload.severity`、`payload.pri`、`payload.type`、`payload.project`、`payload.execution`、`payload.assignedTo`（可选；`""` = 不指派） | `id`、`message`、`status` |
 | 更新缺陷 | `put_bugs_bugID` | `bugID` + `payload.productID`、`payload.title`、`payload.steps` | `id`、`message`、`status` |
 | 删除缺陷 | `delete_bugs_bugID` | `bugID` | `message`、`status`（仅在明确授权的测试数据上使用） |
 | 项目列表 | `get_projects` | `pageID`、`recPerPage` | `projects[]` + `pager` |
 | 项目下的版本 | `get_projects_projectID_builds` | `projectID` | `builds[]`（`branch` 为 `0` 即主干分支） |
 
-### 三个必须记住的坑
+### 四个必须记住的坑
 
 1. **字段名是 `productID`，不是 `product`**：反馈单用 `payload.product`，缺陷单用 `payload.productID`。`productID` 在工具 schema 里是必填，传错字段名会被 MCP 的参数校验拦下（JSON-RPC `-32602`，`missing properties: [productID]`），请求根本没执行；只有当 `payload` 整个缺失（传了扁平参数）时，才会落到禅道自己的业务校验、报『所属产品』不能为空。
 2. **`openedBuild` 是必填的字符串数组**：这台实例的主干值是 `trunk`——缺陷列表视图显示「主干」，详情视图显示 `trunk`，指同一个值，比较时要归一化。
 3. **`steps` 是富文本 HTML**：禅道存的是 HTML，裸 `\n` 会被压掉；正文按段落写 `<p>`，回读比较前先剥标签再归一化空白。
+4. **不传负责人会被自动指派**：禅道建缺陷单时收不到负责人，就把单子指派给**产品的 QD（质量负责人）**——实测 MOMV2.0 的 QD 是 `chenqiang`，不传 `assignedTo` 建出来的单子直接挂在他名下。载荷里显式带 `assignedTo: ""` 才是「未指派」；带 `null` 等于没带（照样被指派）；带具体账号则指给谁。`post_bugs` 的 Schema 没声明 `assignedTo`，但服务端照收（实测）。写入脚本按「默认负责人」配置决定这个字段怎么带（见 [setup.md](setup.md)「默认负责人」）。
 
 ### 枚举
 
@@ -115,7 +116,7 @@
 | `module` | `0` 占 97% | 不设（MCP 也没有这个参数） |
 | `openedBuild` | 主干占 82% | 默认 `["trunk"]` |
 | `type` | `codeerror` 占 90% | 按描述归类，拿不准用 `others` |
-| `assignedTo` | 99% 都有值 | 指派归人（技能不做指派） |
+| `assignedTo` | 99% 都有值 | 新建单据**不指派**（载荷显式传 `""`；不传会被禅道自动指派给产品 QD） |
 
 ### 缺陷详情的 `actions[]`
 
