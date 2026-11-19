@@ -254,10 +254,221 @@ async function cmdProjects(env, opts) {
   for (const project of projects) out([cell(project.id), cell(project.name), cell(project.status)].join('\t'));
 }
 
+// ---------------------------------------------------------------- 单据（列表与详情）
+
+// 列表默认只打十行：再多的单据一次倒进上下文也是白搭，要更多让他显式加 --limit
+const DEFAULT_LIST_LIMIT = 10;
+
+// 缺陷列表投影：够判断「到哪了」的字段，正文不进表格
+const BUG_LIST_FIELDS = 'id,title,status,assignedTo,severity,pri';
+const FEEDBACK_LIST_FIELDS = 'id,title,status,assignedTo';
+// 详情投影：正文 + 状态 + 负责人 + 处理人/处理时间/结论 + 流水
+const BUG_DETAIL_FIELDS =
+  'id,title,status,product,type,severity,pri,openedBuild,openedBy,openedDate,assignedTo,resolvedBy,resolvedDate,resolution,steps,actions';
+const FEEDBACK_DETAIL_FIELDS =
+  'id,title,status,product,type,openedBy,openedDate,assignedTo,reviewedBy,reviewedDate,processedBy,processedDate,solution,desc,actions';
+
+// 负责人为空时写「未指派」：那是「没人接」，不是「字段缺失」
+function assignee(value) {
+  return value === undefined || value === null || value === '' ? '（未指派）' : cell(value);
+}
+
+// 正文剥标签：缺陷单的 steps 是结构化 HTML，归一化后要与草稿正文逐字可比
+function stripHtml(html) {
+  return String(html || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .filter((line, index, arr) => line !== '' || (index > 0 && arr[index - 1] !== ''))
+    .join('\n')
+    .trim();
+}
+
+function productIdOf(opts, cmd) {
+  const wanted = String(opts.product ?? '').trim();
+  if (!wanted) throw usage(`node zentao.mjs ${cmd} --product <产品ID>`);
+  if (!/^\d+$/.test(wanted)) throw usage(`node zentao.mjs ${cmd} --product <产品ID>（产品 ID 是数字）`);
+  return wanted;
+}
+
+function recordIdOf(opts, cmd) {
+  const wanted = String(opts.id ?? '').trim();
+  if (!wanted) throw usage(`node zentao.mjs ${cmd} --id <单据ID>`);
+  if (!/^\d+$/.test(wanted)) throw usage(`node zentao.mjs ${cmd} --id <单据ID>（单据 ID 是数字）`);
+  return wanted;
+}
+
+function listLimitOf(opts) {
+  const raw = opts.limit;
+  if (raw === undefined) return DEFAULT_LIST_LIMIT;
+  const limit = Number(raw);
+  if (raw === true || !Number.isInteger(limit) || limit <= 0) throw usage('--limit 要给正整数');
+  return limit;
+}
+
+// 客户端筛选：先用 --filter 按状态，再用 --search 只在标题里找关键词
+function listFilterArgs(opts) {
+  const args = [];
+  const status = String(opts.status ?? '').trim();
+  if (status) args.push('--filter', `status=${status}`);
+  const match = String(opts.match ?? '').trim();
+  if (match) args.push('--search', match, '--search-fields', 'title');
+  return args;
+}
+
+// 表头说清范围：「产品 101 可见 25 条，筛选后 15 条，只列前 10 条」
+function printList(label, productId, total, rows, limit) {
+  const parts = [`产品 ${productId} 可见 ${total} 条`];
+  if (rows.length !== total) parts.push(`筛选后 ${rows.length} 条`);
+  const shown = rows.slice(0, limit);
+  if (shown.length < rows.length) parts.push(`只列前 ${shown.length} 条`);
+  out(`# ${label}（${parts.join('，')}）`);
+  for (const row of shown) out(row.join('\t'));
+}
+
+// 一次拉全量（--all 翻完所有页）+ 字段投影（--fields）+ 客户端筛选
+async function cmdBugs(env, opts) {
+  const productId = productIdOf(opts, 'bugs');
+  const limit = listLimitOf(opts);
+  const { data, meta } = await runCli(
+    ['bug', 'list', '--scope', 'products', '--scope-id', productId, '--all', '--fields', BUG_LIST_FIELDS, ...listFilterArgs(opts)],
+    env
+  );
+  const bugs = rowsOf(data);
+  printList(
+    '缺陷',
+    productId,
+    Number(meta?.total ?? bugs.length),
+    bugs.map((bug) => [cell(bug.id), cell(bug.title), cell(bug.status), assignee(bug.assignedTo), `${cell(bug.severity)}/${cell(bug.pri)}`]),
+    limit
+  );
+}
+
+async function cmdFeedbacks(env, opts) {
+  const productId = productIdOf(opts, 'feedbacks');
+  const limit = listLimitOf(opts);
+  const { data, meta } = await runCli(
+    ['feedback', 'list', '--product-id', productId, '--all', '--fields', FEEDBACK_LIST_FIELDS, ...listFilterArgs(opts)],
+    env
+  );
+  const feedbacks = rowsOf(data);
+  printList(
+    '反馈',
+    productId,
+    Number(meta?.total ?? feedbacks.length),
+    feedbacks.map((feedback) => [cell(feedback.id), cell(feedback.title), cell(feedback.status), assignee(feedback.assignedTo)]),
+    limit
+  );
+}
+
+// 流水基线：--baseline-actions <动作ID,动作ID>。给了就只把基线之外的动作标成 new: true
+function baselineOf(opts) {
+  const raw = opts['baseline-actions'];
+  if (raw === undefined) return null;
+  const ids = String(raw === true ? '' : raw)
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (!ids.length || ids.some((id) => !/^\d+$/.test(id))) {
+    throw usage('--baseline-actions 只认动作 ID，如 --baseline-actions 11,12');
+  }
+  return new Set(ids);
+}
+
+// 没给基线时没有 new 字段：分不出哪条是这次新增的，就不能凭空标
+function actionViews(actions, baseline) {
+  return rowsOf(actions).map((action) => {
+    const view = {
+      id: action.id,
+      action: cell(action.action),
+      actor: cell(action.actor),
+      date: cell(action.date),
+      comment: cell(action.comment),
+    };
+    if (baseline) view.new = !baseline.has(String(action.id));
+    // 字段级差异：禅道把改动记在 history 里，字段名是 old / new
+    view.changes = rowsOf(action.history).map((change) => ({
+      field: cell(change.field),
+      from: cell(change.old),
+      to: cell(change.new),
+    }));
+    return view;
+  });
+}
+
+// 详情打一行 JSON：事实（字段 + 流水）原样给出，推断留给文档里的三段式
+async function cmdBug(env, opts) {
+  const id = recordIdOf(opts, 'bug');
+  const baseline = baselineOf(opts);
+  const { data } = await runCli(['bug', 'get', id, '--fields', BUG_DETAIL_FIELDS], env);
+  const bug = data && typeof data === 'object' ? data : {};
+  out(
+    JSON.stringify({
+      ok: true,
+      kind: 'bug',
+      id: bug.id ?? Number(id),
+      product: bug.product ?? '',
+      title: bug.title ?? '',
+      status: bug.status ?? '',
+      severity: bug.severity ?? '',
+      pri: bug.pri ?? '',
+      type: bug.type ?? '',
+      openedBuild: bug.openedBuild ?? [],
+      openedBy: bug.openedBy ?? '',
+      openedDate: bug.openedDate ?? '',
+      assignee: bug.assignedTo ?? '',
+      processor: bug.resolvedBy ?? '',
+      processedDate: bug.resolvedDate ?? '',
+      resolution: bug.resolution ?? '',
+      body: stripHtml(bug.steps),
+      actions: actionViews(bug.actions, baseline),
+    })
+  );
+}
+
+async function cmdFeedback(env, opts) {
+  const id = recordIdOf(opts, 'feedback');
+  const baseline = baselineOf(opts);
+  const { data } = await runCli(['feedback', 'get', id, '--fields', FEEDBACK_DETAIL_FIELDS], env);
+  const feedback = data && typeof data === 'object' ? data : {};
+  out(
+    JSON.stringify({
+      ok: true,
+      kind: 'feedback',
+      id: feedback.id ?? Number(id),
+      product: feedback.product ?? '',
+      title: feedback.title ?? '',
+      status: feedback.status ?? '',
+      type: feedback.type ?? '',
+      openedBy: feedback.openedBy ?? '',
+      openedDate: feedback.openedDate ?? '',
+      assignee: feedback.assignedTo ?? '',
+      reviewer: feedback.reviewedBy ?? '',
+      reviewedDate: feedback.reviewedDate ?? '',
+      processor: feedback.processedBy ?? '',
+      processedDate: feedback.processedDate ?? '',
+      resolution: feedback.solution ?? '',
+      body: stripHtml(feedback.desc),
+      actions: actionViews(feedback.actions, baseline),
+    })
+  );
+}
+
 // 子命令 → 处理函数 + 它认的选项。写错选项要报用法，不能悄悄按默认值跑
 const COMMANDS = {
   products: { run: cmdProducts, options: [] },
   projects: { run: cmdProjects, options: ['product'] },
+  bugs: { run: cmdBugs, options: ['product', 'status', 'match', 'limit'] },
+  feedbacks: { run: cmdFeedbacks, options: ['product', 'status', 'match', 'limit'] },
+  bug: { run: cmdBug, options: ['id', 'baseline-actions'] },
+  feedback: { run: cmdFeedback, options: ['id', 'baseline-actions'] },
 };
 
 // ===== 写子命令 =====

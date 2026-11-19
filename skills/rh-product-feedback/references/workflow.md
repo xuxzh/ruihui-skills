@@ -317,20 +317,43 @@
 
 ### 定位
 
-- 给了编号 → 看上下文判断单据类型：缺陷用 `bug --id <ID>`，反馈用 `feedback --id <ID>`。
-- 给了标题或产品 → 查询器 `feedbacks --product <ID> --match <关键词>` / `bugs --product <ID> --match <关键词>` 客户端匹配，列候选让用户选编号。
+- 给了编号 → 看上下文判断单据类型：缺陷 `node <技能目录>/scripts/zentao.mjs bug --id <ID>`，反馈 `feedback --id <ID>`。
+- 给了产品或标题 → 先列单据，再让他挑编号打开：
+
+```bash
+node <技能目录>/scripts/zentao.mjs bugs --product 29 --match 切换语言   # 缺陷单
+node <技能目录>/scripts/zentao.mjs feedbacks --product 29 --status wait  # 反馈单
+```
+
+列表是「一次拉全量 + 字段投影 + 客户端筛选」：脚本用 `--all` 把所有页取完、只留投影字段、在进程内按 `--status` / `--match` 过滤，所以表头的「可见 N 条」是当前账号在这个产品下能看到的**全部**，不是第一页；`--match` 只匹配标题，正文里的词不算命中。
 
 ### 输出格式
 
+列表（表格，十几行；默认 10 条）：
+
 ```
-反馈 #421（示例产品 A）
-- 标题：设备列表导出按钮点击后无响应
-- 当前状态：wait（待评审）
-- 负责人：未指派
-- 提交人：当前禅道账号
+# 缺陷（产品 29 可见 12 条，筛选后 2 条）
+1945	切换语言后页面文案仍是中文	resolved	dev-a	2/2
+1946	语言切换不生效	closed	dev-b	3/2
+```
+
+详情（一行 JSON，节选）：
+
+```json
+{"ok":true,"kind":"bug","id":1945,"product":29,"title":"切换语言后页面文案仍是中文","status":"resolved","assignee":"dev-a","openedBy":"zhangsan","openedDate":"2026-03-10 09:00:00","processor":"dev-a","processedDate":"2026-03-12 15:30:00","resolution":"fixed","body":"[步骤] 打开设置 → 切换语言\n[结果] 文案没变","actions":[{"id":19451,"action":"opened","actor":"zhangsan","date":"2026-03-10 09:00:00","comment":"（空）","changes":[]},{"id":19452,"action":"resolved","actor":"dev-a","date":"2026-03-12 15:30:00","comment":"（空）","changes":[{"field":"status","from":"active","to":"resolved"}]}]}
+```
+
+讲给用户时把 JSON 里的事实转成人能读的几行，样例：
+
+```
+缺陷 #1945（示例产品 A）
+- 标题：切换语言后页面文案仍是中文
+- 当前状态：resolved（已解决），结论 resolution = fixed（已修复）
+- 负责人：dev-a；处理人：dev-a，处理时间：2026-03-12 15:30
+- 提交人：zhangsan，2026-03-10 09:00 提交
 - 处理时间线：
-  · 2026-03-11 10:22 张工 opened
-- 结论字段（result / solution）：空
+  · 2026-03-12 15:30 dev-a resolved（status：active → resolved）
+  · 2026-03-10 09:00 zhangsan opened
 ```
 
 ## F3 解释处理进度
@@ -339,19 +362,24 @@
 
 ```
 事实
-- status = review，说明已进入评审
-- actions 最后一条是 2026-03-12 09:40 张工（评审人）review，comment 为空
-- reviewedBy = 张工，reviewedDate = 2026-03-12
-- plan 与 version 均为空
+- status = resolved，resolution = fixed（都是禅道字段原值）
+- 负责人 assignedTo = dev-a
+- 处理人 resolvedBy = dev-a，处理时间 resolvedDate = 2026-03-12 15:30
+- 流水 2 条：2026-03-10 09:00 zhangsan opened；2026-03-12 15:30 dev-a resolved 并把 status 从 active 改成 resolved
+- plan 与 version 字段为空
 
-推断
-- 评审动作已发生，但 result / solution 仍为空，推断评审尚未给出结论（推断依据：结论字段为空且评审时间已过）
+推断（每条都标注是推断）
+- 推断：这条已经改完、在等验证（依据：resolution = fixed，且之后没有新的流水）
+- 推断：下个版本能带上（依据：状态已到 resolved，但禅道里没有版本字段，这条推断可信度低）
 
 无法确定
-- 没有排期记录的原因——禅道里没有这个字段，也没有评论说明拒绝或延期的理由
+- 禅道里没有排期记录，也没有评论说明何时上线
+- 验证人是谁、什么时候验：禅道里没有这个字段
 ```
 
-关键纪律：**没有排期 ≠ 被拒绝**。前者是事实，后者只能是推断，且必须写明是推断。
+关键纪律：**没有排期 ≠ 被拒绝**。前者是事实，后者只能是推断，且必须写明是推断。事实段落里也不要解释字段含义之外的因果（「因为负责人忙」不是事实）；流水里带 `"new": true` 的是本次写入新增的动作，其余是历史动作，两边不要混着讲。
+
+反馈单走同一套三段式，只是字段名不同：处理人/处理时间取 `processor` / `processedDate`（禅道字段 `processedBy` / `processedDate`），结论取 `resolution`（禅道字段 `solution`），另有 `reviewer` / `reviewedDate`（评审人、评审时间）——评审已发生但 `resolution` 为空时，只能说「禅道里还没有结论」，不能替他下结论。
 
 ## F4 补充说明
 
