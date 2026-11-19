@@ -309,8 +309,8 @@ test('B09 负责人：代码兜底是产品 QD，载荷不带 assignedTo 由禅�
     assert.equal(result.assigneeSource, 'qd');
     const body = createdBody(server);
     assert.ok(!('assignedTo' in body), '交给产品 QD 时不该带 assignedTo');
-    // 回读到的负责人就是禅道侧指派的结果，照实转出
-    assert.equal(result.assignedTo, '');
+    // 回读到的负责人就是禅道侧指派的结果（产品的 QD），照实转出
+    assert.equal(result.assignedTo, 'mock-qd');
   });
 });
 
