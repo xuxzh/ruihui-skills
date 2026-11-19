@@ -1,54 +1,16 @@
-// 补充说明（更新单据）这条写入路径的外部行为：只看脚本对禅道说了什么、Agent 拿到什么。
-// 运行：node --test tests/zentao-cli-append.mjs
-//
-// 关注点：
-//   - 追加草稿的形态：原文完整保留 + 分隔行 + 标注 + 追加段落，文档与实现一致
-//   - 写前复核：确认之后、写入之前再读一次；原文变了就停手，一个更新请求都不发，
-//     并把当前原文与重新合并后的草稿交回终端用户
-//   - 只发一次更新；正文经文件交给 CLI，正文不进命令行参数
-//   - 回读：归一化后逐字比较完整预期正文，并确认操作流水里本次新增了「编辑」
-//     （历史上存在过 edited 不算证据）
-//   - 结果不明（响应丢了）→ 只读核实，不重放更新
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { MOCK_API_ACCOUNT, MOCK_API_ACCOUNTS, createMockApiState, startMockApi } from './mock-zentao-api.mjs';
+import { MOCK_API_ACCOUNT, MOCK_API_ACCOUNTS } from './mock-zentao-api.mjs';
+import { findZentaoCli, installCliShim, runEntryScript, withMockApi } from './zentao-client.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SCRIPT = path.join(ROOT, 'skills', 'rh-product-feedback', 'scripts', 'zentao.mjs');
 const ACCOUNT = MOCK_API_ACCOUNT;
 const PASSWORD = MOCK_API_ACCOUNTS[ACCOUNT];
 
 // 入口脚本靠官方禅道 CLI 取数写数；没装就别假装测过
-function findCli() {
-  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
-    if (!dir) continue;
-    const file = path.join(dir, process.platform === 'win32' ? 'zentao.cmd' : 'zentao');
-    try {
-      fs.accessSync(file, fs.constants.X_OK);
-      return file;
-    } catch {
-      // 继续找下一个目录
-    }
-  }
-  return '';
-}
-
-const ZENTAO_CLI = findCli();
+const ZENTAO_CLI = findZentaoCli();
 const NEEDS_CLI = ZENTAO_CLI ? false : '没装禅道 CLI（npm i -g zentao-cli）：入口脚本靠它写数，装好再跑这份测试';
-
-// 替身 CLI：把收到的命令行参数记下来，再原样交给真的禅道 CLI。
-// 这样能直接看到「脚本对 CLI 说了什么」，而不必猜脚本内部怎么拼参数。
-const SHIM_SOURCE = `#!/usr/bin/env node
-const fs = require('node:fs');
-const { execFileSync } = require('node:child_process');
-fs.appendFileSync(process.env.RH_CLI_SHIM_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');
-execFileSync(process.env.RH_CLI_REAL, process.argv.slice(2), { stdio: 'inherit', env: process.env });
-`;
 
 // 丢响应的替身 CLI：更新请求照发（服务端会落库），但把响应丢掉，模拟「结果不明」。
 const LOSSY_SHIM_SOURCE = `#!/usr/bin/env node
@@ -63,6 +25,13 @@ if (argv.includes('update')) {
 }
 execFileSync(process.env.RH_CLI_REAL, argv, { stdio: 'inherit', env: process.env });
 `;
+
+/**
+ * 起假服务 + 隔离的本机配置：凭据、config.local.json（随包默认）、preferences.json（本机偏好）
+ * 都落在临时目录里，测试不碰开发者本机的真实配置。
+ */
+const withMock = (opts, fn) =>
+  withMockApi({ tag: 'rh-cli-append', config: {}, preferences: {}, ...opts }, fn);
 
 // 追加草稿的形态：原文 + 分隔行 + 标注 + 追加段落（与 references/workflow.md F4 一致）
 const SEPARATOR = '──────────────';
@@ -121,51 +90,6 @@ function writePayload(dir, payload) {
   return file;
 }
 
-function writeCredentials(dir) {
-  const file = path.join(dir, 'credentials');
-  fs.writeFileSync(file, `ZENTAO_ACCOUNT=${ACCOUNT}\nZENTAO_PASSWORD=${PASSWORD}\n`);
-  return file;
-}
-
-// 入口脚本是子进程；假服务跑在当前进程里，所以必须用异步 execFile——
-// 同步等待会卡住当前进程的事件循环，假服务就没人应答了。
-function runScript(args, env) {
-  return new Promise((resolve) => {
-    execFile(
-      process.execPath,
-      [SCRIPT, ...args],
-      { env: { ...process.env, ...env } },
-      (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout: stdout ?? '', stderr: stderr ?? '' }),
-    );
-  });
-}
-
-/**
- * 起假服务 + 隔离的本机配置：
- *   credentials（凭据）、preferences.json（本机偏好）、config.local.json（随包默认）
- * 三份文件都落在临时目录里，测试不碰开发者本机的真实配置。
- */
-async function withMock(overrides, fn) {
-  const server = await startMockApi(createMockApiState(overrides));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rh-cli-append-'));
-  const packageConfig = path.join(dir, 'config.local.json');
-  fs.writeFileSync(packageConfig, JSON.stringify({ zentaoWebUrl: server.url }));
-  const preferencesFile = path.join(dir, 'preferences.json');
-  fs.writeFileSync(preferencesFile, JSON.stringify({}));
-  const env = {
-    ZENTAO_WEB_URL: server.url,
-    ZENTAO_CREDENTIALS_FILE: writeCredentials(dir),
-    ZENTAO_PACKAGE_CONFIG_FILE: packageConfig,
-    ZENTAO_PREFERENCES_FILE: preferencesFile,
-  };
-  try {
-    await fn({ server, env, dir });
-  } finally {
-    await server.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-}
-
 /** 假服务收到的更新请求（禅道更新没有幂等键，这个数量就是「发了几次」）。 */
 function updates(server, path) {
   return server.state.calls.filter((call) => call.method === 'PUT' && call.path === path);
@@ -205,7 +129,7 @@ test('A01 反馈单补充说明：只发一次更新，回读正文 = 原文 + �
       desc: appendDraft(FEEDBACK_BODY),
       expectedBody: FEEDBACK_BODY,
     });
-    const { code, stdout, stderr } = await runScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
     assert.equal(code, 0, stderr);
 
     const result = singleLineJson(stdout);
@@ -236,7 +160,7 @@ test('A02 缺陷单补充说明：原文的 HTML 原样保留，追加段落单�
       steps: appendDraft(normalize(BUG_STEPS)),
       expectedBody: normalize(BUG_STEPS),
     });
-    const { code, stdout, stderr } = await runScript(['bug-update', '--id', '1900', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-update', '--id', '1900', '--payload-file', file], env);
     assert.equal(code, 0, stderr);
 
     const result = singleLineJson(stdout);
@@ -261,7 +185,7 @@ test('A03 写前复核发现原文变了：停手不写入，把当前原文与�
       desc: appendDraft(FEEDBACK_BODY),
       expectedBody: FEEDBACK_BODY,
     });
-    const { code, stdout, stderr } = await runScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
     assert.notEqual(code, 0, '停手要非 0 退出');
     assert.match(stderr, /^错误：.*被改过/);
 
@@ -290,7 +214,7 @@ test('A04 写前复核发现标题被改了：同样停手不写入', { skip: NE
       desc: appendDraft(FEEDBACK_BODY),
       expectedBody: FEEDBACK_BODY,
     });
-    const { code, stdout } = await runScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    const { code, stdout } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
     assert.notEqual(code, 0);
 
     const result = singleLineJson(stdout);
@@ -314,7 +238,7 @@ test('A05 流水里本次没有新增「编辑」（历史上有过 edited）：
         desc: appendDraft(FEEDBACK_BODY),
         expectedBody: FEEDBACK_BODY,
       });
-      const { code, stdout, stderr } = await runScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+      const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
       assert.equal(code, 1);
       assert.match(stderr, /编辑/);
 
@@ -335,27 +259,11 @@ test('A06 正文不进命令行参数：更新经文件、以 --data @<路径> �
       desc: appendDraft(FEEDBACK_BODY),
       expectedBody: FEEDBACK_BODY,
     });
-    const bin = path.join(dir, 'bin');
-    fs.mkdirSync(bin);
-    const shim = path.join(bin, process.platform === 'win32' ? 'zentao.cmd' : 'zentao');
-    fs.writeFileSync(shim, SHIM_SOURCE);
-    fs.chmodSync(shim, 0o755);
-    const argvLog = path.join(dir, 'cli-argv.log');
-
-    const { code, stderr } = await runScript(['feedback-update', '--id', '900', '--payload-file', file], {
-      ...env,
-      PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-      RH_CLI_SHIM_LOG: argvLog,
-      RH_CLI_REAL: ZENTAO_CLI,
-    });
+    const shim = installCliShim(dir, ZENTAO_CLI);
+    const { code, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], { ...env, ...shim.env });
     assert.equal(code, 0, stderr);
 
-    const argvList = fs
-      .readFileSync(argvLog, 'utf8')
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
+    const argvList = shim.calls();
     const updateArgv = argvList.find((argv) => argv.includes('update'));
     assert.ok(updateArgv, '应该调起过 feedback update');
     assert.equal(updateArgv[updateArgv.indexOf('--data') + 1], `@${file}`);
@@ -375,18 +283,10 @@ test('A07 结果不明（响应丢了）：只读核实，核实到写进去了�
       desc: appendDraft(FEEDBACK_BODY),
       expectedBody: FEEDBACK_BODY,
     });
-    const bin = path.join(dir, 'bin');
-    fs.mkdirSync(bin);
-    const shim = path.join(bin, process.platform === 'win32' ? 'zentao.cmd' : 'zentao');
-    fs.writeFileSync(shim, LOSSY_SHIM_SOURCE);
-    fs.chmodSync(shim, 0o755);
-    const argvLog = path.join(dir, 'cli-argv.log');
-
-    const { code, stdout, stderr } = await runScript(['feedback-update', '--id', '900', '--payload-file', file], {
+    const shim = installCliShim(dir, ZENTAO_CLI, { source: LOSSY_SHIM_SOURCE });
+    const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], {
       ...env,
-      PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-      RH_CLI_SHIM_LOG: argvLog,
-      RH_CLI_REAL: ZENTAO_CLI,
+      ...shim.env,
     });
     assert.equal(code, 0, stderr);
 
@@ -395,12 +295,7 @@ test('A07 结果不明（响应丢了）：只读核实，核实到写进去了�
     assert.equal(result.updated, true);
     assert.equal(result.verified, 'query', '结论来自只读核实，不是更新回执');
 
-    const argvList = fs
-      .readFileSync(argvLog, 'utf8')
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
+    const argvList = shim.calls();
     const updateArgvs = argvList.filter((argv) => argv.includes('update'));
     assert.equal(updateArgvs.length, 1, '结果不明也不能重放更新');
     assert.equal(updates(server, '/api.php/v2/feedbacks/900').length, 1);
@@ -414,7 +309,7 @@ test('A08 载荷缺 expectedBody：一个更新请求都不发，错误点名缺
       title: '设备列表导出按钮点击后无响应',
       desc: appendDraft(FEEDBACK_BODY),
     });
-    const { code, stdout, stderr } = await runScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
     assert.notEqual(code, 0);
     assert.match(stderr, /expectedBody/);
     assert.equal(singleLineJson(stdout).ok, false);
@@ -430,7 +325,7 @@ test('A09 草稿里没有分隔行：报错说明草稿形态，不写入', { sk
       desc: `${FEEDBACK_BODY}\n${ADDITION}`,
       expectedBody: FEEDBACK_BODY,
     });
-    const { code, stdout, stderr } = await runScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
     assert.notEqual(code, 0);
     assert.match(stderr, /分隔行/);
     assert.equal(singleLineJson(stdout).ok, false);
@@ -448,7 +343,7 @@ test('A10 回读对不上（服务端没生效）：报不一致，不重放更�
         desc: appendDraft(FEEDBACK_BODY),
         expectedBody: FEEDBACK_BODY,
       });
-      const { code, stdout, stderr } = await runScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+      const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
       assert.equal(code, 1);
       assert.match(stderr, /回读核对没通过/);
 
@@ -469,14 +364,72 @@ test('A11 没给 --id 或 --payload-file：按用法错误退 2，不查禅道',
       desc: appendDraft(FEEDBACK_BODY),
       expectedBody: FEEDBACK_BODY,
     });
-    const noId = await runScript(['feedback-update', '--payload-file', file], env);
+    const noId = await runEntryScript(['feedback-update', '--payload-file', file], env);
     assert.equal(noId.code, 2);
     assert.match(noId.stderr, /^错误：用法：.*feedback-update --id/);
 
-    const noFile = await runScript(['feedback-update', '--id', '900'], env);
+    const noFile = await runEntryScript(['feedback-update', '--id', '900'], env);
     assert.equal(noFile.code, 2);
     assert.match(noFile.stderr, /^错误：用法：.*feedback-update/);
 
     assert.equal(server.state.calls.filter((call) => call.path.startsWith('/api.php/v2/')).length, 0);
+  });
+});
+
+test('A12 带图更新：载荷指定追加段落的标签「截图 1」，正文 = 原文 + 分隔行 + 标签段 + 图片引用', { skip: NEEDS_CLI }, async () => {
+  const reference = '<img src="/index.php?m=file&f=read&t=png&fileID=6530" alt="file-read-6530.png" />';
+  await withMock({ feedbacks: new Map([[900, seedFeedback()]]) }, async ({ server, env, dir }) => {
+    const file = writePayload(dir, {
+      product: 101,
+      title: '设备列表导出按钮点击后无响应',
+      // 草稿只写原文 + 分隔行 + 图片引用；标签由 appendLabel 给，不必手写「补充说明」
+      desc: `${FEEDBACK_BODY}\n\n${SEPARATOR}\n${reference}`,
+      expectedBody: FEEDBACK_BODY,
+      appendLabel: '截图 1',
+    });
+    const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    assert.equal(code, 0, stderr);
+    assert.equal(singleLineJson(stdout).updated, true);
+
+    const stored = server.state.feedbacks.get(900);
+    assert.equal(
+      stored.desc,
+      `${FEEDBACK_BODY}\n\n${SEPARATOR}\n【截图 1】\n${reference}`,
+      '追加段落的标签按载荷写，图片引用跟在标签下面',
+    );
+    assert.ok(stored.desc.startsWith(FEEDBACK_BODY), '图片落在原文之后的追加段落里，原文原样保留');
+    assert.ok(!stored.desc.includes('补充说明'), '带图流程的段落标签不该再写成「补充说明」');
+  });
+});
+
+test('A13 不带 appendLabel：草稿里写的「补充说明」标签原样保留（补充说明流程不变）', { skip: NEEDS_CLI }, async () => {
+  await withMock({ feedbacks: new Map([[900, seedFeedback()]]) }, async ({ server, env, dir }) => {
+    const file = writePayload(dir, {
+      product: 101,
+      title: '设备列表导出按钮点击后无响应',
+      desc: appendDraft(FEEDBACK_BODY),
+      expectedBody: FEEDBACK_BODY,
+    });
+    const { code, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    assert.equal(code, 0, stderr);
+    const stored = server.state.feedbacks.get(900);
+    assert.equal(stored.desc, `${FEEDBACK_BODY}\n\n${SEPARATOR}\n${ANNOTATION}\n${ADDITION}`);
+    assert.ok(!stored.desc.includes('【补充说明】\n'), '不该再补一行默认标签，草稿里的标签就是最终标签');
+  });
+});
+
+test('A14 appendLabel 写空串：报错说清怎么改，一个更新请求都不发', { skip: NEEDS_CLI }, async () => {
+  await withMock({ feedbacks: new Map([[900, seedFeedback()]]) }, async ({ server, env, dir }) => {
+    const file = writePayload(dir, {
+      product: 101,
+      title: '设备列表导出按钮点击后无响应',
+      desc: appendDraft(FEEDBACK_BODY),
+      expectedBody: FEEDBACK_BODY,
+      appendLabel: '  ',
+    });
+    const { code, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    assert.equal(code, 1);
+    assert.match(stderr, /appendLabel/);
+    assert.equal(updates(server, '/api.php/v2/feedbacks/900').length, 0, '载荷不对就不该发更新');
   });
 });

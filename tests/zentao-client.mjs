@@ -6,11 +6,15 @@
 // Agent 拿到什么」，入口脚本内部怎么拼参数不在测试的关注点里。
 //
 // 表格输出（列表类）解析成行数组；详情与写入类解析成那一行 JSON。
+//
+// 这里也是 tests/zentao-cli-*.mjs 的共用测试脚手架（起假服务、隔离本机配置、跑子进程、替身 CLI）：
+// 那几支测试打的是同一个 seam，脚手架只留一份，改一次就全生效。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { MOCK_API_ACCOUNT, MOCK_API_ACCOUNTS, createMockApiState, startMockApi } from './mock-zentao-api.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const ENTRY_SCRIPT = path.join(ROOT, 'skills', 'rh-product-feedback', 'scripts', 'zentao.mjs');
@@ -40,6 +44,101 @@ export function findZentaoCli() {
     }
   }
   return '';
+}
+
+// ---------------------------------------------------------------- 共用测试脚手架
+
+/** 本机接入凭据文件（写的是假服务认可的账号密码）。 */
+export function writeCredentials(dir, { account = MOCK_API_ACCOUNT, password = MOCK_API_ACCOUNTS[account] } = {}) {
+  const file = path.join(dir, 'credentials');
+  fs.writeFileSync(file, `ZENTAO_ACCOUNT=${account}\nZENTAO_PASSWORD=${password}\n`);
+  return file;
+}
+
+/**
+ * 跑一次随包脚本子进程，返回 { code, stdout, stderr }。
+ * 脚本是子进程、假服务跑在当前进程里，所以必须异步：同步等待会卡住事件循环，假服务就没人应答。
+ */
+export function runScript(script, args, env, { cwd } = {}) {
+  return new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      [script, ...args],
+      { env: { ...process.env, ...env }, cwd },
+      (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout: stdout ?? '', stderr: stderr ?? '' }),
+    );
+  });
+}
+
+/** 跑一次入口脚本（zentao.mjs）。 */
+export function runEntryScript(args, env, opts) {
+  return runScript(ENTRY_SCRIPT, args, env, opts);
+}
+
+/** 替身 CLI：把收到的命令行参数记进 RH_CLI_SHIM_LOG，再原样交给 RH_CLI_REAL（真的禅道 CLI）。 */
+export const CLI_SHIM_SOURCE = `#!/usr/bin/env node
+const fs = require('node:fs');
+const { execFileSync } = require('node:child_process');
+fs.appendFileSync(process.env.RH_CLI_SHIM_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');
+execFileSync(process.env.RH_CLI_REAL, process.argv.slice(2), { stdio: 'inherit', env: process.env });
+`;
+
+/**
+ * 在 dir/bin 里装一个替身 CLI；返回放它进 PATH 的环境变量、argv 日志路径与读日志的 calls()。
+ * source 默认是纯记录 + 转发的替身；要测「CLI 给了看不懂的响应」这类分支就传自己的替身源码。
+ */
+export function installCliShim(dir, realCli, { source = CLI_SHIM_SOURCE } = {}) {
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const shim = path.join(bin, process.platform === 'win32' ? 'zentao.cmd' : 'zentao');
+  fs.writeFileSync(shim, source);
+  fs.chmodSync(shim, 0o755);
+  const argvLog = path.join(dir, 'cli-argv.log');
+  return {
+    argvLog,
+    env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, RH_CLI_SHIM_LOG: argvLog, RH_CLI_REAL: realCli },
+    /** 替身 CLI 收到的每次 argv。 */
+    calls: () => fs.readFileSync(argvLog, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)),
+  };
+}
+
+/**
+ * 起假禅道 API 服务 + 一套隔离的本机配置，跑完自动收拾。
+ *
+ * options：
+ *   tag         临时目录前缀（一眼看出是哪支测试）
+ *   seed        (state) => void，起服务前往状态里塞种子数据
+ *   credentials 是否写本机凭据（默认写）
+ *   account / password 换成别的账号密码（测凭据无效）
+ *   config      config.local.json 的内容（不给就用仓库里那份）
+ *   preferences 本机偏好文件的内容（不给就没有这个文件）
+ *   其余键原样交给 createMockApiState（products / bugs / failPaths 等状态注入）
+ */
+export async function withMockApi({ tag = 'rh-cli', seed, credentials = true, account, password, config, preferences, ...overrides } = {}, fn) {
+  const state = createMockApiState(overrides);
+  if (typeof seed === 'function') seed(state);
+  const server = await startMockApi(state);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${tag}-`));
+  const env = {
+    ZENTAO_WEB_URL: server.url,
+    ZENTAO_CREDENTIALS_FILE: credentials ? writeCredentials(dir, { account, password }) : path.join(dir, 'missing'),
+  };
+  if (config) {
+    const file = path.join(dir, 'config.local.json');
+    fs.writeFileSync(file, JSON.stringify({ zentaoWebUrl: server.url, ...config }));
+    env.ZENTAO_PACKAGE_CONFIG_FILE = file;
+  }
+  if (preferences) {
+    const file = path.join(dir, 'preferences.json');
+    fs.writeFileSync(file, JSON.stringify(preferences));
+    env.ZENTAO_PREFERENCES_FILE = file;
+  }
+  try {
+    await fn({ server, state: server.state, env, dir });
+  } finally {
+    await server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function execFileAsync(command, args, options) {
@@ -121,7 +220,21 @@ export class ZentaoEntry {
       data: jsonOf(stdout),
       header: notes[0] || '',
       count: countIn(notes[0], /可见 (\d+) 个/),
-      rows: rows.map(([id, name]) => ({ id: Number(id), name })),
+      rows: rows.map(([id, name, qd]) => ({ id: Number(id), name, qd })),
+    };
+  }
+
+  /** 产品 QD：账号、姓名、账号状态、最后登录（键名 → 值）。 */
+  async qd(product) {
+    const { code, stdout, stderr } = await this.run(['qd', '--product', String(product)]);
+    const { notes, rows } = tableOf(stdout);
+    return {
+      code,
+      stdout,
+      stderr,
+      header: notes[0] || '',
+      notes,
+      fields: Object.fromEntries(rows.map(([key, value]) => [key, value])),
     };
   }
 

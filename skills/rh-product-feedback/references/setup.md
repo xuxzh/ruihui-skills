@@ -134,7 +134,7 @@ bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
 不想让技能常驻，用 skills CLI 的 `use`（技能落在临时目录，不写进宿主）：
 
 ```
-用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback` 拿到这个技能的说明并照着做：把它输出的完整内容先存到临时文件再读；它给的 supporting-files 目录就是技能目录，`SKILL.md` 里的相对路径都从那里解析。然后按其中「0. 环境自检」装上技能包里固定版本的官方禅道 CLI，并告诉我怎么写入我自己的账号密码。
+用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback` 拿到这个技能的说明并照着做：把它输出的完整内容先存到临时文件再读；它给的 supporting-files 目录就是技能目录，`SKILL.md` 里的相对路径都从那里解析。然后按其中「0. 接入自检」装上技能包里固定版本的官方禅道 CLI，并告诉我怎么写入我自己的账号密码。
 ```
 
 ### 装不上时
@@ -250,7 +250,7 @@ ZENTAO_PASSWORD=<你的禅道密码>
 
 ## 默认负责人（缺陷单）
 
-**禅道自己默认跟产品的 QD 走**：建缺陷单时若不写负责人，单子会落到该产品的 QD（质量负责人）名下——实测 MOMV2.0 的 QD 是 `majiawei`，不传就挂在他名下；QD 为空的产品则不指派。本技能靠显式写 `assignedTo: ""` 挡住这个默认（所以随包默认「不指派」也是显式写出来的）。
+**禅道自己默认跟产品的 QD 走**：建缺陷单时若不写负责人，单子会落到该产品的 QD（质量负责人）名下——实测不传 `assignedTo` 就挂在该产品的 QD 名下；QD 为空的产品则不指派。本技能靠显式写 `assignedTo: ""` 挡住这个默认（所以随包默认「不指派」也是显式写出来的）。
 
 本技能把它做成一个设置：**随包默认 = 不指派**（缺陷单先不落到任何人名下），想改就配下面两个键。
 
@@ -278,7 +278,7 @@ ZENTAO_PASSWORD=<你的禅道密码>
 
 - 入口脚本在 `bug-create` 时按上面的顺序解析并补字段（见 [SKILL.md](../SKILL.md)「写单据」）；反馈单没有这个字段。
 - 这个设置的来龙去脉见 [ADR-0016](https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/adr/0016-默认负责人跟产品QD走且可配置.md)；随包默认改成不指派的理由见 [ADR-0018](https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/adr/0018-随包默认负责人改为不指派.md)。
-- 禅道里查不出「离职」——用户表里只有 `deleted` / `locked` 是硬失效标记，账号还在但人已离职查不出来。所以 QD 指向谁要靠**看得见**：生效值是产品 QD 时，草稿里写明「由产品 QD 承接」，交付时以回读到的 `assignedTo` 为准，不替禅道猜。
+- **QD 指向谁现在就查得到**：入口脚本 `qd --product <产品ID>` 给出 QD 账号、姓名、账号状态（已删除 / 已锁定 / 可用）与最后登录——草稿里**具名写**「产品 QD：<账号>（<姓名>）」，不要只写「由产品 QD 承接」。禅道里查不出「离职」（用户表里只有 `deleted` / `locked` 是硬失效标记）；QD 账号在用户表里查不到、或状态是已删除 / 已锁定，就如实说查不到或账号不可用，**仍然不猜**。
 
 ### 怎么设
 
@@ -290,7 +290,7 @@ ZENTAO_PASSWORD=<你的禅道密码>
 
 ### 怎么用
 
-- 草稿的负责人一栏按生效值**具名**写：生效值是「不指派」就写「未指派」（随包默认如此）；是产品 QD 就写谁，QD 为空写「未指派（该产品没有 QD）」；用户指名就写他的账号。
+- 草稿的负责人一栏按生效值**具名**写：生效值是「不指派」就写「未指派」（随包默认如此）；是产品 QD 就用 `node <技能目录>/scripts/zentao.mjs qd --product <产品ID>` 查出账号与姓名，写成「产品 QD：<账号>（<姓名>）」；该产品没有 QD 写「未指派（该产品没有 QD）」；QD 账号在用户表里查不到或已删除 / 已锁定就如实转述；用户指名就写他的账号。
 - 建单后回读核对 `assignedTo`，与生效值对不上就如实说明，不要默认识可。
 - 偏好文件不存在或格式坏了 → 当作没设，用随包默认（不指派）；两层都没配才兜底到产品 QD。
 
@@ -317,7 +317,7 @@ ZENTAO_PASSWORD=<你的禅道密码>
 - **身份不是提交人自己**：MCP 工具的身份是**服务端配置的固定禅道账号**（实测它的登录接口 `post_users_login` 不校验传入凭据）。经这些工具提交的单据，创建者是这个固定账号，不是终端用户。
 - **只适合无关紧要的查看**：翻一下产品、看看单据标题这类不给别人看的动作可以；**建单与更新一律不用它**——否则单据的提交人不对，也不是本人留痕。
 - **不要为了「顺手」退回它**：CLI 没装、装不上、本机没有 node 时给禅道网页端的替代路径，也不改用宿主里的禅道 MCP 工具建单。
-- **谁想自己登记就用来自便**：那是终端用户自己在宿主里加的一条 MCP 条目，与技能无关；技能不依赖它、也不去改它。别为了让两边一致去改技能包里的 `config.local.json`。
+- **谁想自己登记就用来自便**：那是终端用户自己在宿主里加的一条 MCP 条目，与技能无关；技能不依赖它、也不去改它。地址就在技能包 `config.local.json` 的 `mcpUrl`——那只是**给人手动查看用的地址来源**，技能代码不读它（别为了让两边一致去改它）。
 - 已知限制（要改得在服务端改）：① 只接受服务端配置的固定身份，不接受按传入凭据登录；② 上传没有内容通道（`post_files` 只认文件名）；③ 返回体大、字段要手工投影。
 
 ## 随包入口脚本
@@ -325,7 +325,8 @@ ZENTAO_PASSWORD=<你的禅道密码>
 读写都走**一个**入口脚本 `scripts/zentao.mjs`：换当次令牌 → 经环境变量注入官方禅道 CLI → 由 CLI 取数或写数 → 脚本投影成十几行表格或一行 JSON。禅道列表接口的原始响应是几十 KB 到上百 KB 的 JSON，直接进 Agent 上下文会被截断（实测一次提单据有 8 分钟耗在这上面），所以取值、过滤与投影都在进程内做完，Agent 只拿结论。查重助手 `scripts/zentao-dedupe.mjs` 只负责中文切二元组、生成关键词变体，入口脚本自己会 import 它。
 
 ```bash
-node <技能目录>/scripts/zentao.mjs products                                   # 当前账号可见的产品（选品范围）
+node <技能目录>/scripts/zentao.mjs products                                   # 当前账号可见的产品（编号、名称、QD；选品范围）
+node <技能目录>/scripts/zentao.mjs qd --product 29                            # 产品 QD：账号、姓名、账号状态、最后登录
 node <技能目录>/scripts/zentao.mjs projects --product 29                      # 某个产品下面的项目
 node <技能目录>/scripts/zentao.mjs bugs --product 29 --match 导出             # 缺陷列表
 node <技能目录>/scripts/zentao.mjs feedback --id 421                          # 反馈详情
@@ -335,7 +336,8 @@ node <技能目录>/scripts/zentao.mjs feedback-update --id 421 --payload-file <
 node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --object-type feedback --object-id 421
 ```
 
-- **完整清单**：`node <技能目录>/scripts/zentao.mjs --help` 列出全部 12 个子命令与各自认的选项；命令面、字段与错误码见 [zentao-cli.md](zentao-cli.md)。
+- **完整清单**：`node <技能目录>/scripts/zentao.mjs --help` 列出全部 13 个子命令与各自认的选项；命令面、字段与错误码见 [zentao-cli.md](zentao-cli.md)。
+- **全局旗标也能带**：`--timeout <毫秒>`（单次 HTTP 请求超时）与 `--insecure`（跳过 TLS 证书校验）对**所有子命令**都有效，原样转给官方禅道 CLI；`--timeout` 不是脚本等 CLI 子进程的超时，两者不是一回事。
 - **前置**：Node.js 18+（用 `fetch`）与**官方禅道 CLI**（`zentao` 命令，npm 包 `zentao-cli`，版本按 `config.local.json` 的 `zentaoCli`）装好且在 PATH 里。没有 node 或没有 CLI 时如实告诉终端用户并给替代路径（禅道 Web 端自提）；CLI 不在 PATH 时脚本报「找不到 zentao 命令」并退出非 0。
 - **凭据**：脚本自己读本机凭据文件并换当前账号的当次令牌，令牌经环境变量注入 CLI 子进程，密码与令牌不打印、不进命令行参数、不进上下文。没写凭据时它会提示去跑 `set-credentials.sh`。
 - **地址**：从技能包的 `config.local.json`（`zentaoWebUrl`）读，不回显；交付单据链接时才拼给终端用户。
@@ -343,7 +345,7 @@ node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --objec
 - **写子命令的载荷**：文件里放请求体本身（**不要再套一层 `payload`**），例如 `{"productID": 42, "title": "…", "openedBuild": ["trunk"], "steps": "<正文 HTML>"}`；正文因此不进命令行参数。
 - **只发一次**：禅道创建接口没有幂等键，重发会造两条记录。脚本不做重试；写完按返回编号回读核对。
 - **缺陷单的负责人由脚本按配置补**（见「默认负责人」）：载荷里没写 `assignedTo` 时，脚本按「终端用户明说 > 本机默认 > 随包默认 > 代码兜底（产品 QD）」解析——随包默认是 `""`（补空串，不指派），`"qd"` 不带这个字段（产品 QD 承接），别的值补该账号。
-- **传图**走 `file-create`（官方 CLI 的 `file create`，`multipart/form-data`，单文件上限 50 MiB）：只能挂在已存在的单据上，顺序是「先建单 → 再传图 → 再更新正文」。失败与超时的处理见 [error-handling.md](error-handling.md)「图片上传失败」。
+- **传图**走 `file-create`（官方 CLI 的 `file create`，`multipart/form-data`）：只能挂在已存在的单据上，顺序是「先建单 → 再传图 → 再更新正文」。上限、引用形态与 `--object-type` 的取值见 [zentao-cli.md](zentao-cli.md)「传图」；失败与超时的处理见 [error-handling.md](error-handling.md)「图片上传失败」。
 - **为什么不用宿主里的禅道 MCP 工具写**：那些工具的身份是服务端配置的固定账号，单据会留痕在那个账号名下（见下面「禅道 MCP：只给人手动查看」）。
 
 ## 自检
@@ -363,13 +365,14 @@ node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --objec
 ```json
 {
   "zentaoWebUrl": "<禅道 Web 端地址>",
-  "zentaoCli": { "package": "zentao-cli", "version": "0.4.4" }
+  "zentaoCli": { "package": "zentao-cli", "version": "0.4.4" },
+  "mcpUrl": "<自研禅道 MCP 地址>"
 }
 ```
 
 - `config.local.json` **进仓库**、随技能包一起分发（见 ADR-0005）。地址本身不是凭据，内网 IP 也不从公网可达。
-- 两个字段各管一件事：`zentaoWebUrl` 用于拼单据直达链接（`<zentaoWebUrl>/feedback-view-<反馈 ID>.html`），也是脚本换令牌用的站点地址；`zentaoCli` 是**官方禅道 CLI 的版本锁**（`package` + 固定 `version`），Agent 装 CLI 时只认它，打包脚本把它原样带进包。
-- **团队自研的禅道 MCP 地址不再进技能链路**：配置里没有 `mcpUrl`，技能的读、写、传图都只走官方禅道 CLI；想自己手动登记那条 MCP 的人，按宿主文档自己填。
+- 三个字段各管一件事：`zentaoWebUrl` 用于拼单据直达链接（`<zentaoWebUrl>/feedback-view-<反馈 ID>.html`），也是脚本换令牌用的站点地址；`zentaoCli` 是**官方禅道 CLI 的版本锁**（`package` + 固定 `version`），Agent 装 CLI 时只认它，打包脚本把它原样带进包。
+- **`mcpUrl` 只是给人看的地址来源**：团队自研的禅道 MCP 已降级为「给人手动查看」，**技能代码不读它、不依赖它、不登记它**（读、写、传图只走官方禅道 CLI）。留着它是让想自己手动登记那条 MCP 的人有个地址可抄，不必到处问。
 - **CLI 版本的升级由发版流程显式发起**：改 `zentaoCli.version` → 跑一次接入自检验证 → 重新分发。技能不跟着上游新版自动升级，也不在运行时升级。
 - `zentaoWebUrl` 为空或写错：技能仍能提反馈，只是交付时给不了链接，只能给反馈编号——换实例时记得一起改。
 - 换成别的禅道实例时，直接改 `config.local.json` 里的地址字段；仓库里没有单独的占位符模板文件。

@@ -1,53 +1,23 @@
-// 建缺陷单这条写入路径的外部行为：只看脚本对禅道说了什么、Agent 拿到什么。
-// 运行：node --test tests/zentao-cli-bug.mjs
-//
-// 关注点：
-//   - 载荷经文件交给 CLI，正文不进命令行参数；临时文件用完删掉
-//   - 一次调用只发一次创建请求（禅道创建没有幂等键）
-//   - 写入后按返回编号回读，逐项核对产品、标题、完整正文、影响版本、严重程度、优先级、
-//     负责人，以及操作流水里本次新增的「创建」
-//   - 结果不确定（超时、保存成功但查不到）→ 先查询核实、不重发；认不准就报未确认
-//   - 负责人按「终端用户明说 > 本机默认 > 随包默认 > 代码兜底（产品 QD）」解析
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { MOCK_API_ACCOUNT, MOCK_API_ACCOUNTS, createMockApiState, startMockApi } from './mock-zentao-api.mjs';
+import { MOCK_API_ACCOUNT, MOCK_API_ACCOUNTS } from './mock-zentao-api.mjs';
+import { findZentaoCli, installCliShim, runEntryScript, withMockApi } from './zentao-client.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SCRIPT = path.join(ROOT, 'skills', 'rh-product-feedback', 'scripts', 'zentao.mjs');
 const ACCOUNT = MOCK_API_ACCOUNT;
 const PASSWORD = MOCK_API_ACCOUNTS[ACCOUNT];
 
 // 入口脚本靠官方禅道 CLI 取数写数；没装就别假装测过
-function findCli() {
-  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
-    if (!dir) continue;
-    const file = path.join(dir, process.platform === 'win32' ? 'zentao.cmd' : 'zentao');
-    try {
-      fs.accessSync(file, fs.constants.X_OK);
-      return file;
-    } catch {
-      // 继续找下一个目录
-    }
-  }
-  return '';
-}
-
-const ZENTAO_CLI = findCli();
+const ZENTAO_CLI = findZentaoCli();
 const NEEDS_CLI = ZENTAO_CLI ? false : '没装禅道 CLI（npm i -g zentao-cli）：入口脚本靠它写数，装好再跑这份测试';
 
-// 替身 CLI：把收到的命令行参数记下来，再原样交给真的禅道 CLI。
-// 这样能直接看到「脚本对 CLI 说了什么」，而不必猜脚本内部怎么拼参数。
-const SHIM_SOURCE = `#!/usr/bin/env node
-const fs = require('node:fs');
-const { execFileSync } = require('node:child_process');
-fs.appendFileSync(process.env.RH_CLI_SHIM_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');
-execFileSync(process.env.RH_CLI_REAL, process.argv.slice(2), { stdio: 'inherit', env: process.env });
-`;
+/**
+ * 起假服务 + 隔离的本机配置：凭据、config.local.json（随包默认）、preferences.json（本机偏好）
+ * 都落在临时目录里，测试不碰开发者本机的真实配置。
+ */
+const withMock = (opts, fn) =>
+  withMockApi({ tag: 'rh-cli-bug', config: { bugAssignee: '' }, preferences: {}, ...opts }, fn);
 
 const BODY_HTML = [
   '<p><strong>[步骤]</strong></p>',
@@ -77,51 +47,6 @@ function writePayload(dir, payload) {
   return file;
 }
 
-function writeCredentials(dir) {
-  const file = path.join(dir, 'credentials');
-  fs.writeFileSync(file, `ZENTAO_ACCOUNT=${ACCOUNT}\nZENTAO_PASSWORD=${PASSWORD}\n`);
-  return file;
-}
-
-// 入口脚本是子进程；假服务跑在当前进程里，所以必须用异步 execFile——
-// 同步等待会卡住当前进程的事件循环，假服务就没人应答了。
-function runScript(args, env) {
-  return new Promise((resolve) => {
-    execFile(
-      process.execPath,
-      [SCRIPT, ...args],
-      { env: { ...process.env, ...env } },
-      (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout: stdout ?? '', stderr: stderr ?? '' }),
-    );
-  });
-}
-
-/**
- * 起假服务 + 隔离的本机配置：
- *   credentials（凭据）、preferences.json（本机偏好）、config.local.json（随包默认）
- * 三份文件都落在临时目录里，测试不碰开发者本机的真实配置。
- */
-async function withMock({ config = {}, preferences = {}, ...overrides }, fn) {
-  const server = await startMockApi(createMockApiState(overrides));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rh-cli-bug-'));
-  const packageConfig = path.join(dir, 'config.local.json');
-  fs.writeFileSync(packageConfig, JSON.stringify({ zentaoWebUrl: server.url, bugAssignee: '', ...config }));
-  const preferencesFile = path.join(dir, 'preferences.json');
-  fs.writeFileSync(preferencesFile, JSON.stringify(preferences));
-  const env = {
-    ZENTAO_WEB_URL: server.url,
-    ZENTAO_CREDENTIALS_FILE: writeCredentials(dir),
-    ZENTAO_PACKAGE_CONFIG_FILE: packageConfig,
-    ZENTAO_PREFERENCES_FILE: preferencesFile,
-  };
-  try {
-    await fn({ server, env, dir });
-  } finally {
-    await server.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-}
-
 /** 假服务收到的创建请求（禅道一次创建就是一条记录，所以这个数量就是「发了几次」）。 */
 function creates(server) {
   return server.state.calls.filter((call) => call.method === 'POST' && call.path === '/api.php/v2/bugs');
@@ -145,7 +70,7 @@ function singleLineJson(stdout) {
 test('B01 建单成功：只发一次创建请求，回读核对通过后交付编号/状态/负责人来源/提交人/链接', { skip: NEEDS_CLI }, async () => {
   await withMock({}, async ({ server, env, dir }) => {
     const file = writePayload(dir, bugPayload());
-    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.equal(code, 0, stderr);
 
     const result = singleLineJson(stdout);
@@ -169,27 +94,11 @@ test('B01 建单成功：只发一次创建请求，回读核对通过后交付�
 test('B02 正文不进命令行参数：载荷经文件、以 --data @<路径> 交给 CLI', { skip: NEEDS_CLI }, async () => {
   await withMock({}, async ({ env, dir }) => {
     const file = writePayload(dir, bugPayload());
-    const bin = path.join(dir, 'bin');
-    fs.mkdirSync(bin);
-    const shim = path.join(bin, process.platform === 'win32' ? 'zentao.cmd' : 'zentao');
-    fs.writeFileSync(shim, SHIM_SOURCE);
-    fs.chmodSync(shim, 0o755);
-    const argvLog = path.join(dir, 'cli-argv.log');
-
-    const { code, stderr } = await runScript(['bug-create', '--payload-file', file], {
-      ...env,
-      PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-      RH_CLI_SHIM_LOG: argvLog,
-      RH_CLI_REAL: ZENTAO_CLI,
-    });
+    const shim = installCliShim(dir, ZENTAO_CLI);
+    const { code, stderr } = await runEntryScript(['bug-create', '--payload-file', file], { ...env, ...shim.env });
     assert.equal(code, 0, stderr);
 
-    const argvList = fs
-      .readFileSync(argvLog, 'utf8')
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
+    const argvList = shim.calls();
     const createArgv = argvList.find((argv) => argv.includes('create'));
     assert.ok(createArgv, '应该调起过 bug create');
     // 正文只经文件过去：--data @<路径>
@@ -205,7 +114,7 @@ test('B02 正文不进命令行参数：载荷经文件、以 --data @<路径> �
 test('B03 服务端业务失败：如实报错，不重发', { skip: NEEDS_CLI }, async () => {
   await withMock({}, async ({ server, env, dir }) => {
     const file = writePayload(dir, bugPayload({ title: '__FAIL__ 设备列表导出无响应' }));
-    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.notEqual(code, 0);
     assert.match(stderr, /^错误：禅道 CLI 报错/m);
     assert.equal(singleLineJson(stdout).ok, false);
@@ -216,7 +125,7 @@ test('B03 服务端业务失败：如实报错，不重发', { skip: NEEDS_CLI }
 test('B04 回读核对不通过：正文被服务端改写就报不一致，不重建', { skip: NEEDS_CLI }, async () => {
   await withMock({}, async ({ server, env, dir }) => {
     const file = writePayload(dir, bugPayload({ title: '__ALTERED_DESC__ 设备列表导出无响应' }));
-    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.equal(code, 1);
     assert.match(stderr, /正文/);
 
@@ -250,7 +159,7 @@ test('B05 回读核对流水：没有本次新增的「创建」就不算建成�
   };
   await withMock({ noopWrites: true, bugs: new Map([[1900, stored]]) }, async ({ server, env, dir }) => {
     const file = writePayload(dir, bugPayload());
-    const { code, stdout } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.equal(code, 1);
     const result = singleLineJson(stdout);
     assert.equal(result.ok, false);
@@ -262,7 +171,7 @@ test('B05 回读核对流水：没有本次新增的「创建」就不算建成�
 test('B06 负责人：终端用户明说优先，载荷照原样送出去', { skip: NEEDS_CLI }, async () => {
   await withMock({}, async ({ server, env, dir }) => {
     const file = writePayload(dir, bugPayload({ assignedTo: 'majiawei' }));
-    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.equal(code, 0, stderr);
     const result = singleLineJson(stdout);
     assert.equal(result.assigneeSource, 'user');
@@ -274,7 +183,7 @@ test('B06 负责人：终端用户明说优先，载荷照原样送出去', { sk
 test('B07 负责人：本机默认盖过随包默认', { skip: NEEDS_CLI }, async () => {
   await withMock({ config: { bugAssignee: '' }, preferences: { bugAssignee: 'zhangsan' } }, async ({ server, env, dir }) => {
     const file = writePayload(dir, bugPayload());
-    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.equal(code, 0, stderr);
     const result = singleLineJson(stdout);
     assert.equal(result.assigneeSource, 'local');
@@ -286,7 +195,7 @@ test('B07 负责人：本机默认盖过随包默认', { skip: NEEDS_CLI }, asyn
 test('B08 负责人：随包默认是不指派，载荷显式带空串挡住禅道默认指派', { skip: NEEDS_CLI }, async () => {
   await withMock({ config: { bugAssignee: '' }, preferences: {} }, async ({ server, env, dir }) => {
     const file = writePayload(dir, bugPayload());
-    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.equal(code, 0, stderr);
     const result = singleLineJson(stdout);
     assert.equal(result.assigneeSource, 'package');
@@ -303,7 +212,7 @@ test('B09 负责人：代码兜底是产品 QD，载荷不带 assignedTo 由禅�
     const packageConfig = path.join(dir, 'config.local.json');
     fs.writeFileSync(packageConfig, JSON.stringify({ zentaoWebUrl: server.url }));
     const file = writePayload(dir, bugPayload());
-    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.equal(code, 0, stderr);
     const result = singleLineJson(stdout);
     assert.equal(result.assigneeSource, 'qd');
@@ -317,7 +226,7 @@ test('B09 负责人：代码兜底是产品 QD，载荷不带 assignedTo 由禅�
 test('B10 载荷缺必填字段：一个写请求都不发，错误点名缺哪项', { skip: NEEDS_CLI }, async () => {
   await withMock({}, async ({ server, env, dir }) => {
     const file = writePayload(dir, { title: '只有标题' });
-    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.notEqual(code, 0);
     assert.match(stderr, /载荷缺必填字段：productID、openedBuild/);
     assert.equal(singleLineJson(stdout).ok, false);
@@ -327,7 +236,7 @@ test('B10 载荷缺必填字段：一个写请求都不发，错误点名缺哪�
 
 test('B11 没给 --payload-file：按用法错误退 2，不查禅道', { skip: NEEDS_CLI }, async () => {
   await withMock({}, async ({ server, env }) => {
-    const { code, stderr } = await runScript(['bug-create'], env);
+    const { code, stderr } = await runEntryScript(['bug-create'], env);
     assert.equal(code, 2);
     assert.match(stderr, /^错误：用法：.*bug-create --payload-file/);
     assert.equal(server.state.calls.filter((call) => call.path.startsWith('/api.php/v2/')).length, 0);
@@ -337,7 +246,7 @@ test('B11 没给 --payload-file：按用法错误退 2，不查禅道', { skip: 
 test('B12 结果不确定（超时）：不重发，查询核实到唯一一致的新记录后按创建成功交付', { skip: NEEDS_CLI }, async () => {
   await withMock({}, async ({ server, env, dir }) => {
     const file = writePayload(dir, bugPayload({ title: '__TIMEOUT__ 设备列表导出无响应' }));
-    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.equal(code, 0, stderr);
 
     const result = singleLineJson(stdout);
@@ -351,7 +260,7 @@ test('B12 结果不确定（超时）：不重发，查询核实到唯一一致�
 test('B13 结果不确定（保存成功但查不到）：报未确认，不把「没查到」说成「没创建」', { skip: NEEDS_CLI }, async () => {
   await withMock({ noopWrites: true }, async ({ server, env, dir }) => {
     const file = writePayload(dir, bugPayload({ title: '__NOOP__ 设备列表导出无响应' }));
-    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.equal(code, 1);
 
     const result = singleLineJson(stdout);
@@ -391,7 +300,7 @@ function manyBugs(count) {
 test('B14 查重基线不完整（服务端分页不前进）：建单后只能报「是否新建未确认」，不判成功、不重发', { skip: NEEDS_CLI }, async () => {
   await withMock({ bugs: manyBugs(25), pagingStuckProducts: [101] }, async ({ server, env, dir }) => {
     const file = writePayload(dir, bugPayload({ title: '__TIMEOUT__ 设备列表导出无响应' }));
-    const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+    const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
     assert.equal(code, 1);
 
     const result = singleLineJson(stdout);
@@ -416,7 +325,7 @@ test('B15 基线里混进别的产品的记录：同样只报「是否新建未�
     },
     async ({ server, env, dir }) => {
       const file = writePayload(dir, bugPayload({ title: '__TIMEOUT__ 设备列表导出无响应' }));
-      const { code, stdout, stderr } = await runScript(['bug-create', '--payload-file', file], env);
+      const { code, stdout, stderr } = await runEntryScript(['bug-create', '--payload-file', file], env);
       assert.equal(code, 1);
 
       const result = singleLineJson(stdout);

@@ -23,6 +23,10 @@
 ## 选项
 
 - 全局：`--format=json|table|markdown|raw`、`--assistant <值>`、`--no-input`、`--yes`、`--quiet`、`--timeout <ms>`、`--deadline <ms>`、`--insecure`、`--profile`、`--config <文件>`。默认 `--format=table`，脚本取数一律显式给 `--format=json`。
+- 其中两个由**入口脚本逐字转发**（所有子命令都能带，不是某个子命令专属）：
+  - `--timeout <毫秒>`：单次 HTTP 请求的超时。**它不是**入口脚本等 CLI 子进程的那个超时（后者固定在脚本里，180 秒）。
+  - `--insecure`：跳过 TLS 证书校验，只在实例用自签证书时用，并要说清风险。
+  - 入口脚本的子命令选项白名单接受这两个旗标；写别的选项报用法错误（退出码 2）。
 - list / get 才有：`--fields <逗号分隔>`（返回字段投影，响应里只剩这些字段）、`--html-to-markdown`。
 - list 才有：`--all`（遍历全部页）、`--max-items <n>`、`--filter <expr>`、`--search <keywords>`、`--search-fields <fields>`、`--sort <expr>`（如 `id:asc`）、`--page <n>`、`--page-size <n>`。
   - 分页旗标就是 `--page` / `--page-size`（映射到服务端的 `pageID` / `recPerPage`）；`--page-id` / `--rec-per-page` 不是合法旗标。
@@ -71,7 +75,7 @@
 - `--file` 是本地路径，由跑 CLI 的那台机器解析（相对路径相对 CLI 的工作目录）；MIME 按扩展名推断，不认识的一律 `application/octet-stream`。
 - **`objectType` 没有 enum 校验**：帮助文本只列 `bug` / `story` / `task` / `testcase`，但 `feedback` 会原样透传给服务端并绑定成功（证据：issue #13 判据③）。所以缺陷单与反馈单都能挂图，不要按帮助文本把 `feedback` 禁掉。
 - 返回 `{"ok":true,"data":{"file":{"id":…}}}`：文件标识是 `data.file.id`（实测）。
-- **没有 `file list` / `file get`**：附件身份只能靠上传返回的文件标识 + 单据正文里的引用核对。
+- **没有 `file list` / `file get`**：附件身份只能靠上传返回的文件标识 + 单据正文里的引用核对，**无法逐字节回读附件**。所以传图后的核对是「回读目标单据：正文里有那张图的引用（`fileID` 与上传返回一致）、附件挂载对象（`objectType`/`objectID`）就是目标单据」。
 - 上传没有幂等键：重复上传会多出附件。超时、断连、读不懂响应时先查单据上有没有多出附件，**不重传**。
 
 ## 错误码
@@ -111,6 +115,9 @@
 - **反馈列表接口在部分产品上分页不前进**：`GET /api.php/v2/products/{id}/feedbacks` 在某台 max 8.2 实例的产品 29 上，同一个令牌的第 1 次请求正常（20 条、`pager.recTotal=51`、`pageTotal=3`），第 2 次及以后返回空集且 `pager.pageID` 钳回 1、`recTotal=0`；`pageID=2` 同样如此。CLI 的 `--all` 保护发现「请求的页码 ≠ 服务端回的页码」就报 `E2008`「服务端分页未向前推进」，整条读取失败。同一实例的产品 1 上完全正常，`bug list --all` 在各产品上也正常。换一个新令牌后的第 1 次请求又正常（按令牌/会话计的现象，具体原因未查证）。
 - **同一个接口会返回别的产品的记录**：请求产品 29 的反馈列表，回来的记录 `product` 字段是 `"1"`，且 ID 序列与产品 1 的完全一致（`51,50,49,20,48`）。所以只看「拿到了 N 条」不能当成「这个产品有 N 条」。
 - **技能的对策（`scripts/zentao.mjs`）**：分页不前进时**不整体失败**，退回「只读第 1 页」并把这次扫描标成**覆盖不完整**（输出里写「服务端分页未向前推进，覆盖不完整」）；同时用每条记录的 `product` 字段做**归属校验**，不属于请求产品的记录一律丢弃并在输出里点名（「禅道返回的 N 条记录 product 字段是 X，不属于产品 Y，已丢弃」）。写入前的查重基线不完整或有记录被丢弃时，写入结果不确定只能报**未确认**，不凭基线判成功、不重发。
+- **`user list` 的服务端 `filters` 在实例上被忽略**：`zentao user list --filters …` 返回全部用户（实测 51 条）。所以查产品 QD 时先把用户表取全（`--fields account,realname,deleted,locked,last`），**在入口脚本里按账号筛**。注意最后登录字段叫 `last`；账号失效标记只看 `deleted`（`"1"` = 已删除）与 `locked`（非空 = 已锁定）。
+- **产品 QD 的字段名是大写 `QD`**：`product list --fields id,name,QD` 能取到（形如 `{"id":"1","name":"<产品名>","QD":"<账号>"}`）；小写 `qd` 不是合法字段名，会被静默忽略（字段投影里就没这一列了）。QD 属于运行时事实：只查不存，不写进随包配置或仓库文件。
+- **选品不再有 `prep` 合并调用**：旧查询器的 `prep`（产品 + 项目 + 查重候选一次拿全）随旧通道下线，迁移后改成显式的三个子命令：`products` → `projects --product <id>` → `dup --kind … --product … --title …`。这不是漏做，是拆开让每一步都能单独重试与核对。
 
 ## 与随包脚本的分工
 

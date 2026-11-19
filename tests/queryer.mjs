@@ -6,10 +6,10 @@
 //   - 凭据只在脚本进程内使用，不出现在输出里
 //   - 没凭据、凭据无效、没装 CLI 时给出可执行的指引，而不是索要密码或回显地址
 //
-// 迁移说明：旧查询器的 `prep`（一次拿产品+项目+查重候选）、`qd`（产品默认承接人）、
-// `check/sync`（宿主 MCP 地址检查）随旧通道一起下线——官方禅道 CLI 没有这些动作。
-// 对应覆盖点分别落到：选品三步（本文件 Q03）、负责人解析（tests/write.mjs W10-W17）、
-// CLI 没装时的指引（tests/e2e-mock.mjs T16 与本文件 Q07）。
+// 迁移说明：旧查询器的 `prep`（一次拿产品+项目+查重候选）与 `check/sync`（宿主 MCP 地址检查）
+// 随旧通道一起下线——选品改成显式的 products / projects / dup 三个子命令（本文件 Q03）。
+// 旧查询器的 `qd`（产品默认承接人）保留：换成入口脚本的 qd 子命令（Q09-Q13），
+// products 的表格里也带上 QD，选品时就能看到。CLI 没装时的指引见 tests/e2e-mock.mjs T16 与本文件 Q07。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -103,14 +103,14 @@ function callCount(state, method, pathname) {
   return state.calls.filter((c) => c.method === method && c.path === pathname).length;
 }
 
-test('Q01 产品列表：只输出 id 与名称，不回吐原始 JSON', { skip: NEEDS_CLI }, async () => {
+test('Q01 产品列表：只输出编号、名称与 QD，不回吐原始 JSON', { skip: NEEDS_CLI }, async () => {
   await withMock({}, async ({ zentao, state }) => {
     const res = await zentao.products();
     assert.equal(res.code, 0, res.stderr);
     assert.match(res.header, /^产品（当前账号可见 2 个；这就是后续选品范围）$/);
     assert.deepEqual(res.rows, [
-      { id: 101, name: '示例产品 A' },
-      { id: 102, name: '示例产品 B' },
+      { id: 101, name: '示例产品 A', qd: 'mock-qd' },
+      { id: 102, name: '示例产品 B', qd: '（空）' },
     ]);
     // 原始 JSON 的痕迹不该进上下文
     assert.ok(!JSON.stringify(res).includes('recTotal'), '输出里不该有原始 JSON 片段');
@@ -208,5 +208,69 @@ test('Q08 凭据无效时明确报错，不静默按别的身份读', { skip: NE
     assert.match(res.stderr, /凭据|锁定/);
     assert.ok(!res.stderr.includes(CRED_VALUE), '报错里不该回显密码');
     assert.equal(callCount(state, 'GET', '/api.php/v2/products'), 0, '不该拿别的身份去读');
+  });
+});
+
+test('Q09 产品 QD：按编号查到账号、姓名、账号状态与最后登录', { skip: NEEDS_CLI }, async () => {
+  await withMock({}, async ({ zentao, state }) => {
+    const res = await zentao.qd(PRODUCT_ID);
+    assert.equal(res.code, 0, res.stderr);
+    assert.match(res.header, /^产品 101 示例产品 A 的默认承接人$/);
+    assert.equal(res.fields.QD账号, 'mock-qd');
+    assert.equal(res.fields.姓名, '模拟质负');
+    assert.equal(res.fields.账号状态, '可用');
+    assert.equal(res.fields.最后登录, '2026-10-27 17:21:36');
+    // 用户筛选在客户端做：服务端 filters 在这台实例上会被忽略
+    assert.equal(callCount(state, 'GET', '/api.php/v2/users'), 1);
+  });
+});
+
+test('Q10 产品 QD：按名称也能查到（先完全匹配，再按相似度）', { skip: NEEDS_CLI }, async () => {
+  await withMock({}, async ({ zentao }) => {
+    const res = await zentao.qd('示例产品A');
+    assert.equal(res.code, 0, res.stderr);
+    assert.match(res.header, /^产品 101 示例产品 A 的默认承接人$/);
+    assert.equal(res.fields.QD账号, 'mock-qd');
+  });
+});
+
+test('Q11 产品 QD：产品没配 QD 就说没配，不去查用户表', { skip: NEEDS_CLI }, async () => {
+  await withMock({}, async ({ zentao, state }) => {
+    const res = await zentao.qd(102);
+    assert.equal(res.code, 0, res.stderr);
+    assert.equal(res.fields.QD账号, '（空）');
+    assert.match(res.fields.说明, /该产品没配 QD/);
+    assert.equal(callCount(state, 'GET', '/api.php/v2/users'), 0, '没配 QD 时不必查用户表');
+  });
+});
+
+test('Q12 产品 QD：账号已删除 / 已锁定 / 用户表里查不到，都要如实说', { skip: NEEDS_CLI }, async () => {
+  const products = [
+    { id: 103, name: '已删 QD 产品', QD: 'mock-qd-deleted' },
+    { id: 104, name: '锁定 QD 产品', QD: 'mock-qd-locked' },
+    { id: 105, name: '查不到 QD 产品', QD: 'mock-qd-gone' },
+  ];
+  await withMock({ products }, async ({ zentao }) => {
+    const deleted = await zentao.qd(103);
+    assert.equal(deleted.fields.姓名, '已删质负');
+    assert.equal(deleted.fields.账号状态, '已删除（deleted=1）');
+
+    const locked = await zentao.qd(104);
+    assert.equal(locked.fields.姓名, '锁定质负');
+    assert.equal(locked.fields.账号状态, '已锁定');
+
+    const gone = await zentao.qd(105);
+    assert.equal(gone.fields.姓名, '（禅道用户表里没有这个账号）');
+    assert.match(gone.fields.账号状态, /查不到/);
+  });
+});
+
+test('Q13 产品 QD：产品找不到就列出可见产品，不瞎猜一个', { skip: NEEDS_CLI }, async () => {
+  await withMock({}, async ({ zentao }) => {
+    const res = await zentao.qd('不存在的产品');
+    assert.equal(res.code, 0, res.stderr);
+    assert.match(res.header, /^没找到产品「不存在的产品」（当前账号可见 2 个/);
+    assert.equal(res.fields.QD账号, undefined, '没找到产品时不该给 QD 结论');
+    assert.deepEqual(Object.values(res.fields), ['示例产品 A', '示例产品 B'], '把可见产品列出来让人挑');
   });
 });

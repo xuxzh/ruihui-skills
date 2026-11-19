@@ -36,7 +36,7 @@
 
 ## 管理员：内网地址与分发
 
-- **地址从哪来**：写在技能包内的 `config.local.json`（`zentaoWebUrl` = 禅道站点地址，同时用于换令牌与拼单据链接；`zentaoCli` = 官方禅道 CLI 的版本锁）。该文件**进仓库**、随技能包一起分发（见 [ADR-0005](docs/adr/0005-禅道地址进版本库.md)）：地址本身不是凭据，内网 IP 也不从公网可达。团队自研禅道 MCP 的地址不再进技能链路，也不在这个文件里。
+- **地址从哪来**：写在技能包内的 `config.local.json`（`zentaoWebUrl` = 禅道站点地址，同时用于换令牌与拼单据链接；`zentaoCli` = 官方禅道 CLI 的版本锁；`mcpUrl` = 团队自研禅道 MCP 的地址）。该文件**进仓库**、随技能包一起分发（见 [ADR-0005](docs/adr/0005-禅道地址进版本库.md)）：地址本身不是凭据，内网 IP 也不从公网可达。`mcpUrl` 只是留给终端用户自己手动查看用的地址来源——团队自研禅道 MCP 已降级为「给人手动查看」，技能代码不读它、不依赖它、不登记它。
 - **地址用 IP 而不是域名**：公司没有内网 DNS 域名可指禅道；地址随网络调整时改 `config.local.json` 再分发一次。
 - **分发渠道**：公网 `skills.sh` 为主——`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`；备用：内网 Git（`git clone` 后复制目录）、NAS / 对象存储（下载压缩包后解压）、公司软件中心（点安装）、终端管理（推到用户机器）。
 - **本仓库不包含任何账号或凭据**；扫描器允许内网地址出现在 `config.local.json`，出现在别处一律 fail。
@@ -80,7 +80,7 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 
 ## 前置条件：官方禅道 CLI + 本人凭据
 
-`rh-product-feedback` 只走**一条**接入通道：官方禅道 CLI（npm 包 `zentao-cli`，版本锁在技能包 `config.local.json` 的 `zentaoCli`）。没有第二条通道，也不需要登记禅道 MCP。
+`rh-product-feedback` 只走**一条**接入通道：官方禅道 CLI（npm 包 `zentao-cli`，版本锁在技能包 `config.local.json` 的 `zentaoCli`）。没有第二条通道，也不需要登记禅道 MCP（`config.local.json` 里的 `mcpUrl` 只是给人手动查看用的地址来源，技能不读它）。
 
 - 前置是 Node.js 18+ 与 `zentao` 命令在 PATH 里；版本对不上时按版本锁重装。
 - 凭据放在你自己的机器上（**不写进本仓库**）：默认用禅道账号 + 密码，业务用户不必先去生成令牌。

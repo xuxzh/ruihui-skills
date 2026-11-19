@@ -87,6 +87,23 @@ function copyFile(from, to) {
 }
 
 /**
+ * 禅道 MCP 地址：降级为「给人手动查看」后仍随包分发——终端用户想自己登记
+ * 那条 MCP 时需要知道地址。技能代码不读它、不依赖它、也不登记它（唯一通道仍是官方禅道 CLI）。
+ */
+function readPackageMcpUrl() {
+  const localConfig = path.join(SKILL_DIR, 'config.local.json');
+  if (!fs.existsSync(localConfig)) return '';
+  try {
+    const config = JSON.parse(fs.readFileSync(localConfig, 'utf8'));
+    const url = String(config.mcpUrl ?? '').trim();
+    return /^https?:\/\//.test(url) ? url : '';
+  } catch {
+    // 配置坏了就当没预置，不阻断打包
+    return '';
+  }
+}
+
+/**
  * 随包默认产品：从技能目录里的 config.local.json 读，管理员预置后随包分发。
  * 没预置就是空位（id 为 null），技能会当没设默认产品处理。
  */
@@ -166,6 +183,8 @@ function buildPackage(args) {
   }
 
   const packageConfig = { zentaoWebUrl, zentaoCli: readPackageZentaoCli(), defaultProduct: readPackageDefaultProduct() };
+  const mcpUrl = readPackageMcpUrl();
+  if (mcpUrl) packageConfig.mcpUrl = mcpUrl;
   const bugAssignee = readPackageBugAssignee();
   if (bugAssignee !== undefined) packageConfig.bugAssignee = bugAssignee;
   fs.writeFileSync(

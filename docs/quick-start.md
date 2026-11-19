@@ -49,7 +49,7 @@ bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
 **不想让技能常驻、只想试一次**：用 skills CLI 的 `use`（技能落在临时目录），把下面这段发给 Agent：
 
 ```
-用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback` 拿到这个技能的说明并照着做：把它输出的完整内容先存到临时文件再读；它给的 supporting-files 目录就是技能目录，`SKILL.md` 里的相对路径都从那里解析。然后按其中「0. 环境自检」把官方禅道 CLI 装成技能包里钉住的固定版本并校验，再告诉我怎么写入我自己的账号密码。
+用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback` 拿到这个技能的说明并照着做：把它输出的完整内容先存到临时文件再读；它给的 supporting-files 目录就是技能目录，`SKILL.md` 里的相对路径都从那里解析。然后按其中「0. 接入自检」把官方禅道 CLI 装成技能包里钉住的固定版本并校验，再告诉我怎么写入我自己的账号密码。
 ```
 
 ## 更新技能
