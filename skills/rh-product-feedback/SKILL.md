@@ -48,7 +48,7 @@ node <技能目录>/scripts/zentao-write.mjs bug-create --payload-file /tmp/rh-p
 
 ## 术语
 
-- **终端用户**：当前对话里提出诉求的那个人；**禅道账号**是他的禅道登录身份（账号名 + 密码或令牌），单据留痕在它名下。
+- **终端用户**：当前对话里提出诉求的那个人；**禅道账号**是他的禅道登录身份（账号名 + 密码或令牌），单据留痕在它名下；反馈单的**反馈者**（`feedbackBy`）指的也是他——实测禅道不自动记录这个字段，建单时由入口脚本显式填上。
 - **可见范围**：当前禅道账号能看到的产品的集合；单据只能落在这里面，查重也只覆盖这里面。
 - **随包默认产品**：写在技能包 `config.local.json` 里的公司级默认产品，所有装了这个包的人共享同一份；不是用户自己选的，用它建单前要确认一句。
 - **本机默认产品**：终端用户自己设的默认产品，存在他机器的偏好文件 `~/.config/rh-zentao/preferences.json`，只对本人生效，**绝不写进技能包**（那会随包分发给所有人）。
@@ -58,7 +58,7 @@ node <技能目录>/scripts/zentao-write.mjs bug-create --payload-file /tmp/rh-p
 - **写入脚本**：随包的写单据脚本（`scripts/zentao-write.mjs`），换用户令牌、包 payload、只发一次请求，只把结果 JSON 交给 Agent。
 - **用户令牌**：本机凭据换到的、属于当前禅道账号的令牌；随包脚本带着它访问禅道 MCP，单据就留在这个账号名下。
 - **草稿**：写库前展示给终端用户确认的结构化内容。
-- **回读**：写入后用返回的 ID 重新读取，核对内容与操作流水。
+- **回读**：写入后用返回的 ID 重新读取，核对内容与操作流水；**提交人**核对看的是**创建者**字段 `openedBy`（反馈单与缺陷单都是它），不是反馈者字段 `feedbackBy`。
 
 ## 0. 会话第一步：环境自检
 
@@ -125,12 +125,12 @@ node <技能目录>/scripts/zentao-write.mjs bug-create --payload-file /tmp/rh-p
 写入走随包脚本（**不要调宿主里的禅道 MCP 工具**：它的身份是服务端配置的固定账号，单据会留痕在那个账号名下）。载荷先写进一个临时 JSON 文件，再交给脚本——**正文只走文件，不进命令行参数**；文件里放请求体本身，**不要再套一层 `payload`**。临时文件放本机临时目录（macOS / Linux 用 `/tmp/rh-zentao-payload.json`，Windows 用 `%TEMP%\rh-zentao-payload.json`），用完删掉。
 
 ```bash
-node <技能目录>/scripts/zentao-write.mjs feedback-create --payload-file /tmp/rh-payload.json
-node <技能目录>/scripts/zentao.mjs       bug-create      --payload-file /tmp/rh-payload.json
+node <技能目录>/scripts/zentao.mjs feedback-create --payload-file /tmp/rh-zentao-payload.json
+node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-zentao-payload.json
 ```
 
 ```json
-{"product": 42, "title": "<标题>", "desc": "<描述全文>", "type": "bug"}
+{"product": 42, "title": "<标题>", "type": "bug", "desc": "<描述全文>"}
 {"productID": 42, "title": "<标题>", "openedBuild": ["trunk"], "severity": 3, "pri": 3, "type": "codeerror", "steps": "<正文 HTML>"}
 ```
 
@@ -138,12 +138,12 @@ node <技能目录>/scripts/zentao.mjs       bug-create      --payload-file /tmp
 - **只发一次调用**：脚本只发一次请求；禅道创建接口没有幂等键，重发会产生两条记录。
 - 字段名与枚举见 [references/zentao-cli.md](references/zentao-cli.md)，两条路径的差异见 [3. 反馈单与缺陷单的差异](#3-反馈单与缺陷单的差异)。
 - **缺陷单的负责人按「终端用户明说 > 本机默认 > 随包默认 > 代码兜底」解析**，随包默认是**不指派**（`""`），代码兜底是**产品 QD**。终端用户明说指派给谁 → 载荷写 `assignedTo`；否则**不要写这个字段**，由入口脚本按配置补（`""` 不指派 / `"qd"` 不带该字段、交给产品 QD / 账号名指给该账号）。配置见 [references/setup.md](references/setup.md)「默认负责人」。
-- `source` / `module` / `feedbackBy` 保持不填：反馈者由禅道按当前禅道账号自动记录，填了反而与实际留痕矛盾。
+- **反馈单的字段**：`feedbackBy`（反馈者）**由入口脚本显式填当前禅道账号**——这台实例的禅道**不自动记录反馈者**（实测 `feedbackBy` 恒为空），不显式填就永远没有反馈者；`source` / `module` **不填**；`product` 必须写**整数**（字符串形态会被服务端静默忽略）；`desc` 是**纯文本**描述，不写 HTML 标签。反馈单的 `feedback-create` 输出一行 JSON：`{"ok":true,"kind":"feedback","id":421,"title":"…","status":"active","product":42,"type":"bug","feedbackBy":"<账号>","openedBy":"<账号>","submitterField":"openedBy","submitterIsCurrentAccount":true,"url":"<禅道 Web 地址>/feedback-view-421.html","verified":"readback"}`——只发一次，写完自己按编号回读核对（产品、标题、完整正文、反馈者、创建者字段、流水里的「创建」）；`verified` 说明结论来自回读（`readback`）还是超时后的查询核实（`query`）；回读对不上 → `ok:false` + `created:true` + `mismatches`，**不要重建**；`uncertain:true` → 按「结果不确定」处理（见 2.6）。
 - 给了截图 → 建单成功后按 [6](#6-正文带图片) 传图并更新正文。
 
 ### 2.6 回读校验
 
-用返回的 `id` 调查询器 `feedback --id <ID>` / `bug --id <ID>`（**不要用 `get_issues_issueID`**——它解析不了缺陷 ID），核对：产品、标题、完整描述（缺陷单是 `steps`，比较前先剥掉 HTML 标签并归一化换行与空白），以及 `actions` 里**本次新增**了 `opened`（历史上存在过不算）。缺陷单另核对 `openedBuild`（列表显示「主干」、详情显示 `trunk`，两者指同一个值）与 `severity` / `pri`，以及 `assignedTo` 是否与生效值一致（生效值是产品 QD 就用查询器 `qd` 取 QD 账号对照，对不上如实说明，不要改单据）。缺陷单的 `bug-create` 已经按返回编号做完这套核对（输出里的 `verified` 说明结论是回读还是查询核实），终端用户要细节时再调查询器 `bug --id <ID>`。
+用返回的 `id` 调查询器 `feedback --id <ID>` / `bug --id <ID>`（**不要用 `get_issues_issueID`**——它解析不了缺陷 ID），核对：产品、标题、完整描述（缺陷单是 `steps`，比较前先剥掉 HTML 标签并归一化换行与空白），以及 `actions` 里**本次新增**了 `opened`（历史上存在过不算）。缺陷单另核对 `openedBuild`（列表显示「主干」、详情显示 `trunk`，两者指同一个值）与 `severity` / `pri`，以及 `assignedTo` 是否与生效值一致（生效值是产品 QD 就用查询器 `qd` 取 QD 账号对照，对不上如实说明，不要改单据）。缺陷单的 `bug-create`、反馈单的 `feedback-create` 已经按返回编号做完这套核对（输出里的 `verified` 说明结论是回读还是查询核实），终端用户要细节时再调查询器 `bug --id <ID>` / `feedback --id <ID>`。
 
 任一不一致 → 按 [references/error-handling.md](references/error-handling.md) 处理：先查后报，不重复创建。
 
@@ -153,11 +153,11 @@ node <技能目录>/scripts/zentao.mjs       bug-create      --payload-file /tmp
 
 ### 2.7 交付
 
-给出单据 ID、标题、当前状态、负责人（说清是谁、怎么来的：终端用户指名 / 本机默认 / 随包默认未指派 / 产品 QD）、提交人（当前禅道账号本人）、**禅道直达链接**，以及下一步建议（等待评审 / 需要补充什么信息 / 与哪条既有单重复）。输出样例见 [references/workflow.md](references/workflow.md)。
+给出单据 ID、标题、当前状态、负责人（说清是谁、怎么来的：终端用户指名 / 本机默认 / 随包默认未指派 / 产品 QD）、提交人（当前禅道账号本人）、**禅道直达链接**，以及下一步建议（等待评审 / 需要补充什么信息 / 与哪条既有单重复）。反馈单还要一并说清**反馈者**（`feedbackBy`）与**创建者**（`openedBy`）是不是都是本人。输出样例见 [references/workflow.md](references/workflow.md)。
 
 **链接**：`<禅道 Web 地址>/feedback-view-<反馈 ID>.html` 或 `<禅道 Web 地址>/bug-view-<缺陷 ID>.html`。禅道 Web 地址读技能包内 `config.local.json` 的 `zentaoWebUrl`；读不到或该字段为空 → **不给链接**，只给 ID，并如实说明「技能包里没有配置禅道 Web 地址，给不了直达链接」。不要拿 MCP 地址拼链接，也不要凭印象编一个；给完整 URL，用户点开就能看，不要只写「去禅道看 #421」。
 
-**提交人必须核对**：反馈单看 `feedbackBy`，缺陷单看 `openedBy`；它应当等于当前禅道账号（写入脚本带的是当前账号的令牌）。不是本人时，如实说明「禅道里这条单据的提交人是 <另一个人>」——通常是单据走了服务端固定身份那条路（见 [references/zentao-mcp.md](references/zentao-mcp.md)），不要把服务端的提交人当成终端用户本人。
+**提交人必须核对**：反馈单与缺陷单都看 `openedBy`（**创建者**字段）——实测这台实例的禅道**不自动记录反馈者**（`feedbackBy` 恒为空），拿它核对会得出「提交人是别人」的错结论；`openedBy` 应当等于当前禅道账号（脚本带的是当前账号的令牌）。反馈者字段 `feedbackBy` 是业务字段，脚本建单时会显式填成当前账号，回读为空也不影响提交人结论。不是本人时，如实说明「禅道里这条单据的提交人是 <另一个人>」——通常是单据走了服务端固定身份那条路（见 [references/zentao-mcp.md](references/zentao-mcp.md)），不要把服务端的提交人当成终端用户本人。
 
 ## 3. 反馈单与缺陷单的差异
 
@@ -165,11 +165,11 @@ node <技能目录>/scripts/zentao.mjs       bug-create      --payload-file /tmp
 | --- | --- | --- |
 | 产品字段 | `product`（整数） | `productID`（整数） |
 | 正文字段 | `desc`（纯文本） | `steps`（结构化 HTML，没有 `desc`） |
-| 禅道字段 | 不填 `source` / `module` / `feedbackBy`；`type` 取 `bug` / `story` / `advice` | `severity` 3、`pri` 3、`openedBuild` `["trunk"]`、`execution` 与 `module` 不填——**不追问终端用户**，按 [references/bug-templates.md](references/bug-templates.md) 的「字段默认值」填；他明说的以他说的为准，并在草稿里标出「用户指定」 |
+| 禅道字段 | `source` / `module` 不填；`feedbackBy`（反馈者）由入口脚本显式填当前禅道账号（禅道不自动记录）；`product` 写整数；`type` 取 `bug` / `story` / `advice` | `severity` 3、`pri` 3、`openedBuild` `["trunk"]`、`execution` 与 `module` 不填——**不追问终端用户**，按 [references/bug-templates.md](references/bug-templates.md) 的「字段默认值」填；他明说的以他说的为准，并在草稿里标出「用户指定」 |
 | 项目 | 不挂 | 与产品同名的项目 → 挂它；没有同名项目而可见项目只有一个 `doing` 项目 → 挂它；多个 `doing` 项目且无同名 → 不挂并在草稿注明「未指定项目」；他明说「这是 XX 项目的」→ 挂对应的（先用查询器 `projects` 确认存在）。禅道的项目列表不按产品过滤（`get_projects` 传 `productID` 也返回全部可见项目） |
 | 选品 | 本机默认产品一层 | 多一层随包默认产品：用它建单前确认一句「默认记到 <产品名> 对吗？」 |
 | 草稿声明 | — | 必须写「即将创建的是禅道正式缺陷单（会进入开发流程），不是反馈单。」 |
-| 写入与回读 | 写入脚本 `feedback-create`，写完再调查询器 `feedback --id` 核对 | 入口脚本 `bug-create`：只发一次，写完自己按编号回读核对（输出 `assigneeSource` 与 `verified`） |
+| 写入与回读 | 入口脚本 `feedback-create`：只发一次，写完自己按编号回读核对（输出 `feedbackBy` / `openedBy` 与 `verified`） | 入口脚本 `bug-create`：只发一次，写完自己按编号回读核对（输出 `assigneeSource` 与 `verified`） |
 | 负责人 | 不指派 | 终端用户明说 > 本机默认 > 随包默认（未指派）> 代码兜底（产品 QD）；交付要说清来源 |
 | 附带反馈单 | — | 不附带：禅道没有「反馈转缺陷」的关联字段，一次诉求只建一张单 |
 
@@ -212,7 +212,7 @@ node <技能目录>/scripts/zentao-upload.mjs --file <图片路径> --object-typ
 2. **写只用随包写入脚本**：建单与更新一律走 `scripts/zentao-write.mjs`，它带当前账号的令牌；宿主里的禅道 MCP 工具是服务端固定身份，不用于写单据。
 3. **写入后回读**：按 ID 重新读取并核对内容，「保存成功」的文本不作为落库证据；补充说明还要确认本次**新增**了 `edited` 流水。
 4. **不确定先查**：超时、连接中断、返回与预期不符时，先查询核实再决定下一步，同一份内容不重复创建——禅道创建无幂等，盲目重试会造重复单。结果不确定时只认「查重基线之外、唯一、回读完全一致」的新记录；认不准或复查不完整就报未确认交回终端用户，不把「没查到」说成「没创建」。
-5. **身份**：一切以**当前禅道账号**进行（随包脚本用本机凭据换当前账号的令牌）。说「这是你提交的」只在回读确认提交人（`feedbackBy` / `openedBy`）是当前禅道账号时才能说；提交人是别人时如实说是别人。`openedbyme` 指的是当前禅道账号本人提交的记录。
+5. **身份**：一切以**当前禅道账号**进行（随包脚本用本机凭据换当前账号的令牌）。说「这是你提交的」只在回读确认**创建者**字段 `openedBy`（反馈单与缺陷单都是它）是当前禅道账号时才能说；反馈者字段 `feedbackBy` 是业务字段，禅道不自动记录它，**不能拿它核对提交人**。提交人是别人时如实说是别人。`openedbyme` 指的是当前禅道账号本人提交的记录。
 6. **凭据与地址**：账号、密码、令牌由终端用户本人在自己的机器上写入接入凭据文件——**凭据必须由本人输入**，Agent 不代劳；不在对话里索要、不在回复里回显、不写进任何仓库文件。禅道地址只从 `config.local.json` 读，不主动回显具体值；唯一的例外是 2.7 交付单据链接，那一次给完整 URL。
 7. **权限边界**：当前账号看不见的产品与单据就是看不见，不绕过禅道权限去达成写入目的；默认产品不可见时如实说明并指出该找谁开权限，不静默换产品建单。
 8. **不改技能包自身的文件**：未经终端用户明确要求修改技能，不动 `SKILL.md`、`references/`、`scripts/`、`config.local.json` 里的任何文件。终端用户把「希望这里能记住上次的筛选条件」这类话说成对产品的期望时，按**给产品的建议**处理（类型 `advice`），不是给技能加功能；真要改技能，请他到仓库提 issue。

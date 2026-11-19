@@ -122,22 +122,34 @@
 
 ### 5. 创建
 
+先把载荷写进临时文件，再交入口脚本；**正文只走文件，不进命令行参数**。
+
 ```json
-{"payload": {"product": 101, "title": "设备列表导出按钮点击后无响应", "desc": "<草稿描述全文>", "type": "bug"}}
+{"product": 101, "title": "设备列表导出按钮点击后无响应", "type": "bug", "desc": "<草稿描述全文>"}
 ```
 
-只发一次。
+```bash
+node <技能目录>/scripts/zentao.mjs feedback-create --payload-file /tmp/rh-zentao-payload.json
+```
+
+- `product` 写**整数**（字符串形态会被服务端静默忽略）；`desc` 是**纯文本**描述，不写 HTML 标签；`source` / `module` 不填。
+- 反馈者 `feedbackBy` **不用你填**：入口脚本按当前禅道账号显式补上——这台实例的禅道不自动记录反馈者，不显式写就永远没有反馈者。载荷里填了别的账号会被拒绝。
+- **只发一次**：脚本只发一次创建请求，禅道创建没有幂等键，不要自己再补一次。临时文件由脚本用完即删。
+- 反馈单**不附带建缺陷单**：禅道没有「反馈转缺陷」的关联字段，一次诉求只建一张单。
 
 ### 6. 回读
 
-查询器 `feedback --id <ID>`（用返回的 `id`）→ 核对 `product` / `title` / 完整 `desc` / `actions` 里的 `opened`。
+`feedback-create` 已经按返回的编号做过回读核对：`product` / `title` / 完整 `desc`（纯文本，只归一化换行与行尾空白）/ 反馈者 / **创建者字段 `openedBy`** / `actions` 里**本次新增**的 `opened`（历史上存在过不算）。它把结论、交付要素与核对依据打成一行 JSON：
 
 ```
-✓ 创建成功，反馈 #421
-状态：wait（待评审）
-负责人：未指派
-操作流水：opened（2026-03-11 10:22）
+{"ok":true,"kind":"feedback","id":421,"title":"设备列表导出按钮点击后无响应","status":"active","product":101,"type":"bug","feedbackBy":"zhangsan","openedBy":"zhangsan","submitterField":"openedBy","submitterIsCurrentAccount":true,"url":"<禅道 Web 地址>/feedback-view-421.html","verified":"readback"}
 ```
+
+- **提交人核对看的是创建者字段 `openedBy`**：这台实例的禅道不自动记录反馈者（`feedbackBy` 可能恒为空），拿它核对会得出「提交人是别人」的错结论。回读里取不到 `openedBy`（字段名与本实例不一致）时，`mismatches` 里会出现「创建者字段（openedBy）」——**如实报告，不要猜哪个字段是提交人**。
+- `verified: "readback"` → 回读通过。`verified: "query"` → 创建回执丢了（超时 / 断连），结论来自重查该产品后唯一一致的新记录，**交付时要说明「编号来自查询核实」**。
+- `ok:false` + `created:true` + `mismatches` → 单据建出来了但内容对不上：**不要重建**，把不一致项与单据现状告诉终端用户。
+- `ok:false` + `uncertain:true` → 是否建成**未确认**：不重发，把 `candidates` 列给终端用户并请他自己在禅道里看一眼；**不要把「没查到」说成「没创建」**。
+- 终端用户要细节时，再用查询器 `feedback --id <ID>` 读一遍正文、流水与历史。
 
 回读不到或内容不一致 → 见 `error-handling.md`，不要重新创建。
 
@@ -160,10 +172,16 @@
 - 标题：设备列表导出按钮点击后无响应
 - 类型：Bug
 - 当前状态：wait（待评审），未指派负责人
-- 提交人：以回读到的 `feedbackBy` 为准（正常就是终端用户本人；不是本人要如实说明原因，见 `zentao-mcp.md` 的「身份与认证」）
+- 反馈者：zhangsan（禅道里 `feedbackBy` 记的就是你本人）
+- 提交人：zhangsan（回读到的 `openedBy`，创建者字段，就是你自己）
 - 链接：<禅道 Web 地址>/feedback-view-421.html（读不到 `zentaoWebUrl` 就不给这一行，只给编号）
 下一步：等评审结果；要补充信息随时说「补充反馈 #421 ...」
 ```
+
+- **反馈者与创建者都是本人** → 说「这条反馈单的反馈者与提交人都是你」。
+- **两者不一致**（如反馈者字段记的是 `zhangsan`、创建者是 `lisi`）→ 如实说「反馈者字段记录的是 zhangsan，创建者（留痕主体）是 lisi」，**不粉饰**。
+- `submitterIsCurrentAccount` 为 `false` → 禅道里这条单据的提交人是别人，如实说明（见 `zentao-mcp.md` 的「身份与认证」），不要把服务端的提交人当成终端用户本人。
+- `url` 为 null（技能包没配 `zentaoWebUrl`）就不给链接，只给编号并说明原因。
 
 ## F1b 提交缺陷单
 
