@@ -751,6 +751,265 @@ Object.assign(COMMANDS, {
 });
 // ----- 建反馈单 -----
 // ----- 更新单据 -----
+
+// 追加草稿的分隔行：草稿 = 原文 + 分隔行 + 标注 + 追加段落。
+// 文档（references/workflow.md F4）给终端用户看的草稿与脚本拆草稿用的是同一条线。
+const APPEND_SEPARATOR = /^[─—\-=]{3,}$/;
+
+// 两种单据的正文载体与对应的禅道更新动作
+const UPDATE_KINDS = {
+  feedback: { label: '反馈单', bodyField: 'desc', cli: 'feedback', readFields: 'id,title,product,status,desc,actions' },
+  bug: { label: '缺陷单', bodyField: 'steps', cli: 'bug', readFields: 'id,title,product,status,steps,actions' },
+};
+
+/**
+ * 正文归一化：比较前统一实体与空白，服务端的排版差异（补 <p>、写 &nbsp;、改换行）不算内容差异。
+ * 缺陷单正文是 HTML，先剥标签；反馈单正文是纯文本，只归一化空白。
+ */
+function normalizeBody(text, kindName) {
+  const raw = kindName === 'bug' ? plainText(text) : String(text ?? '');
+  return raw
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .filter((line, index, arr) => line !== '' || (index > 0 && arr[index - 1] !== ''))
+    .join('\n')
+    .trim();
+}
+
+/**
+ * 拆追加草稿：原文部分 + 追加部分（分隔行及其之后）。
+ * 用 expectedBody（用户确认时看到的那份原文）定位分界：草稿的原文部分必须与它一致。
+ */
+function splitAppendDraft(draft, expectedBody, kindName) {
+  const lines = String(draft).split('\n');
+  const cuts = [];
+  lines.forEach((line, index) => {
+    if (APPEND_SEPARATOR.test(line.trim())) cuts.push(index);
+  });
+  if (!cuts.length) {
+    return { error: '草稿里找不到分隔行：追加草稿要是「原文 + 分隔行 + 标注 + 追加段落」' };
+  }
+  for (const cut of cuts) {
+    const original = lines.slice(0, cut).join('\n');
+    if (normalizeBody(original, kindName) === normalizeBody(expectedBody, kindName)) {
+      return { original, appended: lines.slice(cut).join('\n') };
+    }
+  }
+  return { error: '草稿的原文部分与 expectedBody 对不上：expectedBody 要写用户确认时看到的那份原文' };
+}
+
+/**
+ * 读更新载荷：请求体 + expectedBody（用户确认时看到的那份原文，写前复核的基准）。
+ */
+function readUpdatePayload(kindName, file) {
+  const kind = UPDATE_KINDS[kindName];
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    throw new Error(`读不到载荷文件：${err?.message || err}`);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error('载荷文件不是合法 JSON：放更新请求体本身，不要再套一层 payload');
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('载荷文件里要放一个 JSON 对象（更新请求体）');
+  }
+  const body = payload[kind.bodyField];
+  if (typeof body !== 'string' || !body.trim()) {
+    throw new Error(`载荷缺 ${kind.bodyField}：要写完整的更新正文（原文 + 分隔行 + 标注 + 追加段落）`);
+  }
+  if (typeof payload.expectedBody !== 'string') {
+    throw new Error('载荷缺 expectedBody：写前复核要知道用户确认时看到的那份原文');
+  }
+  return { body, expectedBody: payload.expectedBody, title: payload.title, product: payload.product };
+}
+
+/** 按编号读一条单据（这条路径要用的字段：正文、标题、产品、状态、流水）。 */
+async function readUpdateRecord(kindName, id, env) {
+  const kind = UPDATE_KINDS[kindName];
+  const { data } = await runCli([kind.cli, 'get', String(id), '--fields', kind.readFields], env);
+  const record = data && typeof data === 'object' ? data : {};
+  return {
+    body: String(record[kind.bodyField] ?? ''),
+    title: String(record.title ?? ''),
+    product: record.product ?? '',
+    status: String(record.status ?? ''),
+    actions: rowsOf(record.actions),
+  };
+}
+
+/** 流水基线：写前复核读到的动作 ID。 */
+function actionIds(actions) {
+  return new Set(rowsOf(actions).map((action) => String(action.id)));
+}
+
+/** 本次新增的「编辑」：基线之外、动作是 edited 的那几条。历史上存在过 edited 不算证据。 */
+function newEditedActions(actions, baseline) {
+  return rowsOf(actions).filter((action) => !baseline.has(String(action.id)) && String(action.action) === 'edited');
+}
+
+/** 回读核对：完整预期正文归一化后逐字比较，并确认本次新增了「编辑」。 */
+function updateMismatches(expectedBody, before, after, kindName) {
+  const mismatches = [];
+  if (normalizeBody(after.body, kindName) !== normalizeBody(expectedBody, kindName)) mismatches.push('正文');
+  if (!newEditedActions(after.actions, actionIds(before.actions)).length) mismatches.push('操作流水里本次新增的「编辑」');
+  return mismatches;
+}
+
+/** 写前复核发现单据被改过：停手，把当前原文与重新合并后的草稿交回终端用户。 */
+function reportUpdateConflict(kindName, id, changed, current, mergedDraft) {
+  const kind = UPDATE_KINDS[kindName];
+  const message =
+    `这条${kind.label}在你确认期间被改过（${changed.join('、')}变了），我还没写入。` +
+    '下面是它现在的原文和我重新合并后的草稿，确认后我再更新。';
+  process.stderr.write(`错误：${message}\n`);
+  out(
+    JSON.stringify({
+      ok: false,
+      kind: kindName,
+      id: Number(id),
+      conflict: true,
+      changed,
+      currentBody: current.body,
+      currentBodyText: normalizeBody(current.body, kindName),
+      mergedDraft,
+      mergedDraftText: normalizeBody(mergedDraft, kindName),
+      message,
+    })
+  );
+  process.exitCode = 1;
+}
+
+/** 单据写进去了但回读对不上：不重放更新，把现状交回终端用户。 */
+function reportUpdateMismatch(kindName, id, mismatches) {
+  const kind = UPDATE_KINDS[kindName];
+  const message = `回读核对没通过（${kind.label} #${id} 已经写入）：${mismatches.join('、')}与预期不一致。不要重放更新，先把单据现状告诉终端用户。`;
+  process.stderr.write(`错误：${message}\n`);
+  out(JSON.stringify({ ok: false, kind: kindName, id: Number(id), updated: true, mismatches, message }));
+  process.exitCode = 1;
+}
+
+/** 结果不确定：只读核实过还是没核实成，都不重放更新。 */
+function reportUpdateUncertain(kindName, id, message, extra = {}) {
+  process.stderr.write(`错误：${message}\n`);
+  out(JSON.stringify({ ok: false, kind: kindName, id: Number(id), uncertain: true, ...extra, message }));
+  process.exitCode = 1;
+}
+
+/**
+ * 结果不确定（超时 / 断连 / 读不懂响应）时只读核实：正文与预期一致、且本次新增了「编辑」，
+ * 才算写进去了；核实不了就报未确认。任何情况下都不重放更新。
+ */
+async function verifyUpdateByRead(kindName, id, env, bodyToWrite, before, why) {
+  let after;
+  try {
+    after = await readUpdateRecord(kindName, id, env);
+  } catch (err) {
+    reportUpdateUncertain(kindName, id, `${why}；回读核实也失败（${err?.message || err}），这次补充说明是否写进去未确认。不要重放更新。`);
+    return;
+  }
+  const mismatches = updateMismatches(bodyToWrite, before, after, kindName);
+  if (!mismatches.length) {
+    out(
+      JSON.stringify({
+        ok: true,
+        kind: kindName,
+        id: Number(id),
+        title: after.title,
+        status: after.status,
+        updated: true,
+        verified: 'query',
+        newActions: newEditedActions(after.actions, actionIds(before.actions)).map((action) => String(action.action)),
+      })
+    );
+    return;
+  }
+  reportUpdateUncertain(kindName, id, `${why}；回读核实发现${mismatches.join('、')}与预期不一致，这次补充说明是否写进去未确认。不要重放更新。`, {
+    mismatches,
+  });
+}
+
+/**
+ * 更新单据（补充说明走这条通道）：写前复核 → 只发一次更新 → 回读核对。
+ * 禅道没有「只评论不改状态」的接口，补充说明就是改正文；
+ * 禅道更新接口无条件覆盖、没有版本号 CAS，所以写入前要再读一次核对原文。
+ */
+async function cmdUpdate(kindName, env, opts) {
+  const kind = UPDATE_KINDS[kindName];
+  const file = String(opts['payload-file'] ?? '').trim();
+  if (!file) throw usage(`node zentao.mjs ${kindName}-update --id <单据ID> --payload-file <路径>`);
+  const id = recordIdOf(opts, `${kindName}-update`);
+  const payload = readUpdatePayload(kindName, file);
+
+  const draft = splitAppendDraft(payload.body, payload.expectedBody, kindName);
+  if (draft.error) throw new Error(draft.error);
+
+  // 写前复核：再读一次当前单据，正文/标题/产品与用户确认时看到的那份对不上就停手
+  const current = await readUpdateRecord(kindName, id, env);
+  const changed = [];
+  if (normalizeBody(current.body, kindName) !== normalizeBody(payload.expectedBody, kindName)) changed.push('正文');
+  if (payload.title !== undefined && String(payload.title) !== current.title) changed.push('标题');
+  if (payload.product !== undefined && Number(payload.product) !== Number(current.product)) changed.push('产品');
+  if (changed.length) {
+    // 停手：把当前原文与重新合并后的草稿交回终端用户重新确认，不写入
+    const mergedDraft = `${current.body}\n\n${draft.appended}`;
+    reportUpdateConflict(kindName, id, changed, current, mergedDraft);
+    return;
+  }
+
+  // 写进去的正文：服务端那份当前原文原样保留 + 追加段落（追加段落单独标出来）
+  const bodyToWrite = `${current.body}\n\n${draft.appended}`;
+  // 交给禅道的请求体：标题与产品沿用当前值；正文只走文件，不进命令行参数
+  const cliPayload =
+    kindName === 'feedback'
+      ? { product: Number(current.product), title: current.title, desc: bodyToWrite }
+      : { title: current.title, steps: bodyToWrite };
+  fs.writeFileSync(file, JSON.stringify(cliPayload), { mode: 0o600 });
+
+  try {
+    try {
+      // 只发一次更新：禅道更新接口无条件覆盖，重放就是把同一份内容再盖一遍
+      await runCli([kind.cli, 'update', String(id), '--data', `@${file}`], env);
+    } catch (err) {
+      if (!cliOutcomeUnknown(err)) throw err;
+      await verifyUpdateByRead(kindName, id, env, bodyToWrite, current, `更新请求结果不确定（${err.message}）`);
+      return;
+    }
+
+    const after = await readUpdateRecord(kindName, id, env);
+    const mismatches = updateMismatches(bodyToWrite, current, after, kindName);
+    if (mismatches.length) {
+      reportUpdateMismatch(kindName, id, mismatches);
+      return;
+    }
+    out(
+      JSON.stringify({
+        ok: true,
+        kind: kindName,
+        id: Number(id),
+        title: after.title,
+        status: after.status,
+        updated: true,
+        verified: 'readback',
+        newActions: newEditedActions(after.actions, actionIds(current.actions)).map((action) => String(action.action)),
+      })
+    );
+  } finally {
+    // 临时载荷文件用完删掉：正文不留在磁盘上
+    fs.rmSync(file, { force: true });
+  }
+}
+
+Object.assign(COMMANDS, {
+  'feedback-update': { run: (env, opts) => cmdUpdate('feedback', env, opts), options: ['id', 'payload-file'] },
+  'bug-update': { run: (env, opts) => cmdUpdate('bug', env, opts), options: ['id', 'payload-file'] },
+});
 // ----- 传图 -----
 // ===== 查重子命令 =====
 
