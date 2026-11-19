@@ -419,11 +419,18 @@ node <技能目录>/scripts/zentao.mjs feedbacks --product 29 --status wait  # �
 
 ## F4 补充说明
 
-反馈单改 `desc`，缺陷单改 `steps`（追加 HTML 段落），其余步骤一样。
+禅道没有「只评论不改状态」的接口：关闭、激活、解决都会改单据状态，所以补充说明只能**改正文**（反馈单改 `desc`，缺陷单改 `steps`，追加 HTML 段落），其余步骤一样。整条路径一步不缺：读原文 → 生成追加草稿 → 用户确认 → 写前复核 → 更新 → 回读。
 
-### 追加草稿
+### 1. 读原文
 
-原文完整保留：
+```bash
+node <技能目录>/scripts/zentao.mjs feedback --id 421   # 输出里的 body 就是当前原文
+node <技能目录>/scripts/zentao.mjs bug --id 1936
+```
+
+### 2. 追加草稿
+
+原文完整保留，下面加一行分隔行，再加标注与追加段落：
 
 ```
 <原有 desc 全文>
@@ -436,9 +443,15 @@ node <技能目录>/scripts/zentao.mjs feedbacks --product 29 --status wait  # �
 导出 Excel，文件名格式 yyyyMM设备清单.xlsx
 ```
 
-### 写前复核
+分隔行固定是一行 14 个 `─`，标注行以「【补充说明 · 日期 · 用户口述，AI 整理】」开头。脚本按分隔行把草稿拆成「原文」与「追加段落」两部分，所以草稿里必须有这一行。缺陷单的追加段落（含标注行）写成 HTML 段落（`<p>…</p>`），给用户看时用纯文本版。
 
-用户确认之后、写入之前，再读一次这条反馈，核对产品、标题、原始 `desc` 是否仍与生成草稿时一致。
+### 3. 用户确认
+
+把完整的新正文（原文 + 分隔行 + 标注 + 追加段落）给终端用户看，等他明确确认；没看到草稿就点头的，不算确认。
+
+### 4. 写前复核
+
+载荷里带上 `expectedBody`（用户确认时看到的那份原文）。脚本在写入前会再读一次这条单据，把当前正文、标题、产品与它比对；对不上就**停手**，一个更新请求都不发，把当前原文与重新合并后的草稿交回用户：
 
 ```
 ⚠ 这条反馈在你确认期间被改过，我还没写入。下面是它现在的原文和我重新合并后的草稿，确认后我再更新：
@@ -446,17 +459,33 @@ node <技能目录>/scripts/zentao.mjs feedbacks --product 29 --status wait  # �
 <重新合并后的完整描述>
 ```
 
-### 更新
+脚本输出是一行 JSON：`{"ok":false,"kind":"feedback","id":421,"conflict":true,"changed":["正文"],"currentBody":"…","currentBodyText":"…","mergedDraft":"…","mergedDraftText":"…"}`，退出码非 0。把 `currentBodyText` 与 `mergedDraftText` 念给用户，等他重新确认后再走一遍——这次 `expectedBody` 用当前原文。
 
-```json
-{"payload": {"product": 101, "title": "设备列表导出按钮点击后无响应", "desc": "<原文 + 追加段>"}}
+### 5. 更新
+
+```bash
+node <技能目录>/scripts/zentao.mjs feedback-update --id 421 --payload-file /tmp/rh-payload.json
+node <技能目录>/scripts/zentao.mjs bug-update --id 1936 --payload-file /tmp/rh-payload.json
 ```
 
-`product` 与 `title` 沿用当前值（禅道要求这两个字段）。只发一次更新请求。
+载荷文件里放请求体本身，不要再套一层 `payload`：
 
-### 回读
+```json
+{"product": 101, "title": "设备列表导出按钮点击后无响应", "desc": "<原文 + 分隔行 + 标注 + 追加段落>", "expectedBody": "<用户确认时看到的那份原文>"}
+{"title": "设备列表导出按钮点击后无响应", "steps": "<原文 + 分隔行 + 标注 + 追加段落>", "expectedBody": "<用户确认时看到的那份原文>"}
+```
 
-把回读的 `desc` 与完整预期描述归一化换行后逐字比较，并确认 `actions` 这次**新增**了 `edited`（历史上有过 `edited` 不算）。
+`product` 与 `title` 沿用当前值（禅道要求这两个字段；脚本也会按当前值补齐）。只发一次更新请求；正文只走文件，不进命令行参数。
+
+写进去的正文 = 禅道里那份当前原文（**原样保留**，不重排版）+ 追加段落；草稿里的原文部分只用来核对，不会覆盖服务端那份。
+
+- `expectedBody` 必填：写前复核靠它核对原文，缺了脚本报错、一个请求都不发。
+- 反馈单的 `product` 写数字（字符串禅道会静默忽略）；缺陷单的更新**不能**带 `productID`（禅道 CLI 会报 E2009）。
+- **不要**传空字符串去清字段：禅道 CLI 的更新动作默认 autoFill，会用当前值补齐没显式传的字段。
+
+### 6. 回读
+
+脚本写完自己按编号回读：把正文与**完整预期正文**归一化后逐字比较（缺陷单先剥标签），并确认 `actions` 这次**新增**了 `edited`（历史上有过 `edited` 不算）。
 
 ```
 已更新反馈 #421（追加 1 段说明）
@@ -464,7 +493,11 @@ node <技能目录>/scripts/zentao.mjs feedbacks --product 29 --status wait  # �
 - 操作流水新增：edited（当前禅道账号）
 ```
 
-更新超时或返回无法解析时只读核实，不重放更新；核实不了就说「未确认是否已更新」。
+输出是一行 JSON：`{"ok":true,"kind":"feedback","id":421,"title":"…","status":"active","updated":true,"verified":"readback","newActions":["edited"]}`。
+
+更新超时或返回无法解析时只读核实（脚本会再读一次），不重放更新；核实不了就说「未确认是否已更新」，把现状交回用户。
+
+禅道更新接口无条件覆盖、没有版本号 CAS：写前复核能显著降低覆盖别人内容的风险，但复核与写入之间仍可能有别人改过——发现原文变了就停手。
 
 ## F5 正文带图片
 
