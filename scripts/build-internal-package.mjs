@@ -117,6 +117,22 @@ function readPackageDefaultProduct() {
   return { id: null, name: '' };
 }
 
+/**
+ * 随包默认负责人：从技能目录里的 config.local.json 读，管理员预置后随包分发。
+ * 没预置就不带这个键（技能按缺省走）。
+ */
+function readPackageBugAssignee() {
+  const localConfig = path.join(SKILL_DIR, 'config.local.json');
+  if (!fs.existsSync(localConfig)) return undefined;
+  try {
+    const config = JSON.parse(fs.readFileSync(localConfig, 'utf8'));
+    if (typeof config.bugAssignee === 'string') return config.bugAssignee;
+  } catch {
+    // 配置坏了就当没预置，不阻断打包
+  }
+  return undefined;
+}
+
 function buildPackage(args) {
   const { mcpUrl, zentaoWebUrl, source } = resolveAddresses(args);
   assertHttpUrl(mcpUrl, '禅道 MCP 地址');
@@ -141,9 +157,12 @@ function buildPackage(args) {
     if (name.endsWith('.sh')) fs.chmodSync(to, 0o755);
   }
 
+  const packageConfig = { mcpUrl, zentaoWebUrl, defaultProduct: readPackageDefaultProduct() };
+  const bugAssignee = readPackageBugAssignee();
+  if (bugAssignee !== undefined) packageConfig.bugAssignee = bugAssignee;
   fs.writeFileSync(
     path.join(pkgDir, 'config.local.json'),
-    `${JSON.stringify({ mcpUrl, zentaoWebUrl, defaultProduct: readPackageDefaultProduct() }, null, 2)}\n`,
+    `${JSON.stringify(packageConfig, null, 2)}\n`,
   );
 
   return { pkgDir, source, hasWebUrl: Boolean(zentaoWebUrl) };

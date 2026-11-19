@@ -67,9 +67,9 @@ test('打包产物是一个顶层自洽的技能目录', () => {
     assert.notEqual(name, '.env', '打包产物里不应出现 .env');
   }
 
-  // 接入配置里只有地址与随包默认产品，没有凭据字段
+  // 接入配置里只有地址与随包默认值，没有凭据字段
   const config = JSON.parse(fs.readFileSync(path.join(pkg, 'config.local.json'), 'utf8'));
-  assert.deepEqual(Object.keys(config).sort(), ['defaultProduct', 'mcpUrl', 'zentaoWebUrl']);
+  assert.deepEqual(Object.keys(config).sort(), ['bugAssignee', 'defaultProduct', 'mcpUrl', 'zentaoWebUrl']);
   assert.equal(config.defaultProduct.id, null, '没预置时随包默认产品是空位');
 });
 
@@ -93,6 +93,19 @@ test('打包时带上仓库里预置的随包默认产品', () => {
     fs.readFileSync(path.join(SKILL_DIR, 'config.local.json'), 'utf8'),
   );
   assert.deepEqual(config.defaultProduct, repoConfig.defaultProduct);
+});
+
+test('打包时带上仓库里预置的随包默认负责人', () => {
+  const out = tmpDir('rh-pkg-');
+  pack(out, ['--mcp-url', MCP_URL, '--web-url', WEB_URL]);
+  const config = JSON.parse(
+    fs.readFileSync(path.join(out, 'rh-product-feedback', 'config.local.json'), 'utf8'),
+  );
+  const repoConfig = JSON.parse(
+    fs.readFileSync(path.join(SKILL_DIR, 'config.local.json'), 'utf8'),
+  );
+  assert.equal(config.bugAssignee, repoConfig.bugAssignee);
+  assert.equal(config.bugAssignee, '', '随包默认负责人是不指派');
 });
 
 test('打包不把内网地址打印到终端输出里', () => {
