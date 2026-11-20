@@ -290,8 +290,12 @@ function seedManyFeedbacks(state, count) {
   }
 }
 
-const feedbackListCalls = (server) =>
+// 反馈列表会先发一次 pageSize=1 的预热请求（复刻真实 max 8.2 的第一次请求缺陷）；
+// 下面的断言只看真正的取数请求，不把预热算进翻页序列。
+const allFeedbackListCalls = (server) =>
   server.state.calls.filter((c) => /\/api\.php\/v2\/products\/\d+\/feedbacks$/.test(c.path));
+const feedbackListCalls = (server) =>
+  allFeedbackListCalls(server).filter((c) => String(c.query.recPerPage ?? c.query.pageSize ?? '') !== '1');
 
 test('Q12 服务端分页不前进：列表不整体失败，退回第 1 页并注明覆盖不完整', { skip: NEEDS_CLI }, async () => {
   // 复刻真实 max 8.2 实例：产品 101 的反馈列表从第 2 页起返回空集、pageID 钳回 1
@@ -365,6 +369,29 @@ test('Q15 普通的 E2008（服务端业务失败）不当成分页不前进：�
       assert.notEqual(code, 0, '业务失败必须如实失败');
       assert.match(stderr, /^错误：禅道 CLI 报错/m);
       assert.equal(feedbackListCalls(server).length, 1, '不该退回第 1 页重读');
+    },
+  );
+});
+
+test('Q16 反馈列表第一次请求返回全局记录：先预热一次，再按产品读，不把别的产品算进来', { skip: NEEDS_CLI }, async () => {
+  // 复刻真实 max 8.2：同一个令牌的第一次 feedbacks 请求会忽略 productID，第二次起才按产品过滤
+  await withMockApi(
+    {
+      tag: 'rh-cli-query',
+      feedbackFirstListGlobal: true,
+      seed: (state) => {
+        seedFeedback(state, { id: 901, product: 101, title: '本产品反馈' });
+        seedFeedback(state, { id: 902, product: 102, title: '别的产品反馈' });
+      },
+    },
+    async ({ server, env }) => {
+      const { code, stdout, stderr } = await runEntryScript(['feedbacks', '--product', '101'], env);
+      assert.equal(code, 0, stderr);
+      assert.match(stdout, /^# 反馈（产品 101 可见 1 条，已扫 1 条）$/m);
+      assert.match(stdout, /^901\t本产品反馈/m);
+      assert.doesNotMatch(stdout, /别的产品反馈/);
+      assert.doesNotMatch(stdout, /不属于产品 101/);
+      assert.ok(allFeedbackListCalls(server).length >= 2, '第一次列表请求只用于预热，真正取数要再请求一次');
     },
   );
 });

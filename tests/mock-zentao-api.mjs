@@ -65,6 +65,10 @@ export function createMockApiState(overrides = {}) {
     bugs: new Map(),
     feedbacks: new Map(),
     files: new Map(),
+    // 反馈列表第一次请求返回全局记录，第二次起才按产品过滤（复刻真实 max 8.2：
+    // 同一个令牌的第一次 feedbacks 请求会忽略 productID，第二次才生效）
+    feedbackFirstListGlobal: false,
+    feedbackListSeen: new Set(),
     nextBugId: 1900,
     nextFeedbackId: 900,
     nextFileId: 1,
@@ -360,7 +364,10 @@ function route(state, req, pathname, query, token, payload) {
   if (req.method === 'GET' && m) {
     const product = Number(m[1]);
     const own = [...state.feedbacks.values()].filter((f) => Number(f.product) === product);
-    const items = foreignItemsOf(state, 'feedbacks', product) ?? own;
+    const seenKey = `${token}:${product}`;
+    const firstGlobal = state.feedbackFirstListGlobal && !state.feedbackListSeen.has(seenKey);
+    state.feedbackListSeen.add(seenKey);
+    const items = firstGlobal ? [...state.feedbacks.values()] : (foreignItemsOf(state, 'feedbacks', product) ?? own);
     return { body: productListBody(state, 'feedbacks', items, query, product) };
   }
 

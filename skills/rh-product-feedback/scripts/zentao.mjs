@@ -468,6 +468,23 @@ function isPagingStuck(err) {
  * 实测某台 max 8.2 实例上请求产品 29 的反馈列表会返回 product=1 的记录，照用会把别的产品的数据
  * 当成这个产品的（查重基线、覆盖范围全跟着错），所以这类记录一律丢弃并在输出里点名。
  */
+// 真实 max 8.2 的反馈列表有个「第一次请求」缺陷（issue #25）：同一个令牌的第一次 feedbacks 请求
+// 会忽略 productID、返回全局记录；第二次起才按产品过滤。先发一次 page 1 / page-size 1
+// 的预热请求，把服务端的会话状态推过去，再让真正的 --all 读到正确结果。
+// 预热失败不改变主流程：真正的请求会给出可读错误。
+const warmedFeedbackProducts = new Set();
+
+async function warmUpFeedbackList(productId, env) {
+  const key = String(productId);
+  if (warmedFeedbackProducts.has(key)) return;
+  try {
+    await runCli(['feedback', 'list', '--product-id', key, '--fields', 'id,product', '--page', '1', '--page-size', '1'], env);
+    warmedFeedbackProducts.add(key);
+  } catch {
+    // 预热只是优化；后面的真实请求会暴露认证/网络/权限问题
+  }
+}
+
 async function runListScan(args, productId, env) {
   const scanOf = (payload, complete, reason) => {
     const fetched = rowsOf(payload.data);
@@ -485,6 +502,7 @@ async function runListScan(args, productId, env) {
       reason,
     };
   };
+  if (args[0] === 'feedback' && args[1] === 'list') await warmUpFeedbackList(productId, env);
   try {
     return scanOf(await runCli([...args, '--all'], env), true, '');
   } catch (err) {
