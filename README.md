@@ -38,7 +38,7 @@
 
 - **地址从哪来**：写在技能包内的 `config.local.json`（`zentaoWebUrl` = 禅道站点地址，同时用于换令牌与拼单据链接；`zentaoCli` = 官方禅道 CLI 的版本锁；`mcpUrl` = 团队自研禅道 MCP 的地址）。该文件**进仓库**、随技能包一起分发（见 [ADR-0005](docs/adr/0005-禅道地址进版本库.md)）：地址本身不是凭据，内网 IP 也不从公网可达。`mcpUrl` 只是留给终端用户自己手动查看用的地址来源——团队自研禅道 MCP 已降级为「给人手动查看」，技能代码不读它、不依赖它、不登记它。
 - **地址用 IP 而不是域名**：公司没有内网 DNS 域名可指禅道；地址随网络调整时改 `config.local.json` 再分发一次。
-- **分发渠道**：公网 `skills.sh` 为主——`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`；备用（同一份内容换个拷贝方式，给装不了 npm / GitHub 的机器用）：内网 Git（`git clone` 后复制目录）、NAS / 对象存储（下载压缩包后解压）、公司软件中心（点安装）、终端管理（推到用户机器）。备用渠道没有更新入口，内容变了要重新分发一份，**先删旧技能目录再拷新的**。
+- **分发渠道**：只有公网 `skills.sh` 一条——`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`。装完就有更新入口（`npx skills check` / `npx skills update rh-product-feedback`）。不再维护第二份拷贝渠道（内网包 / NAS / 软件中心推送）：内容与 skills.sh 上的完全相同，却多出一条必然漂移的发布线。
 - **本仓库不包含任何账号或凭据**；扫描器允许内网地址出现在 `config.local.json`，出现在别处一律 fail。
 - **CLI 版本升级走发版流程**：改 `config.local.json` 的 `zentaoCli.version` → 跑一次接入自检 → 重新分发。业务用户不要自己 `npm i -g zentao-cli@latest`，技能也不在运行时升级。
 
@@ -57,14 +57,16 @@ npx skills add xuxzh/ruihui-skills --skill rh-product-feedback
 npx skills add xuxzh/ruihui-skills --all
 ```
 
-### 手动安装
+### 手动安装（不推荐）
 
-把技能目录复制到你的 Agent 的技能目录即可：
+把技能目录复制到你的 Agent 的技能目录也能用：
 
 ```bash
 cp -r skills/rh-product-feedback ~/.claude/skills/      # Claude Code
 cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 ```
+
+但这样装的没有更新入口（`skills update` 找不到它）。要用就用上面的 `npx skills add`。
 
 ## 使用
 
@@ -119,7 +121,7 @@ node tests/validate-skills.mjs
 # 模拟层测试：在假禅道 API v2 上验证读取、写入确认、回读校验、防重复、真实 E2E 的写入闸门
 node --test tests/e2e-mock.mjs
 
-# 打包脚本与随包脚本测试（含旧脚本已下线、CLI 版本锁进包）
+# 技能目录与随包脚本测试（旧脚本已下线、仓库里没有第二份副本）
 node --test tests/package.mjs
 
 # 接入配置的 CLI 版本锁与接入提示词
@@ -154,7 +156,7 @@ ZENTAO_E2E_ALLOWED_PRODUCTS=<产品 id,...> \
 
 写入前还要通过前置自检（认证成功、目标产品存在且在白名单内、反馈读取成功），任一项不满足立即中止、不写入。测试数据带 `[rh-skill-e2e]` 唯一标识，清理只处理本次创建且标识明确匹配的记录；创建超时或结果不明时按唯一标识复查、报告残留风险并以非零退出码结束。
 
-CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills.yml)）会跑静态校验、模拟层测试、打包与随包脚本测试、入口脚本各通道测试与规范校验；真实端到端测试需要内网禅道环境，不在 CI 中运行。
+CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills.yml)）会跑静态校验、模拟层测试、技能目录与随包脚本测试、入口脚本各通道测试与规范校验；真实端到端测试需要内网禅道环境，不在 CI 中运行。
 
 ## 贡献
 
@@ -186,6 +188,7 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 - [ADR-0017](docs/adr/0017-用官方禅道CLI替换自研接入通道.md) — 用官方禅道 CLI 替换自研接入通道（当前唯一通道）
 - [ADR-0018](docs/adr/0018-随包默认负责人改为不指派.md) — 随包默认负责人改为不指派
 - [ADR-0019](docs/adr/0019-重装用同一段提示词由Agent自己判版本.md) — 重装用同一段提示词，由 Agent 自己判版本
+- [ADR-0020](docs/adr/0020-发布线只有skills-sh一条.md) — 发布线只有 skills.sh 一条（删掉内网包）
 
 ## License
 

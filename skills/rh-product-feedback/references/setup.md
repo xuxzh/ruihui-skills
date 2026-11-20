@@ -75,7 +75,7 @@ node <技能目录>/scripts/zentao.mjs products
 1. **定位技能目录并判版本**：在当前宿主的技能目录里找 `rh-product-feedback`（pi `~/.agents/skills/`、Claude Code `~/.claude/skills/`，其它宿主按其文档）。看两样：有没有 `scripts/zentao.mjs`（已是当前通道）；没有、却有 `scripts/zentao-query.mjs` 或 `references/zentao-mcp.md`，就是**旧通道的旧版**；两样都没有 = 没装过。判完只报结论（「你装的是旧版，我给你更新成新版」），不要问终端用户「你现在是哪一版」。
 2. **更新或安装技能本体**：
    - 走过 skills CLI 的（`~/.agents/.skill-lock.json` 里有条目）：`npx skills check` 有新版就跑 `npx skills update rh-product-feedback`（带技能名时不问范围；`-g` 只更全局、`-p` 只更项目、`-y` 跳过范围提示）。
-   - 没走过 skills CLI 的（实施人员直接拷贝的文件夹）：`skills update` 找不到它 → 让实施人员给一份新包，或用 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global` 从公开仓库取一份。**覆盖旧目录前先删旧目录**，别让新旧文件混在一处。
+   - 锁条目没了的（手动拷过、或锁文件被删）：`skills update` 找不到它 → 直接 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global` 重新装一份。**装之前先删旧技能目录**，别让新旧文件混在一处。
    - 终端用户改过技能目录里的文件时（`skills check` 报 `has local changes`），先说清会覆盖什么，等他确认再动——这是唯一需要终端用户拍板的地方。
 3. **装禅道 CLI（版本固定）**：按接入配置 `zentaoCli` 装锁定版本；`zentao version --format=json` 已经和锁定版本一致就跳过，不一致才装（不装 latest）。步骤见上面「1. 装官方禅道 CLI」。
 4. **清掉旧通道的残留（旧版才有）**：删技能目录里作废的旧文件——`scripts/zentao-client.mjs`、`scripts/zentao-query.mjs`、`scripts/zentao-query.sh`、`scripts/zentao-query.ps1`、`scripts/zentao-write.mjs`、`scripts/zentao-upload.mjs`、`references/zentao-mcp.md`。**必须删**：留着它们，skills CLI 会一直报这个技能「有本地改动」，更新看起来像没生效。删完再跑一次 `npx skills check` 确认干净。
@@ -88,9 +88,9 @@ node <技能目录>/scripts/zentao.mjs products
 
 `npx skills use` 落在临时目录里的技能没有更新入口——想拿新版就重新跑一次 `use`。
 
-### 走备用渠道的机器
+### 发布线只有一条
 
-实施人员直接拷贝技能包（内网 Git / NAS / 软件中心 / 终端管理）的机器没有 skills CLI 的更新入口：让实施人员给一份新包，**先删旧技能目录再拷进去**（覆盖着拷会把旧通道的脚本留下来）。这类机器上的禅道 CLI 仍要按接入配置装固定版本——技能包不带二进制。
+技能只从公网 `skills.sh` 分发（见下面「管理员 → 分发」）。手动拷贝进来的目录没有更新入口：跑一次上面那段提示词，Agent 会用 skills CLI 重新装一份并清掉残留。
 
 ## 业务用户：粘一段提示词
 
@@ -208,7 +208,7 @@ ZENTAO_PASSWORD=<你的禅道密码>
 
 - `id` 为 `null` 或缺失 = 没预置，技能当没设默认产品处理。
 - 同一个文件里钉着**官方禅道 CLI 的固定版本**（`zentaoCli.version`）：升级 CLI 就是改这个值再分发，不在运行时升级。
-- **谁写**：管理员在仓库里改 `config.local.json` 并随包分发（见 ADR-0005 的分发流程）；走 skills CLI 装的用户直接拿到这份配置，内网包的包内配置由 `scripts/build-internal-package.mjs` 生成。
+- **谁写**：管理员在仓库里改 `config.local.json` 并随技能包分发（见 ADR-0005 的分发流程）；装技能的人直接拿到这份配置。
 - **技能只读不改**：它属于分发下来的文件，运行中的 Agent 不改它（硬约束 13）。
 - **怎么用**：选品时它是第二优先（第一优先是用户明说的产品，第三优先是本机默认）。因为它不是用户自己选的，**每次使用都要跟用户确认一句**「默认记到 <产品名> 对吗？」。
 - **它会随包分发**：预置的产品对看不见它的账号就是无效值，所以「使用时确认」不是可选项。
@@ -382,21 +382,12 @@ node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --objec
 
 ### 分发
 
-主渠道是公网 `skills.sh`，一条命令装好（装到所有检测到的 Agent）：
+**发布线只有一条：公网 `skills.sh`。** 一条命令装好（装到所有检测到的 Agent）：
 
 ```bash
 npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
 ```
 
-备用渠道与技能内容解耦（同一份内容，只是换个拷贝方式），按现有 IT 条件选一个：
-
-| 渠道 | 用户侧动作 |
-| --- | --- |
-| 内网 Git 仓库 | `git clone` 后复制目录 |
-| NAS / 内网对象存储 / 共享盘 | 下载压缩包 → 解压进对应宿主的技能目录 |
-| 公司软件中心 / 应用市场 | 在软件中心点安装 |
-| 终端管理（Intune / 域策略 / MDM） | 无需操作，机器上已有 |
-
-`node scripts/build-internal-package.mjs` 仍能打出自洽的目录（`dist/rh-product-feedback/`），供压缩包分发使用；地址取自仓库里的 `config.local.json`。**它不是另一条发布线**：内容与 skills.sh 上的是同一份，仓库更新后重新构建一次即可。
-
-**只有走 skills CLI 装的才有自动更新**（`npx skills check` / `npx skills update`）。走备用渠道拷贝目录的用户没有更新入口——技能内容变了要重新分发一份，**先删旧技能目录再拷新的**（覆盖着拷会把旧通道的脚本留下来，见上面「重装 / 更新」）。
+- 禅道站点地址、禅道 CLI 的版本锁、随包默认产品与负责人都在技能包内的 `config.local.json` 里，随这次分发一起到位。
+- 装完就有更新入口：`npx skills check` 看有没有新版，`npx skills update rh-product-feedback` 更新（见上面「重装 / 更新」）。
+- 不再维护第二份拷贝渠道（内网包 / NAS / 软件中心推送）：它与 skills.sh 上的内容完全相同，却多出一条必然漂移的发布线。手动拷进机器的目录没有更新入口——跑一次上面那段提示词，Agent 会重新装一份并清掉残留。

@@ -23,7 +23,7 @@ jobs:
       - name: 模拟层测试（假禅道 API v2）
         run: node --test tests/e2e-mock.mjs
 
-      - name: 打包与随包脚本测试
+      - name: 技能目录与随包脚本测试
         run: node --test tests/package.mjs
 
       - name: 接入配置的 CLI 版本锁与接入提示词

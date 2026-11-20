@@ -62,7 +62,7 @@ bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
 
 **两件要留意的事**：
 - 更新会覆盖技能目录里的文件。你自己改过 `rh-product-feedback` 里的东西（改过 `SKILL.md`、`config.local.json` 或脚本）的话，先备份——`npx skills check` 会把这类改动报成 `has local changes`。
-- 你的技能如果是实施人员直接拷给你的文件夹（没走过 skills CLI），`skills update` 找不到它：找实施人员要一份新的包，**先删掉旧技能目录再拷新的**（覆盖着拷会把旧版的文件留下来）。
+- 如果 `skills update` 找不到这个技能（手动拷过、或锁文件被删），让 Agent 重新装一份：先删掉旧技能目录，再跑 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`（删掉再装，免得旧版的文件留在里面）。
 
 **别和「换禅道实例」搞混**：禅道地址写在技能包的接入配置里，换地址是管理员改配置再分发一次，跟换新版本是两件事。
 
@@ -106,7 +106,7 @@ Agent 会依次做这些事：判断要建哪种单据 → 补齐缺的信息 �
 | Agent 说你的账号看不到某个产品 | 禅道权限没开 | 找管理员开权限，或换一个你有权限的产品 |
 | Agent 一直追问细节 | 缺了它判断分类、复现或验收要用的信息 | 一次答完它问的那几条；确实不知道就说「不知道」，它会写「用户未提供」，不会替你编 |
 | 每次都要说产品名 | 还没设默认产品 | 说一句「默认产品是 <产品名>」，它会记在你自己的机器上；也可以让管理员在技能包接入配置里预置一个随包默认产品 |
-| Agent 说 `skills update` 找不到这个技能 | 技能是实施人员直接拷贝的文件夹，没走过 skills CLI | 找实施人员要一份新的包，**先删旧技能目录再拷新的** |
+| Agent 说 `skills update` 找不到这个技能 | 锁条目没了（手动拷过、或锁文件被删） | 让 Agent 重新装一份：先删旧技能目录，再 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global` |
 | 重装完 `skills check` 还说有本地差异 | 旧版留下的脚本没删干净 | 让 Agent 按提示把旧版残留的文件清掉 |
 | 更新完技能没变化 | 宿主还在用旧版本 | 重载一次：Claude Code 退出重开，pi 执行 `/reload` |
 
@@ -117,4 +117,4 @@ Agent 会依次做这些事：判断要建哪种单据 → 补齐缺的信息 �
 
 ---
 
-**实施人员 / 管理员**：批量部署、打包分发、各宿主差异与故障排查见 [`skills/rh-product-feedback/references/setup.md`](../skills/rh-product-feedback/references/setup.md)（技术参考）；打包命令见 [`README.md`](../README.md) 的「管理员：禅道地址与分发」。
+**实施人员 / 管理员**：各宿主差异、接入与故障排查见 [`skills/rh-product-feedback/references/setup.md`](../skills/rh-product-feedback/references/setup.md)（技术参考）；禅道地址与分发见 [`README.md`](../README.md) 的「管理员：内网地址与分发」。
