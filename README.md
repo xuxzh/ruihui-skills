@@ -166,7 +166,7 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 ## 决策记录
 
 - [ADR-0001](docs/adr/0001-每用户独立禅道账号.md) — 每用户独立禅道账号，不用共享服务账号
-- [ADR-0002](docs/adr/0002-业务用户接入形态.md) — Agent 自装 MCP、地址随包分发、凭据由本人写入
+- [ADR-0002](docs/adr/0002-业务用户接入形态.md) — Agent 自装 MCP、地址随包分发、凭据由本人写入（历史决策，已被 ADR-0017 取代）
 - [ADR-0003](docs/adr/0003-真实端到端测试的写入闸门.md) — 真实端到端测试默认只读，写入要过三道闸门
 - [ADR-0004](docs/adr/0004-主宿主与首次接入链路.md) — 主宿主 Claude Code、首次接入三阶段 ≤4 次交互、会话登录是唯一凭据路径
 - [ADR-0005](docs/adr/0005-禅道地址进版本库.md) — 禅道地址进版本库、技能走公网分发、凭据默认账号密码
@@ -174,12 +174,12 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 - [ADR-0007](docs/adr/0007-技能触发的安装入口.md) — 技能触发的安装入口：业务用户不再手敲长命令
 - [ADR-0008](docs/adr/0008-反馈路径与缺陷路径并存.md) — 反馈路径与缺陷路径并存
 - [ADR-0009](docs/adr/0009-默认产品分两层.md) — 默认产品分两层
-- [ADR-0010](docs/adr/0010-读走随包查询器写走MCP工具.md) — 读走随包查询器，写走 MCP 工具
-- [ADR-0011](docs/adr/0011-图片上传直连禅道RESTv2.md) — 图片上传直连禅道 REST v2
+- [ADR-0010](docs/adr/0010-读走随包查询器写走MCP工具.md) — 读走随包查询器，写走 MCP 工具（历史决策，已被 ADR-0017 取代）
+- [ADR-0011](docs/adr/0011-图片上传直连禅道RESTv2.md) — 图片上传直连禅道 REST v2（历史决策，已被 ADR-0017 取代）
 - [ADR-0012](docs/adr/0012-安装与登记交给当前Agent.md) — 安装与登记交给当前 Agent：程序不写死宿主清单
 - [ADR-0013](docs/adr/0013-SKILL.md只留主干与护栏.md) — SKILL.md 只留主干与护栏：安装、图片、话术下沉到第二入口
 - [ADR-0014](docs/adr/0014-速查段自足与硬上限.md) — 速查段自足与硬上限
-- [ADR-0015](docs/adr/0015-读写都走随包脚本写入带用户令牌.md) — 读写都走随包脚本，写入带用户令牌
+- [ADR-0015](docs/adr/0015-读写都走随包脚本写入带用户令牌.md) — 读写都走随包脚本，写入带用户令牌（历史决策，已被 ADR-0017 取代）
 - [ADR-0016](docs/adr/0016-默认负责人跟产品QD走且可配置.md) — 默认负责人跟产品 QD 走且可配置
 - [ADR-0017](docs/adr/0017-用官方禅道CLI替换自研接入通道.md) — 用官方禅道 CLI 替换自研接入通道（当前唯一通道）
 - [ADR-0018](docs/adr/0018-随包默认负责人改为不指派.md) — 随包默认负责人改为不指派
