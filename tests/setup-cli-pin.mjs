@@ -55,6 +55,16 @@ test('速查的安装提示词由 Agent 代装 CLI，凭据仍由本人输入', 
   assert.match(prompt[1], /已经装过就更新到最新/, '同一段提示词要能用于首装与重装');
   assert.match(prompt[1], /你自己判断，不用问我/, '版本判断由 Agent 做，不问终端用户');
   assert.match(prompt[1], /Node\.js 18/, '提示词要先确认 Node.js，没有就装');
+  assert.match(
+    prompt[1],
+    /https:\/\/github\.com\/xuxzh\/ruihui-skills/,
+    '提示词必须写明来源，Agent 才不用去别处乱找',
+  );
+  assert.match(
+    prompt[1],
+    /npx skills add xuxzh\/ruihui-skills --skill rh-product-feedback --global/,
+    '提示词必须给出装技能的命令',
+  );
 });
 
 test('凭据脚本写明只做交互式写入，且认三个凭据键', () => {

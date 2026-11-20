@@ -104,7 +104,7 @@ node <技能目录>/scripts/zentao.mjs products
 
 ```
 帮我把 ruihui 的产品反馈助手（rh-product-feedback）装好，已经装过就更新到最新：
-1. 技能：当前是装好的旧版还是根本没装，你自己判断，不用问我；需要更新就更新到最新。
+1. 技能：来源是 GitHub 公开仓库 https://github.com/xuxzh/ruihui-skills ，装它用 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`（`npx` 需要 Node.js 18+，没有就先按第 2 条装上）；当前是装好的旧版还是根本没装，你自己判断，不用问我——没装就装这条命令，已经装过但不是最新就跑 `npx skills update rh-product-feedback`；装不上就直说，别从别处找同名技能。
 2. 禅道工具：先确认这台机器上有 Node.js 18 以上，没有就装一个（用机器上已有的版本管理器，没有就装官方的），再把技能要求的那个禅道工具装好——版本固定取技能包 `config.local.json` 里 `zentaoCli.version` 的值，不要装最新版；已经装好且版本对得上就跳过。
 3. 我的账号密码：告诉我怎么写入我自己的禅道账号密码——密码必须由我在自己的终端里输入，别替我输、也别写进对话。这台机器上已经写过就不用再写。
 4. 收尾：跑一次只读自检，报出我这个账号可见的产品，并说明凭据此刻起有没有生效。

@@ -10,7 +10,7 @@
 
 ```
 帮我把 ruihui 的产品反馈助手（rh-product-feedback）装好，已经装过就更新到最新：
-1. 技能：当前是装好的旧版还是根本没装，你自己判断，不用问我；需要更新就更新到最新。
+1. 技能：来源是 GitHub 公开仓库 https://github.com/xuxzh/ruihui-skills ，装它用 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`（`npx` 需要 Node.js 18+，没有就先按第 2 条装上）；当前是装好的旧版还是根本没装，你自己判断，不用问我——没装就装这条命令，已经装过但不是最新就跑 `npx skills update rh-product-feedback`；装不上就直说，别从别处找同名技能。
 2. 禅道工具：先确认这台机器上有 Node.js 18 以上，没有就装一个（用机器上已有的版本管理器，没有就装官方的），再把技能要求的那个禅道工具装好——版本固定取技能包 `config.local.json` 里 `zentaoCli.version` 的值，不要装最新版；已经装好且版本对得上就跳过。
 3. 我的账号密码：告诉我怎么写入我自己的禅道账号密码——密码必须由我在自己的终端里输入，别替我输、也别写进对话。这台机器上已经写过就不用再写。
 4. 收尾：跑一次只读自检，报出我这个账号可见的产品，并说明凭据此刻起有没有生效。
@@ -96,6 +96,7 @@ Agent 会依次做这些事：判断要建哪种单据 → 补齐缺的信息 �
 | 你看到的 | 原因 | 怎么办 |
 | --- | --- | --- |
 | Agent 说没有 rh-product-feedback 这个技能 | 技能目录没放对，或装完没重开 | 问一句「你的技能列表里有没有 rh-product-feedback」确认；装完重开一次 Agent |
+| Agent 说「市场里搜不到 / 不知道来源」 | 提示词没带来源，它在别处乱找 | 把速查第 ① 步那段提示词**原样重发**——里面带了仓库地址和安装命令 |
 | Agent 说找不到 `SKILL.md` | 技能没装到宿主能发现的位置 | 让 Agent 跑 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`，或把技能包解压到宿主技能目录 |
 | Agent 说找不到 `zentao` 命令 | 禅道工具没装，或装包目录不在 PATH 里 | 让 Agent 按技能包接入配置里的固定版本重装一次；装完还找不到，把 `npm prefix -g` 的目录加进 PATH |
 | Agent 说没有 node / 装不上工具 | 本机缺 Node.js，或装包被权限、代理挡住 | 让 Agent 给你装上（它会优先用机器上已有的版本管理器）；实在装不上就用禅道网页端提单 |

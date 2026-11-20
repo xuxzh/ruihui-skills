@@ -243,6 +243,13 @@ if (fs.existsSync(quickStart)) {
       !inQuickStart || !inSetup ? '找不到提示词块' : inQuickStart === inSetup ? '' : '两处不一致',
     );
 
+    // 提示词必须自带来源：没有来源时，Agent 只会去市场里搜，搜不到就误以为是私有源。
+    check(
+      '安装 / 重装提示词写明来源地址与安装命令',
+      inQuickStart.includes('https://github.com/xuxzh/ruihui-skills') &&
+        inQuickStart.includes('npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global'),
+    );
+
     // 首装与重装用同一段提示词：两个文件里都只能出现一份，不能各写一份然后走样。
     for (const [label, text] of [['快速上手', quickText], ['随包 setup.md', setupText]]) {
       const count = (text.match(/帮我把 ruihui 的产品反馈助手/g) || []).length;
