@@ -4,23 +4,23 @@
 
 | 技能 | 版本 | 说明 |
 | --- | --- | --- |
-| [`rh-product-feedback`](skills/rh-product-feedback) | 0.11.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），其余建**反馈单**；两条路径都支持查询、解释处理进度、补充说明、正文带图；禅道 MCP 没配好时，能引导你完成安装与认证 |
+| [`rh-product-feedback`](skills/rh-product-feedback) | 0.11.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），其余建**反馈单**；两条路径都支持查询、解释处理进度、补充说明、正文带图；接入只走官方禅道 CLI，第一次接入时引导你装 CLI 与写本人凭据 |
 
 ## 业务用户：装完技能，一句话接入
 
-> 面向不用懂 MCP、只要能把话说清楚的同事。技能包里已含禅道 MCP 地址，装完直接用。
+> 面向只要能把话说清楚的同事：装技能、装官方禅道 CLI 都由 Agent 代办，你只在自己的终端里写一次账号密码。
 
 完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的提示词、三个示例和常见问题。概览：
 
 > 直接发给别人（可贴进 IM / 邮件）：<https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/quick-start.md#三步速查>
 
-1. **粘一段提示词给你正在用的 Agent**（pi、Claude Code、Codex 都行）：它会装好技能（`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`），再按自己的宿主登记禅道 MCP——**登记做在你在用的那个 Agent 里，不用挑、不用填 IP、不用改配置文件**。
+1. **装技能 + 装官方禅道 CLI**：把速查里的提示词粘给你正在用的 Agent（pi、Claude Code、Codex 都行），它会装好技能（`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`），再按技能包 `config.local.json` 里的版本锁装好官方禅道 CLI——**不用挑、不用填 IP、不用改配置文件**。
 2. **在你的终端里写账号密码**：Agent 会把 `set-credentials.sh` 那条命令原样贴给你，密码只在你自己的机器上输入，不进对话。
-3. **让 Agent 重载后验证**：Claude Code 退出重开，pi 执行 `/reload`；在 Agent 里说「验证一下禅道连接」。
+3. **让 Agent 做接入自检**：凭据写好就能用，在 Agent 里说「验证一下禅道连接」。
 
 > 不想让技能常驻、只想试一次：用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback`（技能落在临时目录），提示词见 quick-start。
 
-**技能有新版时**：把更新提示词发给同一个 Agent 就行（见 [`docs/quick-start.md`](docs/quick-start.md) 的「更新技能」）——它先查有没有新版再更新；你的禅道凭据与禅道 MCP 登记都不在技能目录里，更新不会动到，重载一次宿主即可生效。
+**技能有新版时**：把更新提示词发给同一个 Agent 就行（见 [`docs/quick-start.md`](docs/quick-start.md) 的「更新技能」）——它先查有没有新版再更新；你的禅道凭据与官方禅道 CLI 都不在技能目录里，更新不会动到，重载一次宿主即可生效。
 
 之后就能直接用：
 
@@ -36,11 +36,11 @@
 
 ## 管理员：内网地址与分发
 
-- **地址从哪来**：写死在技能包内的 `config.local.json`（`mcpUrl` = 禅道 MCP 的 Streamable HTTP 地址，`zentaoWebUrl` = 禅道 Web 端地址）。该文件**进仓库**、随技能包一起分发（见 [ADR-0005](docs/adr/0005-禅道地址进版本库.md)）：地址本身不是凭据，内网 IP 也不从公网可达。
-- **地址用 IP 而不是域名**：公司没有内网 DNS 域名可指禅道 MCP；地址随网络调整时改 `config.local.json` 再分发一次。
+- **地址从哪来**：写在技能包内的 `config.local.json`（`zentaoWebUrl` = 禅道站点地址，同时用于换令牌与拼单据链接；`zentaoCli` = 官方禅道 CLI 的版本锁；`mcpUrl` = 团队自研禅道 MCP 的地址）。该文件**进仓库**、随技能包一起分发（见 [ADR-0005](docs/adr/0005-禅道地址进版本库.md)）：地址本身不是凭据，内网 IP 也不从公网可达。`mcpUrl` 只是留给终端用户自己手动查看用的地址来源——团队自研禅道 MCP 已降级为「给人手动查看」，技能代码不读它、不依赖它、不登记它。
+- **地址用 IP 而不是域名**：公司没有内网 DNS 域名可指禅道；地址随网络调整时改 `config.local.json` 再分发一次。
 - **分发渠道**：公网 `skills.sh` 为主——`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`；备用：内网 Git（`git clone` 后复制目录）、NAS / 对象存储（下载压缩包后解压）、公司软件中心（点安装）、终端管理（推到用户机器）。
 - **本仓库不包含任何账号或凭据**；扫描器允许内网地址出现在 `config.local.json`，出现在别处一律 fail。
-- **禅道 MCP 侧可改进的两点**：支持 `Authorization: Bearer <令牌>` 请求头鉴权（凭据就能完全不进 Agent 上下文）；登录失败时可区分「密码错」与「账号被锁定」（避免连续重试触发锁定）。
+- **CLI 版本升级走发版流程**：改 `config.local.json` 的 `zentaoCli.version` → 跑一次接入自检 → 重新分发。业务用户不要自己 `npm i -g zentao-cli@latest`，技能也不在运行时升级。
 
 ## 开发与安装
 
@@ -78,30 +78,31 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 
 技能会自动：判断该建哪种单据（要 Bug → 正式缺陷单；其余 → 反馈单）→ 补齐缺失信息 → 查重 → 生成草稿 → **等你确认后**写入禅道 → 回读校验并给出真实单据编号 → 附一条可点开的禅道直达链接。
 
-## 前置条件：连接禅道 MCP
+## 前置条件：官方禅道 CLI + 本人凭据
 
-`rh-product-feedback` 通过禅道（ZenTao）MCP 工作，需要在你的 Agent 宿主里注册一个名为 `zentao` 的 MCP server（Streamable HTTP），并能访问禅道实例。
+`rh-product-feedback` 只走**一条**接入通道：官方禅道 CLI（npm 包 `zentao-cli`，版本锁在技能包 `config.local.json` 的 `zentaoCli`）。没有第二条通道，也不需要登记禅道 MCP（`config.local.json` 里的 `mcpUrl` 只是给人手动查看用的地址来源，技能不读它）。
 
+- 前置是 Node.js 18+ 与 `zentao` 命令在 PATH 里；版本对不上时按版本锁重装。
 - 凭据放在你自己的机器上（**不写进本仓库**）：默认用禅道账号 + 密码，业务用户不必先去生成令牌。
-- 本仓库不包含任何账号或凭据；禅道地址在 `config.local.json` 里，随包分发。
-- 随包脚本用你的凭据换一个**属于你账号**的禅道令牌，再带着令牌访问禅道 MCP。密码与令牌只在脚本进程内，不进对话（见 [zentao-mcp.md](skills/rh-product-feedback/references/zentao-mcp.md) 的「身份与认证」）。
+- 本仓库不包含任何账号或凭据；禅道站点地址在 `config.local.json` 里，随包分发。
+- 随包入口脚本用你的凭据换一个**属于你账号**的禅道令牌，经环境变量注入 CLI 子进程。密码与令牌不进命令行参数、不进对话（见 [zentao-cli.md](skills/rh-product-feedback/references/zentao-cli.md) 的「认证」）。
 - 每个用户用自己的禅道账号令牌操作，反馈单与缺陷单都留痕在本人名下。
 
-详见 [`skills/rh-product-feedback/references/setup.md`](skills/rh-product-feedback/references/setup.md) 与 [`references/zentao-mcp.md`](skills/rh-product-feedback/references/zentao-mcp.md)。
+详见 [`skills/rh-product-feedback/references/setup.md`](skills/rh-product-feedback/references/setup.md) 与 [`references/zentao-cli.md`](skills/rh-product-feedback/references/zentao-cli.md)。
 
 ## 能力边界
 
 当前版本（v0.11.0）的能力与限制：
 
-- **安装交给当前的 Agent**：装技能用 skills CLI，登记禅道 MCP 由你在用的那个 Agent 自己做（它知道自己的宿主配置在哪），技能包里不写死宿主清单。凭据始终由本人写入，密码不进对话。
+- **安装交给当前的 Agent**：装技能用 skills CLI，装官方禅道 CLI 也由你在用的那个 Agent 自己做（按接入配置的版本锁），技能包里不写死宿主清单。凭据始终由本人写入，密码不进对话。
 
-- **读写都走随包脚本**：读用 `scripts/zentao-query.mjs`（在进程内过滤禅道数据，只把十几行表格交给 Agent，原始 JSON 不进上下文），写用 `scripts/zentao-write.mjs`（换用户令牌、包 payload、只发一次，保留「等你确认再写」的链路）。两个脚本各自读本机凭据，凭据与令牌都不进上下文。宿主里的禅道 MCP 工具是服务端固定身份，只适合查看，不用来建单（见 [ADR-0015](docs/adr/0015-读写都走随包脚本写入带用户令牌.md)）。
+- **读写都走随包入口脚本**：`scripts/zentao.mjs` 负责换令牌、注入官方禅道 CLI、投影输出——读（产品、项目、列表、详情）与写（建单、更新、传图）都是它的子命令，只发一次、写完回读，保留「等你确认再写」的链路；查重助手 `scripts/zentao-dedupe.mjs` 只做中文切词。原始 JSON、凭据与令牌都不进上下文。宿主里的禅道 MCP 工具是服务端固定身份，只适合查看，不用来建单（见 [ADR-0017](docs/adr/0017-用官方禅道CLI替换自研接入通道.md)）。
 
 - **两条路径并存**：明确要 Bug / 缺陷 / 报错时，直接建禅道**正式缺陷单**（进开发流程，草稿里会写明这一点）；需求、建议、说不清是不是 bug 的，建**反馈单**。一次诉求只建一张单，不会同时给你一张反馈单和一张缺陷单（见 [ADR-0008](docs/adr/0008-反馈路径与缺陷路径并存.md)）。
 - **默认产品分两层**：随包默认产品写在技能包的接入配置里（管理员预置、全公司共享一份，用的时候跟用户确认一句）；本机默认产品存在你自己的机器上（你自己设的，直接用，不再问）。两者都只是默认值，你明说的产品永远优先；默认产品当前不可见时会如实说明并列出你能看到的产品。
 - **每用户独立账号**：随包脚本用你自己的禅道账号令牌提交，单据留痕在本人名下，提完回读核对提交人。你能看到的产品与单据按账号权限走，查重只覆盖可见范围（话术里会写明「在你可见的 N 条中」）。
-- **无服务端关键词检索**：查重靠查询器分页拉取 + 客户端标题匹配，只覆盖扫描到的范围。
-- **正文可以带图片**：你粘图或给图片路径，技能用随包的 `scripts/zentao-upload.mjs` 把图片传到禅道（禅道 MCP 的上传工具只接受文件名、不接受内容，所以这一步直连禅道 REST v2，见 [ADR-0011](docs/adr/0011-图片上传直连禅道RESTv2.md)），再把图片引用写进反馈单或缺陷单的正文。顺序是「先建单 → 再传图 → 再更新正文」——禅道的图片必须挂在已存在的单据上。图片只支持反馈单与缺陷单，不支持 base64 内联。
+- **无服务端关键词检索**：查重靠入口脚本全量拉取 + 客户端标题匹配，只覆盖扫描到的范围；服务端分页异常时如实标注「覆盖不完整」（见 issue #25）。
+- **正文可以带图片**：你粘图或给图片路径，技能用入口脚本的 `file-create` 子命令（官方 CLI 的 `file create`，单文件上限 50 MiB）把图片传到禅道，再把图片引用写进反馈单或缺陷单的正文。顺序是「先建单 → 再传图 → 再更新正文」——禅道的图片必须挂在已存在的单据上。图片只支持反馈单与缺陷单，不支持 base64 内联。
 - **没有「只评论不改状态」的接口**：补充说明走「更新正文」路径；关闭 / 解决 / 删除等流转由人来做（缺陷单也不流转）。
 - **更新没有版本号 CAS**：禅道的更新接口无条件覆盖。补充说明会在写入前再读一次原文，发现被改过就停手交回你确认——这能显著降低覆盖他人内容的风险，但复核与写入之间仍可能有竞态。
 
@@ -113,23 +114,31 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 # 静态校验：元数据、引用链接、硬约束覆盖、敏感信息扫描
 node tests/validate-skills.mjs
 
-# 模拟层测试：在 mock MCP 上验证写入确认、回读校验、防重复、并发冲突、真实 E2E 的写入闸门
+# 模拟层测试：在假禅道 API v2 上验证读取、写入确认、回读校验、防重复、真实 E2E 的写入闸门
 node --test tests/e2e-mock.mjs
 
-# 打包脚本与凭据脚本测试
+# 打包脚本与随包脚本测试（含旧脚本已下线、CLI 版本锁进包）
 node --test tests/package.mjs
 
-# 查询器测试：在 mock MCP 上验证紧凑输出、凭据不进上下文、缺凭据时的指引
-node --test tests/queryer.mjs
+# 接入配置的 CLI 版本锁与接入提示词
+node --test tests/setup-cli-pin.mjs
 
-# 图片上传测试：在 mock MCP + 本地假禅道上验证上传、引用生成、失败处理、凭据不外泄
+# 入口脚本的读 / 写 / 查重 / 传图通道（装官方禅道 CLI 后才有意义，没装按 skip 计）
+for f in tests/zentao-cli-*.mjs; do node --test "$f"; done
+
+# 既有读 / 写通道用例（随包入口脚本已接手）
+node --test tests/queryer.mjs
+node --test tests/write.mjs
+node --test tests/skill-flow.mjs
+
+# 图片上传测试：在假禅道上验证上传、引用生成、失败处理、凭据不外泄
 node --test tests/upload.mjs
 
 # 规范校验（Agent Skills 官方参考实现）
 npx skills-ref validate skills/rh-product-feedback
 ```
 
-真实 MCP 端到端测试需要本地配置禅道 MCP 地址与凭据，默认只跑只读验证：
+真实端到端测试需要内网禅道地址与本人凭据，默认只跑只读验证：
 
 ```bash
 node tests/e2e-live.mjs                                     # 只读
@@ -143,7 +152,7 @@ ZENTAO_E2E_ALLOWED_PRODUCTS=<产品 id,...> \
 
 写入前还要通过前置自检（认证成功、目标产品存在且在白名单内、反馈读取成功），任一项不满足立即中止、不写入。测试数据带 `[rh-skill-e2e]` 唯一标识，清理只处理本次创建且标识明确匹配的记录；创建超时或结果不明时按唯一标识复查、报告残留风险并以非零退出码结束。
 
-CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills.yml)）会跑静态校验、模拟层测试与规范校验；真实端到端测试需要内网禅道环境，不在 CI 中运行。
+CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills.yml)）会跑静态校验、模拟层测试、打包与随包脚本测试、入口脚本各通道测试与规范校验；真实端到端测试需要内网禅道环境，不在 CI 中运行。
 
 ## 贡献
 
@@ -157,7 +166,7 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 ## 决策记录
 
 - [ADR-0001](docs/adr/0001-每用户独立禅道账号.md) — 每用户独立禅道账号，不用共享服务账号
-- [ADR-0002](docs/adr/0002-业务用户接入形态.md) — Agent 自装 MCP、地址随包分发、凭据由本人写入
+- [ADR-0002](docs/adr/0002-业务用户接入形态.md) — Agent 自装 MCP、地址随包分发、凭据由本人写入（历史决策，已被 ADR-0017 取代）
 - [ADR-0003](docs/adr/0003-真实端到端测试的写入闸门.md) — 真实端到端测试默认只读，写入要过三道闸门
 - [ADR-0004](docs/adr/0004-主宿主与首次接入链路.md) — 主宿主 Claude Code、首次接入三阶段 ≤4 次交互、会话登录是唯一凭据路径
 - [ADR-0005](docs/adr/0005-禅道地址进版本库.md) — 禅道地址进版本库、技能走公网分发、凭据默认账号密码
@@ -165,10 +174,15 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 - [ADR-0007](docs/adr/0007-技能触发的安装入口.md) — 技能触发的安装入口：业务用户不再手敲长命令
 - [ADR-0008](docs/adr/0008-反馈路径与缺陷路径并存.md) — 反馈路径与缺陷路径并存
 - [ADR-0009](docs/adr/0009-默认产品分两层.md) — 默认产品分两层
-- [ADR-0010](docs/adr/0010-读走随包查询器写走MCP工具.md) — 读走随包查询器，写走 MCP 工具
-- [ADR-0011](docs/adr/0011-图片上传直连禅道RESTv2.md) — 图片上传直连禅道 REST v2
+- [ADR-0010](docs/adr/0010-读走随包查询器写走MCP工具.md) — 读走随包查询器，写走 MCP 工具（历史决策，已被 ADR-0017 取代）
+- [ADR-0011](docs/adr/0011-图片上传直连禅道RESTv2.md) — 图片上传直连禅道 REST v2（历史决策，已被 ADR-0017 取代）
 - [ADR-0012](docs/adr/0012-安装与登记交给当前Agent.md) — 安装与登记交给当前 Agent：程序不写死宿主清单
 - [ADR-0013](docs/adr/0013-SKILL.md只留主干与护栏.md) — SKILL.md 只留主干与护栏：安装、图片、话术下沉到第二入口
+- [ADR-0014](docs/adr/0014-速查段自足与硬上限.md) — 速查段自足与硬上限
+- [ADR-0015](docs/adr/0015-读写都走随包脚本写入带用户令牌.md) — 读写都走随包脚本，写入带用户令牌（历史决策，已被 ADR-0017 取代）
+- [ADR-0016](docs/adr/0016-默认负责人跟产品QD走且可配置.md) — 默认负责人跟产品 QD 走且可配置
+- [ADR-0017](docs/adr/0017-用官方禅道CLI替换自研接入通道.md) — 用官方禅道 CLI 替换自研接入通道（当前唯一通道）
+- [ADR-0018](docs/adr/0018-随包默认负责人改为不指派.md) — 随包默认负责人改为不指派
 
 ## License
 

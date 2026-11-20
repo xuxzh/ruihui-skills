@@ -126,15 +126,15 @@ if (!parsed) {
     ['凭据必须由本人写入、Agent 不代劳', /凭据必须由本人/],
     ['交付时给出禅道直达链接', /feedback-view-/],
     ['链接地址取自 config.local.json 的 zentaoWebUrl', /zentaoWebUrl/],
-    ['列表与详情读取走随包查询器', /zentao-query/],
+    ['列表与详情读取走随包入口脚本', /zentao\.mjs/],
     ['原始 JSON 不进上下文', /原始 JSON/],
-    ['不用调小分页绕开截断', /recPerPage/],
+    ['不用调小页大小绕开截断', /--page-size/],
     ['地址核对按需触发', /按需触发/],
-    ['查询器在 setup.md 里有说明', /禅道查询器/],
+    ['随包入口脚本在 setup.md 里有说明', /随包入口脚本/],
   ];
   for (const [label, re] of rules) check(`rh-product-feedback: ${label}`, re.test(all));
 
-  const refs = ['feedback-templates.md', 'zentao-mcp.md', 'workflow.md', 'error-handling.md', 'setup.md'];
+  const refs = ['feedback-templates.md', 'zentao-cli.md', 'workflow.md', 'error-handling.md', 'setup.md'];
   for (const ref of refs) {
     check(`rh-product-feedback: SKILL.md 引用 references/${ref}`, parsed.body.includes(`references/${ref}`));
   }
