@@ -223,6 +223,7 @@ function main() {
   process.stdout.write('\n下一步：把 rh-product-feedback 整个目录复制进宿主技能目录：\n');
   process.stdout.write('  macOS / Linux: mkdir -p ~/.agents/skills && cp -R <本目录>/rh-product-feedback ~/.agents/skills/\n');
   process.stdout.write('  Windows: Copy-Item -Recurse <本目录>\\rh-product-feedback "$env:USERPROFILE\\.agents\\skills\\"\n');
+  process.stdout.write('  已经装过旧版的：先删掉旧技能目录再拷新的——覆盖着拷会把旧通道的脚本留下来。\n');
   process.stdout.write('  装完后在宿主里说「帮我装禅道 CLI」（接入提示词见 docs/quick-start.md），再给你的本人凭据写一条命令。\n');
 }
 

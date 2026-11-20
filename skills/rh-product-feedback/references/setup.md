@@ -62,50 +62,51 @@ node <技能目录>/scripts/zentao.mjs products
 
 如实汇报：分别说清「CLI 装好了没、版本对不对」「凭据已写入 / 还没写入」「自检过了没、能看到几个产品」。没验证过不要说「装好了、能提反馈了」。
 
-## 更新技能
+## 重装 / 更新
 
-终端用户问「技能有新版吗」「更新一下 rh-product-feedback」时走这一节。**更新由 skills CLI 完成，技能包自己不参与**——技能没被加载也能更新。
+终端用户说「技能有新版吗」「更新一下 rh-product-feedback」「重装一下」时走这一节。**首装和重装用同一段提示词**（见下面「业务用户：粘一段提示词」）——终端用户不需要知道现在是哪一版，更不需要在几种方案里挑：**判断与清理由 Agent 自己做**。
 
-### 用户侧提示词
-
-把下面这段发给你正在用的 Agent（与仓库的 [`docs/quick-start.md`](https://github.com/xuxzh/ruihui-skills/blob/main/docs/quick-start.md) 的「更新技能」逐字一致，由 `tests/validate-skills.mjs` 校验）：
-
-```
-帮我更新 ruihui 的产品反馈助手（rh-product-feedback）：
-1. 先跑 `npx skills check`。没有新版就告诉我「已是最新」，到此为止；如果它报我改过技能里的文件（local changes），先告诉我会覆盖什么，等我确认再动。
-2. 有新版就跑 `npx skills update rh-product-feedback`。
-3. 更新完告诉我三件事：更新到了哪个版本（读技能目录里 SKILL.md 的 `rh-version`）、我的禅道凭据还在不在（只说在与不在，别回显内容）、以及要不要重载才能生效。
-```
+**更新由 skills CLI 完成，技能包自己不参与**——技能没被加载也能更新。
 
 ### Agent 执行路径
 
-1. **查**：`npx skills check`。它列出所有可更新的技能，也报出技能目录里被手改过的文件（`has local changes`）。有新版或本地改动时退出码是 1——那是「有东西要动」的信号，不是失败。
-2. **有本地改动先问**：更新会覆盖技能目录里的文件。终端用户改过 `SKILL.md`、`config.local.json` 或脚本时，先说清会覆盖什么，等终端用户确认再动。
-3. **更新**：`npx skills update rh-product-feedback`。带技能名时不问范围，project 与 global 都会找；`-g` 只更全局、`-p` 只更项目、`-y` 跳过范围提示。
-4. **没走过 skills CLI 的安装**（实施人员直接拷贝的文件夹）没有锁条目，`skills update` 找不到它——让实施人员给一份新包覆盖旧目录，不要自己去改技能包的文件。
-5. **重载才生效**：更新换的是磁盘上的文件，运行中的宿主还在用旧版本。按「各宿主配置」提示终端用户重载（Claude Code 退出重开；pi 执行 `/reload`）。
-6. **不用重做接入**：接入凭据在本机的凭据文件里（`~/.config/rh-zentao/credentials`）、本机偏好（默认产品、默认负责人）在本机偏好文件里、官方禅道 CLI 装在系统里（全局 npm 包，版本由技能包接入配置钉住）——三处都不在技能目录里，更新不会动。照实说「不用重新写密码、不用重装 CLI」。
-7. **报版本号**：更新完读技能目录里 `SKILL.md` 的 `metadata.rh-version` 报给终端用户；读不到就说读不到。
+按顺序走完，每一步自己判断，**不要把版本判断抛给终端用户**：
+
+1. **定位技能目录并判版本**：在当前宿主的技能目录里找 `rh-product-feedback`（pi `~/.agents/skills/`、Claude Code `~/.claude/skills/`，其它宿主按其文档）。看两样：有没有 `scripts/zentao.mjs`（已是当前通道）；没有、却有 `scripts/zentao-query.mjs` 或 `references/zentao-mcp.md`，就是**旧通道的旧版**；两样都没有 = 没装过。判完只报结论（「你装的是旧版，我给你更新成新版」），不要问终端用户「你现在是哪一版」。
+2. **更新或安装技能本体**：
+   - 走过 skills CLI 的（`~/.agents/.skill-lock.json` 里有条目）：`npx skills check` 有新版就跑 `npx skills update rh-product-feedback`（带技能名时不问范围；`-g` 只更全局、`-p` 只更项目、`-y` 跳过范围提示）。
+   - 没走过 skills CLI 的（实施人员直接拷贝的文件夹）：`skills update` 找不到它 → 让实施人员给一份新包，或用 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global` 从公开仓库取一份。**覆盖旧目录前先删旧目录**，别让新旧文件混在一处。
+   - 终端用户改过技能目录里的文件时（`skills check` 报 `has local changes`），先说清会覆盖什么，等他确认再动——这是唯一需要终端用户拍板的地方。
+3. **装禅道 CLI（版本固定）**：按接入配置 `zentaoCli` 装锁定版本；`zentao version --format=json` 已经和锁定版本一致就跳过，不一致才装（不装 latest）。步骤见上面「1. 装官方禅道 CLI」。
+4. **清掉旧通道的残留（旧版才有）**：删技能目录里作废的旧文件——`scripts/zentao-client.mjs`、`scripts/zentao-query.mjs`、`scripts/zentao-query.sh`、`scripts/zentao-query.ps1`、`scripts/zentao-write.mjs`、`scripts/zentao-upload.mjs`、`references/zentao-mcp.md`。**必须删**：留着它们，skills CLI 会一直报这个技能「有本地改动」，更新看起来像没生效。删完再跑一次 `npx skills check` 确认干净。
+5. **复用本机凭据**：凭据文件（`~/.config/rh-zentao/credentials`）在就**不重写**、不回显；不在才请终端用户在自己终端跑一次 `set-credentials.sh`。
+6. **删掉旧通道的登记（默认做）**：旧版装的时候在宿主里登记过禅道 MCP，现在用不上了——删掉它（Claude Code：`claude mcp remove zentao`；pi：`pi mcp remove zentao`）。报告里带一句「以后这个技能用不上它了，你要是想自己手动查禅道，说一声我再装回来」，**不为此打断他**。除这条旧登记外不改宿主配置。
+7. **重载 + 只读自检**：按「各宿主配置」让终端用户重载（Claude Code 退出重开；pi 执行 `/reload`），然后跑 `node <技能目录>/scripts/zentao.mjs products`，报出：更新到的版本（读 `SKILL.md` 的 `metadata.rh-version`）、CLI 版本、凭据在不在、能看到几个产品。**没重载不算完**：运行中的宿主还在用旧版的 SKILL.md。
+8. **不用重做接入**：凭据在本机凭据文件里、本机偏好在本机偏好文件里、禅道 CLI 装在系统里——三处都不在技能目录里，重装不会动。照实说「不用重新写密码、不用重装工具」。
 
 ### 临时副本
 
 `npx skills use` 落在临时目录里的技能没有更新入口——想拿新版就重新跑一次 `use`。
 
+### 走备用渠道的机器
+
+实施人员直接拷贝技能包（内网 Git / NAS / 软件中心 / 终端管理）的机器没有 skills CLI 的更新入口：让实施人员给一份新包，**先删旧技能目录再拷进去**（覆盖着拷会把旧通道的脚本留下来）。这类机器上的禅道 CLI 仍要按接入配置装固定版本——技能包不带二进制。
+
 ## 业务用户：粘一段提示词
 
-### 1. 安装提示词
+### 1. 安装 / 重装提示词
 
-把下面这段发给你正在用的 Agent（与仓库的 [`docs/quick-start.md`](https://github.com/xuxzh/ruihui-skills/blob/main/docs/quick-start.md) 速查逐字一致，由 `tests/validate-skills.mjs` 校验）：
+首装和重装用**同一段**——把下面这段发给你正在用的 Agent（与仓库的 [`docs/quick-start.md`](https://github.com/xuxzh/ruihui-skills/blob/main/docs/quick-start.md) 速查逐字一致，由 `tests/validate-skills.mjs` 校验）：
 
 ```
-帮我装上 ruihui 的产品反馈助手（rh-product-feedback），并接上禅道：
-1. 技能没装的话，先运行 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`，然后读它输出的路径下的 `SKILL.md`；第一次装完按它给的提示重载（Claude Code 退出重开，pi 执行 `/reload`）。
-2. 由你代我装官方禅道 CLI（npm 包 `zentao-cli`），版本固定取技能包 `config.local.json` 里 `zentaoCli.version` 的值，装好校验版本对得上；没有 node 或装不上就如实告诉我，并给我禅道网页端的替代路径。
-3. 告诉我怎么写入我自己的禅道账号密码——密码必须由我在自己的终端里输入，别替我输、也别写进对话。
-4. 凭据写好之后跑一次接入自检，报出我这个账号可见的产品，并说明凭据此刻起有没有生效。
+帮我把 ruihui 的产品反馈助手（rh-product-feedback）装好，已经装过就更新到最新：
+1. 技能：当前是装好的旧版还是根本没装，你自己判断，不用问我；需要更新就更新到最新。
+2. 禅道工具：把技能要求的那个禅道工具装好，版本固定取技能包 `config.local.json` 里 `zentaoCli.version` 的值，不要装最新版；已经装好且版本对得上就跳过。
+3. 我的账号密码：告诉我怎么写入我自己的禅道账号密码——密码必须由我在自己的终端里输入，别替我输、也别写进对话。这台机器上已经写过就不用再写。
+4. 收尾：跑一次只读自检，报出我这个账号可见的产品，并说明凭据此刻起有没有生效。
 ```
 
-你用的是 pi、Claude Code、Codex 还是别的 Agent 都一样——**装 CLI、装技能都发生在你正在对话的这个宿主里**，不用挑、不用配；凭据始终由你自己在自己的终端里输入。
+你用的是 pi、Claude Code、Codex 还是别的 Agent 都一样——**装技能、装禅道工具都发生在你正在对话的这个宿主里**，不用挑、不用配；凭据始终由你自己在自己的终端里输入。**已经是最新的话，把这段原样再发一次就行**：它不会动你的密码，也不会重装工具。
 
 ### 2. 写账号密码
 
@@ -306,7 +307,7 @@ ZENTAO_PASSWORD=<你的禅道密码>
 | OpenCode | 按宿主文档的技能目录 | 重开 |
 | 其它宿主 | 按宿主文档 | 按宿主文档 |
 
-- **不用登记 MCP**：首次接入不碰宿主配置，各宿主的 MCP 配置都不需要改。宿主能跑命令（`node`、`zentao`）就够了。
+- **不用登记 MCP**：首次接入不碰宿主配置，各宿主的 MCP 配置都不需要改。宿主能跑命令（`node`、`zentao`）就够了。（重装时会删掉旧版登记的那一条，见「重装 / 更新」。）
 - **不用改技能包里的 `config.local.json`**：地址与固定的 CLI 版本都在里面，由管理员维护；终端用户没同意不要动（见 SKILL.md 硬约束 8）。
 - **Windows**：命令一样跑，路径分隔符换成 `\`；`bash` 换成 PowerShell 脚本（`set-credentials.ps1`）。
 
@@ -387,7 +388,7 @@ node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --objec
 npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
 ```
 
-备用渠道与技能内容解耦，按现有 IT 条件选一个：
+备用渠道与技能内容解耦（同一份内容，只是换个拷贝方式），按现有 IT 条件选一个：
 
 | 渠道 | 用户侧动作 |
 | --- | --- |
@@ -396,6 +397,6 @@ npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global
 | 公司软件中心 / 应用市场 | 在软件中心点安装 |
 | 终端管理（Intune / 域策略 / MDM） | 无需操作，机器上已有 |
 
-`node scripts/build-internal-package.mjs` 仍能打出自洽的目录（`dist/rh-product-feedback/`），供压缩包分发使用；地址取自仓库里的 `config.local.json`。
+`node scripts/build-internal-package.mjs` 仍能打出自洽的目录（`dist/rh-product-feedback/`），供压缩包分发使用；地址取自仓库里的 `config.local.json`。**它不是另一条发布线**：内容与 skills.sh 上的是同一份，仓库更新后重新构建一次即可。
 
-**只有走 skills CLI 装的才有自动更新**（`npx skills check` / `npx skills update`）。走备用渠道拷贝目录的用户没有更新入口——技能内容变了要重新分发一份，覆盖旧目录（见上面「更新技能」）。
+**只有走 skills CLI 装的才有自动更新**（`npx skills check` / `npx skills update`）。走备用渠道拷贝目录的用户没有更新入口——技能内容变了要重新分发一份，**先删旧技能目录再拷新的**（覆盖着拷会把旧通道的脚本留下来，见上面「重装 / 更新」）。

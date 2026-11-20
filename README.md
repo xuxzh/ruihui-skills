@@ -4,7 +4,7 @@
 
 | 技能 | 版本 | 说明 |
 | --- | --- | --- |
-| [`rh-product-feedback`](skills/rh-product-feedback) | 0.11.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），其余建**反馈单**；两条路径都支持查询、解释处理进度、补充说明、正文带图；接入只走官方禅道 CLI，第一次接入时引导你装 CLI 与写本人凭据 |
+| [`rh-product-feedback`](skills/rh-product-feedback) | 0.12.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），其余建**反馈单**；两条路径都支持查询、解释处理进度、补充说明、正文带图；接入只走官方禅道 CLI，第一次接入时引导你装 CLI 与写本人凭据 |
 
 ## 业务用户：装完技能，一句话接入
 
@@ -20,7 +20,7 @@
 
 > 不想让技能常驻、只想试一次：用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback`（技能落在临时目录），提示词见 quick-start。
 
-**技能有新版时**：把更新提示词发给同一个 Agent 就行（见 [`docs/quick-start.md`](docs/quick-start.md) 的「更新技能」）——它先查有没有新版再更新；你的禅道凭据与官方禅道 CLI 都不在技能目录里，更新不会动到，重载一次宿主即可生效。
+**技能有新版时**：把**同一段安装提示词**再发给同一个 Agent 就行（见 [`docs/quick-start.md`](docs/quick-start.md) 的「重装 / 更新」）——它首装和重装通用，会自己判断该更新还是重装；你的禅道凭据与官方禅道 CLI 都不在技能目录里，重装不会动到它们，重载一次宿主即可生效。
 
 之后就能直接用：
 
@@ -38,7 +38,7 @@
 
 - **地址从哪来**：写在技能包内的 `config.local.json`（`zentaoWebUrl` = 禅道站点地址，同时用于换令牌与拼单据链接；`zentaoCli` = 官方禅道 CLI 的版本锁；`mcpUrl` = 团队自研禅道 MCP 的地址）。该文件**进仓库**、随技能包一起分发（见 [ADR-0005](docs/adr/0005-禅道地址进版本库.md)）：地址本身不是凭据，内网 IP 也不从公网可达。`mcpUrl` 只是留给终端用户自己手动查看用的地址来源——团队自研禅道 MCP 已降级为「给人手动查看」，技能代码不读它、不依赖它、不登记它。
 - **地址用 IP 而不是域名**：公司没有内网 DNS 域名可指禅道；地址随网络调整时改 `config.local.json` 再分发一次。
-- **分发渠道**：公网 `skills.sh` 为主——`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`；备用：内网 Git（`git clone` 后复制目录）、NAS / 对象存储（下载压缩包后解压）、公司软件中心（点安装）、终端管理（推到用户机器）。
+- **分发渠道**：公网 `skills.sh` 为主——`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`；备用（同一份内容换个拷贝方式，给装不了 npm / GitHub 的机器用）：内网 Git（`git clone` 后复制目录）、NAS / 对象存储（下载压缩包后解压）、公司软件中心（点安装）、终端管理（推到用户机器）。备用渠道没有更新入口，内容变了要重新分发一份，**先删旧技能目录再拷新的**。
 - **本仓库不包含任何账号或凭据**；扫描器允许内网地址出现在 `config.local.json`，出现在别处一律 fail。
 - **CLI 版本升级走发版流程**：改 `config.local.json` 的 `zentaoCli.version` → 跑一次接入自检 → 重新分发。业务用户不要自己 `npm i -g zentao-cli@latest`，技能也不在运行时升级。
 
@@ -92,7 +92,9 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 
 ## 能力边界
 
-当前版本（v0.11.0）的能力与限制：
+当前版本（v0.12.0）的能力与限制：
+
+- **接入通道是官方禅道 CLI**（0.12.0 起）：此前的随包直连脚本与宿主里的禅道 MCP 工具已下线。旧版机器按 [`docs/quick-start.md`](docs/quick-start.md) 的「重装 / 更新」走一遍即可：同一段提示词，Agent 自己判版本、自己清残留，不用业务用户做任何选择。
 
 - **安装交给当前的 Agent**：装技能用 skills CLI，装官方禅道 CLI 也由你在用的那个 Agent 自己做（按接入配置的版本锁），技能包里不写死宿主清单。凭据始终由本人写入，密码不进对话。
 
@@ -183,6 +185,7 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 - [ADR-0016](docs/adr/0016-默认负责人跟产品QD走且可配置.md) — 默认负责人跟产品 QD 走且可配置
 - [ADR-0017](docs/adr/0017-用官方禅道CLI替换自研接入通道.md) — 用官方禅道 CLI 替换自研接入通道（当前唯一通道）
 - [ADR-0018](docs/adr/0018-随包默认负责人改为不指派.md) — 随包默认负责人改为不指派
+- [ADR-0019](docs/adr/0019-重装用同一段提示词由Agent自己判版本.md) — 重装用同一段提示词，由 Agent 自己判版本
 
 ## License
 

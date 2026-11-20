@@ -1,10 +1,10 @@
 ---
 name: rh-product-feedback
-description: 把自然语言产品反馈落成禅道单据：明确要 Bug 时建正式缺陷单，其余建反馈单；也支持查询进度、补充说明、正文带图。禅道连不上时，能引导你在当前宿主里完成接入与认证。触发场景：「提 Bug / 报缺陷 / 页面报错 / 复现步骤是…」「提需求 / 提建议 / 提交反馈」「查反馈 / 查缺陷 / 看反馈到哪了 / 补充反馈信息」「帮我装禅道 / 连不上禅道」，或 report a bug、file a feature request、check feedback status、connect zentao；斜杠命令 `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）走安装模式。
+description: 把自然语言产品反馈落成禅道单据：明确要 Bug 时建正式缺陷单，其余建反馈单；也支持查询进度、补充说明、正文带图。禅道连不上时，能引导你在当前宿主里完成接入与认证。触发场景：「提 Bug / 报缺陷 / 页面报错 / 复现步骤是…」「提需求 / 提建议 / 提交反馈」「查反馈 / 查缺陷 / 看反馈到哪了 / 补充反馈信息」「帮我装禅道 / 连不上禅道」「帮我重装 / 更新一下技能」，或 report a bug、file a feature request、check feedback status、connect zentao；斜杠命令 `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）走安装模式。
 compatibility: 需要本机 Node.js 18+ 与官方禅道 CLI（npm 包 zentao-cli，固定版本记在 config.local.json 的 zentaoCli），以及本人的禅道账号凭据（见 references/setup.md）。
 metadata:
-  rh-version: "0.11.0"
-  rh-mcp-server: zentao
+  rh-version: "0.12.0"
+  rh-channel: cli
 ---
 
 # rh-product-feedback
@@ -70,8 +70,8 @@ node <技能目录>/scripts/zentao.mjs bug-create --payload-file /tmp/rh-payload
 
 | 终端用户表达 | 流程 | 落点 |
 | --- | --- | --- |
-| `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）「帮我装 / 装禅道 CLI / 配置 / 连接禅道」「禅道连不上」 | 安装，见 [references/setup.md](references/setup.md) | — |
-| 「更新技能」「技能有新版吗」「把 rh-product-feedback 更新一下」 | 更新，见 [references/setup.md](references/setup.md) 的「更新技能」 | — |
+| `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）「帮我装 / 装禅道 CLI / 配置 / 连接禅道」「禅道连不上」「帮我重装一下」 | 安装或重装，见 [references/setup.md](references/setup.md) | — |
+| 「更新技能」「技能有新版吗」「把 rh-product-feedback 更新一下」「重装一下」 | 重装 / 更新，见 [references/setup.md](references/setup.md) 的「重装 / 更新」——同一段提示词首装和重装都能用，**不要问终端用户现在是哪一版** | — |
 | 「提 bug / 报缺陷 / 页面报错 / 崩溃 / 复现步骤是… / 这个功能报错」 | [写单据](#2-写单据反馈单与缺陷单共用一条主干) | 缺陷单 |
 | 「提需求 / 需要一个功能 / 希望支持…」「提反馈 / 提建议 / 体验不好 / 建议优化…」 | [写单据](#2-写单据反馈单与缺陷单共用一条主干) | 反馈单（类型：需求 / 建议） |
 | 「有个问题 / 不太对劲 / 你看看」 | 追问一次「提反馈单还是直接建缺陷单？」，再进对应流程 | — |
@@ -210,7 +210,7 @@ node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-ze
 5. **身份**：一切以**当前禅道账号**进行（随包脚本用本机凭据换当前账号的令牌）。说「这是你提交的」只在回读确认**创建者**字段 `openedBy`（反馈单与缺陷单都是它）是当前禅道账号时才能说；反馈者字段 `feedbackBy` 是业务字段，禅道不自动记录它，**不能拿它核对提交人**。提交人是别人时如实说是别人。`openedbyme` 指的是当前禅道账号本人提交的记录。
 6. **凭据与地址**：账号、密码、令牌由终端用户本人在自己的机器上写入接入凭据文件——**凭据必须由本人输入**，Agent 不代劳；不在对话里索要、不在回复里回显、不写进任何仓库文件。禅道地址只从 `config.local.json` 读，不主动回显具体值；唯一的例外是 2.7 交付单据链接，那一次给完整 URL。
 7. **权限边界**：当前账号看不见的产品与单据就是看不见，不绕过禅道权限去达成写入目的；默认产品不可见时如实说明并指出该找谁开权限，不静默换产品建单。
-8. **不改技能包自身的文件**：未经终端用户明确要求修改技能，不动 `SKILL.md`、`references/`、`scripts/`、`config.local.json` 里的任何文件。终端用户把「希望这里能记住上次的筛选条件」这类话说成对产品的期望时，按**给产品的建议**处理（类型 `advice`），不是给技能加功能；真要改技能，请他到仓库提 issue。
+8. **不改技能包自身的文件**：未经终端用户明确要求修改技能，不动 `SKILL.md`、`references/`、`scripts/`、`config.local.json` 里的任何文件。**唯一例外是重装**：重装流程里删掉「本次更新作废的旧文件」（旧接入通道留下的脚本与参考文档）属于清理残留，不是改技能内容。终端用户把「希望这里能记住上次的筛选条件」这类话说成对产品的期望时，按**给产品的建议**处理（类型 `advice`），不是给技能加功能；真要改技能，请他到仓库提 issue。
 
 ## 参考文件
 

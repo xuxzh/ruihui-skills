@@ -104,6 +104,12 @@ const parsed = parsedSkills.get('rh-product-feedback');
 if (!parsed) {
   check('rh-product-feedback 存在', false);
 } else {
+  // 版本号与通道标记：给 Agent 判「是不是旧版」用（业务用户看不到这些）。
+  const meta = parsed.data.metadata || {};
+  check('rh-product-feedback: 版本号是 0.12.0', meta['rh-version'] === '0.12.0', meta['rh-version']);
+  check('rh-product-feedback: 标记当前接入通道是 cli', meta['rh-channel'] === 'cli', meta['rh-channel']);
+  check('rh-product-feedback: 不再标记 MCP 通道', !('rh-mcp-server' in meta));
+
   const all = `${parsed.body}\n` + fs.readdirSync(path.join(SKILLS_DIR, 'rh-product-feedback', 'references'))
     .filter((f) => f.endsWith('.md'))
     .map((f) => fs.readFileSync(path.join(SKILLS_DIR, 'rh-product-feedback', 'references', f), 'utf8'))
@@ -221,40 +227,56 @@ if (fs.existsSync(quickStart)) {
     }
   }
 
-  // 安装提示词只有一份真相：quick-start 与随包 setup.md 逐字一致（ADR-0014）。
+  // 安装 / 重装提示词只有一份真相：quick-start 与随包 setup.md 逐字一致（ADR-0014）。
   const setupPath = path.join(SKILLS_DIR, 'rh-product-feedback', 'references', 'setup.md');
   if (fs.existsSync(setupPath)) {
     const setupText = fs.readFileSync(setupPath, 'utf8');
     const promptOf = (text) => {
-      const m = text.match(/```\n(帮我装上 ruihui 的产品反馈助手[\s\S]*?)```/);
+      const m = text.match(/```\n(帮我把 ruihui 的产品反馈助手[\s\S]*?)```/);
       return m ? m[1] : '';
     };
     const inQuickStart = promptOf(quickText);
     const inSetup = promptOf(setupText);
     check(
-      '安装提示词与随包 setup.md 逐字一致',
+      '安装 / 重装提示词与随包 setup.md 逐字一致',
       !!inQuickStart && inQuickStart === inSetup,
       !inQuickStart || !inSetup ? '找不到提示词块' : inQuickStart === inSetup ? '' : '两处不一致',
     );
 
-    // 更新提示词同样只有一份真相。
-    const updatePromptOf = (text) => {
-      const m = text.match(/```\n(帮我更新 ruihui 的产品反馈助手[\s\S]*?)```/);
-      return m ? m[1] : '';
-    };
-    const updateInQuickStart = updatePromptOf(quickText);
-    const updateInSetup = updatePromptOf(setupText);
+    // 首装与重装用同一段提示词：两个文件里都只能出现一份，不能各写一份然后走样。
+    for (const [label, text] of [['快速上手', quickText], ['随包 setup.md', setupText]]) {
+      const count = (text.match(/帮我把 ruihui 的产品反馈助手/g) || []).length;
+      check(`${label}里的安装 / 重装提示词只有一份`, count === 1, `${count} 份`);
+    }
     check(
-      '更新提示词与随包 setup.md 逐字一致',
-      !!updateInQuickStart && updateInQuickStart === updateInSetup,
-      !updateInQuickStart || !updateInSetup ? '找不到更新提示词块' : updateInQuickStart === updateInSetup ? '' : '两处不一致',
+      '快速上手没有另写一段更新提示词',
+      !/帮我更新 ruihui 的产品反馈助手/.test(quickText),
     );
 
     check(
-      '快速上手写了更新技能的检查与更新命令',
+      '快速上手写了检查与更新命令',
       quickText.includes('npx skills check') && quickText.includes('npx skills update rh-product-feedback'),
     );
-    check('快速上手说明更新不用重做接入', quickText.includes('不用重做接入'));
+    check('快速上手说明重装不用重做接入', quickText.includes('不用重做接入'));
+    check('快速上手的重装小节指向同一段提示词', quickText.includes('把上面那段提示词原样再发一次'));
+
+    // 业务用户不看版本差异：面向用户的文档里不出现通道术语。
+    check('快速上手不出现 MCP 术语', !/\bMCP\b/.test(quickText));
+    check('快速上手不出现「禅道 CLI」这类说法', !/禅道\s*CLI|官方\s*CLI/.test(quickText));
+
+    // 重装路径必须写在随包文档里：Agent 靠它自己判版本、自己清理。
+    for (const [label, needle] of [
+      ['有重装 / 更新小节', '## 重装 / 更新'],
+      ['自己判版本（旧版判据）', 'zentao-query.mjs'],
+      ['清掉旧通道残留', 'zentao-write.mjs'],
+      ['复用本机凭据', '~/.config/rh-zentao/credentials'],
+      ['删掉旧登记', 'mcp remove zentao'],
+      ['重载宿主', '/reload'],
+      ['只读自检', 'zentao.mjs products'],
+      ['不问终端用户是哪一版', '不要问终端用户'],
+    ]) {
+      check(`随包 setup.md 写了${label}`, setupText.includes(needle));
+    }
   }
 } else {
   check('存在 docs/quick-start.md', false);
