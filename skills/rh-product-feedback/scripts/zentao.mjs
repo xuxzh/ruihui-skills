@@ -408,6 +408,12 @@ function stripTags(html) {
 function normalizeBody(text, kindName) {
   if (kindName === 'bug') return stripTags(text);
   return String(text ?? '')
+    // 反馈正文里的图片引用只认 fileID：服务端会补 onload/setImageSize 等属性，
+    // 属性差异不改变“引用的是哪张图”，不能因此判正文不一致。
+    .replace(/<img\b[^>]*>/gi, (tag) => {
+      const fileId = tag.match(/\bfileID\s*=\s*["']?(\d+)/i);
+      return fileId ? `<img fileID="${fileId[1]}">` : tag;
+    })
     .replace(/\r\n/g, '\n')
     .split('\n')
     .map((line) => line.replace(/[ \t]+$/, ''))

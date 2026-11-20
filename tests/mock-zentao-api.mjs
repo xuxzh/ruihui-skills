@@ -69,6 +69,8 @@ export function createMockApiState(overrides = {}) {
     // 同一个令牌的第一次 feedbacks 请求会忽略 productID，第二次才生效）
     feedbackFirstListGlobal: false,
     feedbackListSeen: new Set(),
+    // 反馈正文里的 <img> 落库时被服务端补 onload（真实实例行为），用来验证正文归一化
+    feedbackImageOnload: false,
     nextBugId: 1900,
     nextFeedbackId: 900,
     nextFileId: 1,
@@ -261,7 +263,10 @@ function updateRecord(state, record, payload, kind) {
   if (!noop) {
     if (payload.title !== undefined) patched.title = String(payload.title);
     if (kind === 'bug' && payload.steps !== undefined) patched.steps = String(payload.steps);
-    if (kind === 'feedback' && payload.desc !== undefined) patched.desc = String(payload.desc);
+    if (kind === 'feedback' && payload.desc !== undefined) {
+      patched.desc = String(payload.desc);
+      if (state.feedbackImageOnload) patched.desc = patched.desc.replace(/<img\b/gi, '<img onload="setImageSize(this,0)"');
+    }
     if (!state.omitActions) {
       patched.actions = [...record.actions, { id: record.id * 10 + record.actions.length, action: 'edited', actor: 'mock-user', date: now(), comment: '' }];
     }

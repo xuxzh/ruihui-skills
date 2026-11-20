@@ -472,3 +472,24 @@ test('A16 缺陷单更新回读没有 actions（真实 CLI 0.4.4 形状）：正
     assert.equal(normalize(server.state.bugs.get(1900).steps), normalize(appendDraft(normalize(BUG_STEPS))));
   });
 });
+
+test('A17 反馈单带图更新：服务端给 <img> 补 onload 属性，正文核对仍要按图片引用判一致', { skip: NEEDS_CLI }, async () => {
+  await withMock({ feedbackImageOnload: true, feedbacks: new Map([[900, seedFeedback()]]) }, async ({ server, env, dir }) => {
+    const reference = '<img src="/index.php?m=file&f=read&t=png&fileID=6530" alt="file-read-6530.png" />';
+    const file = writePayload(dir, {
+      product: 101,
+      title: '设备列表导出按钮点击后无响应',
+      desc: `${FEEDBACK_BODY}\n\n${SEPARATOR}\n${reference}`,
+      expectedBody: FEEDBACK_BODY,
+      appendLabel: '截图 1',
+    });
+    const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    assert.equal(code, 0, stderr);
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.updated, true);
+    assert.equal(result.verified, 'readback');
+    assert.match(server.state.feedbacks.get(900).desc, /fileID=6530/);
+  });
+});

@@ -119,6 +119,7 @@
 - **`user list` 的服务端 `filters` 在实例上被忽略**：`zentao user list --filters …` 返回全部用户（实测 51 条）。所以查产品 QD 时先把用户表取全（`--fields account,realname,deleted,locked,last`），**在入口脚本里按账号筛**。注意最后登录字段叫 `last`；账号失效标记只看 `deleted`（`"1"` = 已删除）与 `locked`（非空 = 已锁定）。
 - **产品 QD 的字段名是大写 `QD`**：`product list --fields id,name,QD` 能取到（形如 `{"id":"1","name":"<产品名>","QD":"<账号>"}`）；小写 `qd` 不是合法字段名，会被静默忽略（字段投影里就没这一列了）。QD 属于运行时事实：只查不存，不写进随包配置或仓库文件。
 - **选品不再有 `prep` 合并调用**：旧查询器的 `prep`（产品 + 项目 + 查重候选一次拿全）随旧通道下线，迁移后改成显式的三个子命令：`products` → `projects --product <id>` → `dup --kind … --product … --title …`。这不是漏做，是拆开让每一步都能单独重试与核对。
+- **反馈正文里的图片引用会被服务端补属性**：落库后 `<img>` 会多出 `onload="setImageSize(this,0)"` 等属性；入口脚本比较正文时只按 `fileID` 归一化图片标签，不比较属性差异，避免把“同一张图”误判成正文不一致。
 - **`get` 不返回 `actions`**：CLI 0.4.4 的 `bug get` / `feedback get` 即使 `--fields` 里带 `actions`，返回的 JSON 里也没有这个字段（服务端 API 有流水，CLI 没映射；实测缺陷 1936 与反馈 51）。因此入口脚本的回读策略是：**有 `actions` 字段**时按 `opened` / `edited` 核对；**字段不存在**时，建单用 `openedBy` + `openedDate`，更新用“正文与完整预期正文逐字一致”（写前复核已确认原文不同）。不要要求用户为了流水去换通道或升级 CLI。
 
 ## 与随包脚本的分工
