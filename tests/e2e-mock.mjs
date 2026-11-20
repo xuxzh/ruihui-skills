@@ -773,7 +773,7 @@ test('L13 缺陷创建超时且未落库：报告未确认、只调用一次创�
 
 test('L15 缺陷单带图闭环：图片引用落在正文里、附件挂在目标单据上、附件清干净', { skip: NEEDS_CLI }, async () => {
   // 删除故意失败：这样服务端落库的正文留在假服务里，测试能回查图片引用
-  await withAssistant({ deleteFails: true }, async ({ zentao, state }) => {
+  await withAssistant({ deleteFails: true, bugStepsOnload: true }, async ({ zentao, state }) => {
     const result = await runLiveBugE2E({ zentao, env: LIVE_ENV, image: true });
 
     const imageStep = result.steps.find((s) => s.name === '正文内联图片引用');
@@ -796,6 +796,23 @@ test('L15 缺陷单带图闭环：图片引用落在正文里、附件挂在目�
     assert.equal(attachment.objectType, 'bug', '附件应挂在缺陷单上');
     assert.equal(String(attachment.objectId), String(bug.id), '附件应挂在目标单据上');
     assert.equal(state.files.size, 0, '附件应清理干净');
+  });
+});
+
+test('L16 带图时上传失败：如实报失败，不写正文、不假装图已放上去', { skip: NEEDS_CLI }, async () => {
+  await withAssistant({ deleteFails: true, failPaths: ['/api.php/v2/files'] }, async ({ zentao, state }) => {
+    const result = await runLiveE2E({ zentao, env: LIVE_ENV, image: true });
+
+    const uploadStep = result.steps.find((s) => s.name === '图片上传成功');
+    assert.equal(uploadStep?.ok, false, '上传失败要如实报失败');
+    const imageStep = result.steps.find((s) => s.name === '正文内联图片引用');
+    assert.notEqual(imageStep?.ok, true, '没传上去就不该说图片落在了正文里');
+
+    // 正文里不能有图片引用：没传上去就不该写进去
+    const feedback = [...state.feedbacks.values()].find((f) => f.title.includes(E2E_MARKER_PREFIX));
+    assert.ok(feedback, '假服务里应留着这条反馈（删除故意失败）');
+    assert.doesNotMatch(feedback.desc, /fileID=/, '上传失败不该往正文里写图片引用');
+    assert.equal(updatesOf(state, 'feedback').length, 1, '只应有补充说明那一次更新，不该有带图的更新');
   });
 });
 

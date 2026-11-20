@@ -75,6 +75,8 @@ export function createMockApiState(overrides = {}) {
     feedbackImageOnload: false,
     // 缺陷正文里的 <img> 落库时被服务端吃掉，用来验证回读核对能发现图片引用丢失
     bugStepsDropImage: false,
+    // 缺陷正文里的 <img> 落库时被服务端补 onload（真实实例行为），用来验证正文归一化
+    bugStepsOnload: false,
     nextBugId: 1900,
     nextFeedbackId: 900,
     nextFileId: 1,
@@ -276,6 +278,7 @@ function updateRecord(state, record, payload, kind) {
       patched.steps = String(payload.steps);
       // 服务端没存住图片引用（禅道吞掉 <img> 的情形）：回读核对要能发现
       if (state.bugStepsDropImage) patched.steps = patched.steps.replace(/<img\b[^>]*>/gi, '');
+      if (state.bugStepsOnload) patched.steps = patched.steps.replace(/<img\b/gi, '<img onload="setImageSize(this,0)"');
     }
     if (kind === 'feedback' && payload.desc !== undefined) {
       patched.desc = String(payload.desc);

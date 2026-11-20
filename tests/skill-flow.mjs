@@ -31,6 +31,14 @@ export class SkillError extends Error {
 // 入口脚本按同一条线拆草稿（skills/rh-product-feedback/scripts/zentao.mjs 的 APPEND_SEPARATOR）。
 export const SEPARATOR = '──────────────';
 
+/**
+ * 追加草稿：原文 + 空行 + 分隔行 + 追加部分。
+ * 少了分隔行，入口脚本会报「草稿里找不到分隔行」并拒绝写入——这就是追加草稿的契约。
+ */
+export function appendDraft(original, appended) {
+  return `${original}\n\n${SEPARATOR}\n${appended}`;
+}
+
 /** 禅道会把描述里的 \n 存成 \r\n（真实 E2E 实测确认），回读比较前先归一化换行符。 */
 function normalizeNewlines(text) {
   return String(text ?? '').replace(/\r\n/g, '\n');
@@ -244,7 +252,7 @@ export class FeedbackAssistant {
     const before = await this.readBack(id);
     if (!before.found) return { status: 'not_found', writes: 0 };
     const original = normalizeNewlines(before.feedback.desc || '');
-    const nextDesc = `${original}\n\n${SEPARATOR}\n【补充说明 · ${this.stamp()} · 用户口述，AI 整理】\n${addition}`;
+    const nextDesc = appendDraft(original, `【补充说明 · ${this.stamp()} · 用户口述，AI 整理】\n${addition}`);
     const approved = await this.confirm({ kind: 'supplement', id, original, next: nextDesc });
     if (!approved) return { status: 'cancelled', writes: 0 };
 
@@ -497,7 +505,7 @@ export class DefectAssistant extends FeedbackAssistant {
     if (!before.found) return { status: 'not_found', writes: 0 };
     const original = String(before.bug.steps || '');
     // 草稿形态固定（见 references/workflow.md F4）：原文 + 分隔行 + 标注 + 追加段落
-    const nextSteps = `${original}\n\n${SEPARATOR}\n【补充说明 · ${this.stamp()} · 用户口述，AI 整理】\n${addition}`;
+    const nextSteps = appendDraft(original, `【补充说明 · ${this.stamp()} · 用户口述，AI 整理】\n${addition}`);
     const approved = await this.confirm({ kind: 'supplementBug', id, original, next: nextSteps });
     if (!approved) return { status: 'cancelled', writes: 0 };
 
