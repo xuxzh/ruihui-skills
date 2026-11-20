@@ -4,18 +4,18 @@
 
 | 技能 | 版本 | 说明 |
 | --- | --- | --- |
-| [`rh-product-feedback`](skills/rh-product-feedback) | 0.12.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），其余建**反馈单**；两条路径都支持查询、解释处理进度、补充说明、正文带图；接入只走官方禅道 CLI，第一次接入时引导你装 CLI 与写本人凭据 |
+| [`rh-product-feedback`](skills/rh-product-feedback) | 0.13.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），其余建**反馈单**；两条路径都支持查询、解释处理进度、补充说明、正文带图；接入只走官方禅道 CLI，第一次接入时引导你装 CLI 与写本人凭据 |
 
 ## 业务用户：装完技能，一句话接入
 
-> 面向只要能把话说清楚的同事：装技能、装官方禅道 CLI 都由 Agent 代办，你只在自己的终端里写一次账号密码。
+> 面向只要能把话说清楚的同事：装技能、装官方禅道 CLI 都由 Agent 代办；账号密码你在 Agent 打开的**本机一次性页面**上填一次，全程不用开终端。
 
 完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的提示词、三个示例和常见问题。概览：
 
 > 直接发给别人（可贴进 IM / 邮件）：<https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/quick-start.md#三步速查>
 
 1. **装技能 + 装官方禅道 CLI**：把速查里的提示词粘给你正在用的 Agent（pi、Claude Code、Codex 都行），它会装好技能（`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`），再按技能包 `config.local.json` 里的版本锁装好官方禅道 CLI——**不用挑、不用填 IP、不用改配置文件**。
-2. **在你的终端里写账号密码**：Agent 会把 `set-credentials.sh` 那条命令原样贴给你，密码只在你自己的机器上输入，不进对话。
+2. **在 Agent 打开的本机页面上填账号密码**：Agent 起一个只监听 `127.0.0.1` 的一次性页面，你在页面上填账号密码（或粘个人令牌）——密码只在你自己的机器上输入，不进对话、也不进命令行历史；页面当场验证并写入本机凭据。
 3. **让 Agent 做接入自检**：凭据写好就能用，在 Agent 里说「验证一下禅道连接」。
 
 > 不想让技能常驻、只想试一次：用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback`（技能落在临时目录），提示词见 quick-start。
@@ -94,11 +94,13 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 
 ## 能力边界
 
-当前版本（v0.12.0）的能力与限制：
+当前版本（v0.13.0）的能力与限制：
 
 - **接入通道是官方禅道 CLI**（0.12.0 起）：此前的随包直连脚本与宿主里的禅道 MCP 工具已下线。旧版机器按 [`docs/quick-start.md`](docs/quick-start.md) 的「重装 / 更新」走一遍即可：同一段提示词，Agent 自己判版本、自己清残留，不用业务用户做任何选择。
 
-- **安装交给当前的 Agent**：装技能用 skills CLI，装官方禅道 CLI 也由你在用的那个 Agent 自己做（按接入配置的版本锁），技能包里不写死宿主清单。凭据始终由本人写入，密码不进对话。
+- **安装交给当前的 Agent**：装技能用 skills CLI，装官方禅道 CLI 也由你在用的那个 Agent 自己做（按接入配置的版本锁），技能包里不写死宿主清单。
+
+- **凭据也在这个对话框里填**（0.13.0 起）：Agent 起一个只监听 `127.0.0.1` 的一次性页面，你在自己的浏览器里填账号密码（或粘个人令牌），页面当场验证并写本机凭据，写完自关——不用切到终端，密码不进对话、也不进命令行历史（见 [ADR-0022](docs/adr/0022-写凭据走本机一次性页面.md)）。远程 SSH 或没有图形界面时仍可用 `set-credentials.sh` 兜底。
 
 - **读写都走随包入口脚本**：`scripts/zentao.mjs` 负责换令牌、注入官方禅道 CLI、投影输出——读（产品、项目、列表、详情）与写（建单、更新、传图）都是它的子命令，只发一次、写完回读，保留「等你确认再写」的链路；查重助手 `scripts/zentao-dedupe.mjs` 只做中文切词。原始 JSON、凭据与令牌都不进上下文。宿主里的禅道 MCP 工具是服务端固定身份，只适合查看，不用来建单（见 [ADR-0017](docs/adr/0017-用官方禅道CLI替换自研接入通道.md)）。
 
@@ -137,6 +139,9 @@ node --test tests/skill-flow.mjs
 
 # 图片上传测试：在假禅道上验证上传、引用生成、失败处理、凭据不外泄
 node --test tests/upload.mjs
+
+# 本机写入页测试：一次性地址、验证后落盘、失败不留凭据、连续失败停手、凭据不外泄
+node --test tests/connect.mjs
 
 # 规范校验（Agent Skills 官方参考实现）
 npx skills-ref validate skills/rh-product-feedback

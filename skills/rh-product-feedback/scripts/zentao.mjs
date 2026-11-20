@@ -119,8 +119,9 @@ async function resolveUserToken(creds, site) {
 
   if (!account || !password) {
     throw new Error(
-      '本机没有禅道接入凭据。在你自己的终端跑一次 `bash <技能目录>/scripts/set-credentials.sh`' +
-        '（Windows 用 set-credentials.ps1）写入账号与密码；不要在对话里把密码告诉 Agent。'
+      '本机没有禅道接入凭据。让终端用户在自己的浏览器里填：`node <技能目录>/scripts/connect.mjs`' +
+        '（只监听 127.0.0.1 的一次性页面，密码不经过对话）；也可以在他自己的终端跑 `bash <技能目录>/scripts/set-credentials.sh`' +
+        '（Windows 用 set-credentials.ps1）。详见 references/setup.md。'
     );
   }
   if (!site) {

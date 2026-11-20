@@ -12,15 +12,11 @@
 帮我把 ruihui 的产品反馈助手（rh-product-feedback）装好，已经装过就更新到最新：
 1. 技能：来源是 GitHub 公开仓库 https://github.com/xuxzh/ruihui-skills ，装它用 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`（`npx` 需要 Node.js 18+，没有就先按第 2 条装上）；当前是装好的旧版还是根本没装，你自己判断，不用问我——没装就装这条命令，已经装过但不是最新就跑 `npx skills update rh-product-feedback`；装不上就直说，别从别处找同名技能。
 2. 禅道工具：先确认这台机器上有 Node.js 18 以上，没有就装一个（用机器上已有的版本管理器，没有就装官方的），再把技能要求的那个禅道工具装好——版本固定取技能包 `config.local.json` 里 `zentaoCli.version` 的值，不要装最新版；已经装好且版本对得上就跳过。
-3. 我的账号密码：告诉我怎么写入我自己的禅道账号密码——密码必须由我在自己的终端里输入，别替我输、也别写进对话。这台机器上已经写过就不用再写。
+3. 我的账号密码：给我一个只在我这台机器上打开的一次性页面来填（技能自带的 `scripts/connect.mjs`）——密码只由我本人输入，别替我输、也别让我把密码贴进对话；这台机器上已经写过就不用再写。
 4. 收尾：跑一次只读自检，报出我这个账号可见的产品，并说明凭据此刻起有没有生效。
 ```
 
-**2. 在你自己的终端写账号密码**：Agent 会把这条命令原样贴给你，复制到自己的终端跑（以 Agent 贴给你的那条为准）；密码不回显，只写在你自己的机器上，**这一步不能省，也不能交给 Agent 代输**——密码进了对话就等于留在了聊天记录里。
-
-```bash
-bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
-```
+**2. 填账号密码（就在 Agent 里，不用开终端）**：Agent 会在你机器上打开一个一次性页面，你在页面上填禅道账号和密码（也可以粘禅道「个人 → 令牌」生成的个人令牌）。密码只填在你自己电脑的浏览器里，**不进对话、也不进命令行历史**；页面当场验证、直接写进本机凭据文件，并告诉你这个账号能看到哪些产品。以 Agent 发给你的那个地址为准；**这一步不能省，也不能交给 Agent 代输**。
 
 **3. 让 Agent 做接入自检**：凭据写好就能用，不用重载。在对话框里说：
 
@@ -49,7 +45,7 @@ bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
 **不想让技能常驻、只想试一次**：用 skills CLI 的 `use`（技能落在临时目录），把下面这段发给 Agent：
 
 ```
-用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback` 拿到这个技能的说明并照着做：把它输出的完整内容先存到临时文件再读；它给的 supporting-files 目录就是技能目录，`SKILL.md` 里的相对路径都从那里解析。然后按其中「0. 接入自检」把技能要求的那个禅道工具装成技能包里钉住的固定版本并校验，再告诉我怎么写入我自己的账号密码。
+用 `npx skills use xuxzh/ruihui-skills@rh-product-feedback` 拿到这个技能的说明并照着做：把它输出的完整内容先存到临时文件再读；它给的 supporting-files 目录就是技能目录，`SKILL.md` 里的相对路径都从那里解析。然后按其中「0. 接入自检」把技能要求的那个禅道工具装成技能包里钉住的固定版本并校验，再用技能自带的 `scripts/connect.mjs` 起一个只在本机打开的一次性页面让我填账号密码。
 ```
 
 ## 重装 / 更新
@@ -100,8 +96,9 @@ Agent 会依次做这些事：判断要建哪种单据 → 补齐缺的信息 �
 | Agent 说找不到 `SKILL.md` | 技能没装到宿主能发现的位置 | 让 Agent 跑 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`，或把技能包解压到宿主技能目录 |
 | Agent 说找不到 `zentao` 命令 | 禅道工具没装，或装包目录不在 PATH 里 | 让 Agent 按技能包接入配置里的固定版本重装一次；装完还找不到，把 `npm prefix -g` 的目录加进 PATH |
 | Agent 说没有 node / 装不上工具 | 本机缺 Node.js，或装包被权限、代理挡住 | 让 Agent 给你装上（它会优先用机器上已有的版本管理器）；实在装不上就用禅道网页端提单 |
-| 凭据命令跑完没生效 | 终端里没输完，或文件没写成 | 重跑一次 `set-credentials.sh` |
-| 登录失败 | 账号或密码不对 | 核对后重跑凭据脚本；不要反复试，连续失败可能锁号 |
+| 页面填完没生效 | 页面没提交成功，或文件没写成 | 让 Agent 重开一次写入页面（`node <技能目录>/scripts/connect.mjs`）；就喜欢在终端里写的，重跑一次 `set-credentials.sh` |
+| 页面打不开 | 你连的是远程服务器，或这台机器没有浏览器 | 让 Agent 改用终端脚本：在你自己的终端里跑 `set-credentials.sh`（Windows 用 `set-credentials.ps1`），效果一样 |
+| 登录失败 | 账号或密码不对 | 在页面里核对重填，连续 3 次会自动停手；不要反复试，连续失败可能锁号 |
 | 装完 Agent 没反应 | 技能刚装上，宿主还没加载 | Claude Code 退出重开；pi 执行 `/reload` |
 | 提交人不是我本人 | 单据不是用你自己的账号提的（旧版经禅道工具建的单会落在公共账号名下） | 让 Agent 用技能自带的入口脚本重提一次——现在建单一定用你自己的账号 |
 | Agent 说你的账号看不到某个产品 | 禅道权限没开 | 找管理员开权限，或换一个你有权限的产品 |

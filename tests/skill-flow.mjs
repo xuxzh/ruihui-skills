@@ -88,7 +88,7 @@ function throwIfCredentialProblem(res) {
   if (!credentialProblem(res)) return;
   throw new SkillError(
     'not_authenticated',
-    `${failureMessage(res)} 按 references/setup.md 让终端用户在自己的终端写接入凭据，不要在对话里索要密码或令牌。`,
+    `${failureMessage(res)} 按 references/setup.md 用 connect.mjs 起本机页面让终端用户自己填凭据，不要在对话里索要密码或令牌。`,
   );
 }
 
@@ -123,7 +123,7 @@ export class FeedbackAssistant {
     if (credentialProblem(res)) {
       throw new SkillError(
         'not_authenticated',
-        `${failureMessage(res)} 让终端用户自己按 references/setup.md 写接入凭据，不要在对话里索要密码。`,
+        `${failureMessage(res)} 让终端用户自己按 references/setup.md 在本机页面里填凭据（connect.mjs），不要在对话里索要密码。`,
       );
     }
     throw new SkillError(

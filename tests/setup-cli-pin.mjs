@@ -51,7 +51,8 @@ test('速查的安装提示词由 Agent 代装 CLI，凭据仍由本人输入', 
   assert.ok(prompt, '速查里找不到安装提示词');
   assert.match(prompt[1], /zentaoCli\.version/, '提示词要让 Agent 按接入配置装固定版本');
   assert.doesNotMatch(prompt[1], /登记禅道 MCP/, '提示词不该再让用户登记禅道 MCP');
-  assert.match(prompt[1], /密码必须由我在自己的终端里输入/, '凭据必须由本人输入');
+  assert.match(prompt[1], /密码只由我本人输入/, '凭据必须由本人输入');
+  assert.match(prompt[1], /connect\.mjs/, '凭据走本机页面写入，不让用户离开对话去开终端');
   assert.match(prompt[1], /已经装过就更新到最新/, '同一段提示词要能用于首装与重装');
   assert.match(prompt[1], /你自己判断，不用问我/, '版本判断由 Agent 做，不问终端用户');
   assert.match(prompt[1], /Node\.js 18/, '提示词要先确认 Node.js，没有就装');

@@ -106,7 +106,7 @@ if (!parsed) {
 } else {
   // 版本号与通道标记：给 Agent 判「是不是旧版」用（业务用户看不到这些）。
   const meta = parsed.data.metadata || {};
-  check('rh-product-feedback: 版本号是 0.12.0', meta['rh-version'] === '0.12.0', meta['rh-version']);
+  check('rh-product-feedback: 版本号是 0.13.0', meta['rh-version'] === '0.13.0', meta['rh-version']);
   check('rh-product-feedback: 标记当前接入通道是 cli', meta['rh-channel'] === 'cli', meta['rh-channel']);
   check('rh-product-feedback: 不再标记 MCP 通道', !('rh-mcp-server' in meta));
 
@@ -140,6 +140,10 @@ if (!parsed) {
   ];
   for (const [label, re] of rules) check(`rh-product-feedback: ${label}`, re.test(all));
 
+  for (const script of ['zentao.mjs', 'zentao-dedupe.mjs', 'connect.mjs', 'set-credentials.sh', 'set-credentials.ps1']) {
+    check(`rh-product-feedback: scripts/${script} 存在`, fs.existsSync(path.join(SKILLS_DIR, 'rh-product-feedback', 'scripts', script)));
+  }
+
   const refs = ['feedback-templates.md', 'zentao-cli.md', 'workflow.md', 'error-handling.md', 'setup.md'];
   for (const ref of refs) {
     check(`rh-product-feedback: SKILL.md 引用 references/${ref}`, parsed.body.includes(`references/${ref}`));
@@ -158,7 +162,8 @@ const quickStart = path.join(ROOT, 'docs', 'quick-start.md');
 if (fs.existsSync(quickStart)) {
   const quickText = fs.readFileSync(quickStart, 'utf8');
   check('快速上手写了粘贴给当前 Agent 的安装提示词', quickText.includes('npx skills add xuxzh/ruihui-skills'));
-  check('快速上手写了写凭据的命令（留在用户自己的终端）', quickText.includes('set-credentials.sh'));
+  check('快速上手写了本机写入页面的命令', quickText.includes('connect.mjs'));
+  check('快速上手保留了终端兜底的凭据脚本', quickText.includes('set-credentials.sh'));
   check('快速上手不再让用户跑安装脚本', !quickText.includes('install.sh'));
 
   // 速查段必须自足：业务用户只看这一段就能装好并提第一条单（ADR-0014）。
@@ -218,7 +223,7 @@ if (fs.existsSync(quickStart)) {
 
     const segText = seg.join('\n');
     for (const [label, needle] of [
-      ['写凭据的命令', 'set-credentials.sh'],
+      ['写凭据的本机页面', 'connect.mjs'],
       ['让 Agent 验证连接的话术', '验证一下禅道连接'],
       ['提单的示例句', '帮我提个 Bug'],
       ['提交人不是本人的提示', '提交人'],
@@ -291,6 +296,8 @@ if (fs.existsSync(quickStart)) {
       ['优先用已有的版本管理器', 'fnm'],
       ['没有版本管理器时装官方的', 'winget install OpenJS.NodeJS.LTS'],
       ['不动已有的旧 node', '不要动它'],
+      ['凭据走本机写入页面', 'connect.mjs'],
+      ['终端兜底的凭据脚本', 'set-credentials.sh'],
       ['装完要重开宿主', '重开'],
       ['装不上的兜底是网页端', '禅道网页端'],
     ]) {

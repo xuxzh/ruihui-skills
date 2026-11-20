@@ -3,7 +3,7 @@ name: rh-product-feedback
 description: 把自然语言产品反馈落成禅道单据：明确要 Bug 时建正式缺陷单，其余建反馈单；也支持查询进度、补充说明、正文带图。禅道连不上时，能引导你在当前宿主里完成接入与认证。触发场景：「提 Bug / 报缺陷 / 页面报错 / 复现步骤是…」「提需求 / 提建议 / 提交反馈」「查反馈 / 查缺陷 / 看反馈到哪了 / 补充反馈信息」「帮我装禅道 / 连不上禅道」「帮我重装 / 更新一下技能」，或 report a bug、file a feature request、check feedback status、connect zentao；斜杠命令 `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）走安装模式。
 compatibility: 需要本机 Node.js 18+ 与官方禅道 CLI（npm 包 zentao-cli，固定版本记在 config.local.json 的 zentaoCli），以及本人的禅道账号凭据（见 references/setup.md）。本机没有 Node.js 时由当前 Agent 装（优先用机器上已有的版本管理器，见 setup.md）。
 metadata:
-  rh-version: "0.12.0"
+  rh-version: "0.13.0"
   rh-channel: cli
 ---
 
@@ -53,14 +53,15 @@ node <技能目录>/scripts/zentao.mjs bug-create --payload-file /tmp/rh-payload
 - **终端用户与禅道账号**：终端用户是当前对话里提出诉求的那个人；**禅道账号**是他的禅道登录身份，单据留痕在它名下（反馈单的**反馈者** `feedbackBy` 也是他——禅道不自动记录，建单时由入口脚本显式填上）。
 - **可见范围**：当前禅道账号能看到的产品的集合；单据只能落在这里面，查重也只覆盖这里面。
 - **接入通道**：技能访问禅道的**唯一**路径——官方禅道 CLI（npm 包 `zentao-cli`），替掉了自研的直连实现（见 [ADR-0017](../../docs/adr/0017-用官方禅道CLI替换自研接入通道.md)、[references/zentao-cli.md](references/zentao-cli.md)）。
-- **随包脚本**：随技能包分发的脚本只有两件事——**入口脚本** `scripts/zentao.mjs`（读写都走它）与**查重助手** `scripts/zentao-dedupe.mjs`（切词）；接入凭据脚本 `set-credentials.sh` / `.ps1` 只负责本人写凭据。旧的三支脚本（查询器 / 写入脚本 / 上传脚本）已下线。
+- **随包脚本**：随技能包分发的脚本只有两件事——**入口脚本** `scripts/zentao.mjs`（读写都走它）与**查重助手** `scripts/zentao-dedupe.mjs`（切词）；`scripts/connect.mjs` 起**本机一次性写入页**，让终端用户自己填账号凭据（`set-credentials.sh` / `.ps1` 是终端兜底，效果一样）。旧的三支脚本（查询器 / 写入脚本 / 上传脚本）已下线。
+- **本机写入页**：首次接入时 Agent 起在 `127.0.0.1` 上的一次性表单（`scripts/connect.mjs`），终端用户自己填账号密码或个人令牌，页面当场验证并写本机凭据、写完自关；凭据不经过对话。兜底是终端脚本 `set-credentials.sh` / `.ps1`（见 [ADR-0022](../../docs/adr/0022-写凭据走本机一次性页面.md)）。
 - **查重基线**：提单前那次查重扫描到的单据 ID 集合。本次查重同时就是写入的基线——基线之外的编号才可能是本次新建；扫描不完整时基线不算数。
 - **随包默认 vs 本机默认**：随包默认写在技能包 `config.local.json`（公司级、所有人共享，用它之前确认一句）；本机默认存在 `preferences.json`（只对本人生效，绝不写进技能包）。默认产品与默认负责人（含产品 QD）都按这两层解析，见 [references/setup.md](references/setup.md)。
 
 ## 0. 会话第一步：接入自检
 
 1. **脚本能连上吗**：跑一次 `node <技能目录>/scripts/zentao.mjs products`。成功 → 打印出来的**当前账号可见的产品就是后续选品范围**（选产品、查重、建单都只能落在这里面），直接进终端用户的诉求。失败 → 按 [references/error-handling.md](references/error-handling.md) 处理，并按 [references/setup.md](references/setup.md)「Agent 执行路径」引导：先看禅道 CLI 装没装，再写本机凭据。**不要**向终端用户索要禅道地址、IP、端口或账号密码。
-2. **认证由入口脚本做，Agent 不插手**：本机凭据 → 当次禅道令牌 → 经环境变量注入**官方禅道 CLI** → 由 CLI 进程取数并投影，全在 `scripts/zentao.mjs` 进程内完成（见 [references/zentao-cli.md](references/zentao-cli.md)）。Agent 不碰密码与令牌，也不用 curl 调试登录接口（那会把令牌打进终端日志）。凭据无效时脚本报错并退出非 0 → 按 [references/error-handling.md](references/error-handling.md)「认证失败」处理：让终端用户在自己机器上重写凭据，不要在对话里索要密码；连续失败可能触发禅道锁号，不要反复试。
+2. **认证由入口脚本做，Agent 不插手**：本机凭据 → 当次禅道令牌 → 经环境变量注入**官方禅道 CLI** → 由 CLI 进程取数并投影，全在 `scripts/zentao.mjs` 进程内完成（见 [references/zentao-cli.md](references/zentao-cli.md)）。Agent 不碰密码与令牌，也不用 curl 调试登录接口（那会把令牌打进终端日志）。凭据无效时脚本报错并退出非 0 → 按 [references/error-handling.md](references/error-handling.md)「认证失败」处理：让终端用户在自己的**本机页面**里重填（跑 `node <技能目录>/scripts/connect.mjs`，**先把地址单独说给他**，再用 `connect.mjs wait` 等结果——两步别串成一条命令，串起来他就看不到地址了），不要在对话里索要密码；连续失败可能触发禅道锁号，不要反复试。
 3. **禅道 CLI 不在 PATH**：脚本会如实报「找不到 zentao 命令」并退出非 0——照 [references/setup.md](references/setup.md)「Agent 执行路径」第 1 步按技能包钉住的固定版本把它装好（`config.local.json` 的 `zentaoCli.version`），装完校验版本，不要临时改用旧脚本顶替；**本机没有 Node.js 就由 Agent 装**（优先用机器上已有的版本管理器，没有就装官方的，装完让宿主重开），实在装不上时如实告知并给禅道网页端的替代路径，不退回用宿主里的禅道 MCP 工具建单。
 4. **不登记禅道 MCP**：首次接入不需要它（见 [references/setup.md](references/setup.md)「禅道 MCP：只给人手动查看」）。它的身份是**服务端配置的固定身份**，不是提交人自己，所以**只适合无关紧要的查看，不用于建单与更新**；终端用户自己登记过的条目属于他的宿主配置，技能不依赖、也不去改它。**不要为了让两边一致去改技能包里的 `config.local.json`**——那是分发下来的文件，用户没同意不要动。
 
@@ -208,7 +209,7 @@ node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-ze
 3. **写入后回读**：按 ID 重新读取并核对内容，「保存成功」的文本不作为落库证据；有 `actions` 时再确认本次**新增**了 `edited` 流水（CLI 0.4.4 不返回 `actions`，这时以正文逐字一致为准）。
 4. **不确定先查**：超时、连接中断、返回与预期不符时，先查询核实再决定下一步，同一份内容不重复创建——禅道创建无幂等，盲目重试会造重复单。结果不确定时只认「查重基线之外、唯一、回读完全一致」的新记录；认不准或复查不完整就报未确认交回终端用户，不把「没查到」说成「没创建」。**扫描不完整就不算数**：列表带上「服务端分页未向前推进，覆盖不完整」时，说明只扫到了第 1 页——不能把「在这 N 条里未发现重复」说成「没有重复」，也不能拿这种基线判定新建，如实说「查重覆盖不完整、是否新建未确认」，不重发。
 5. **身份**：一切以**当前禅道账号**进行（随包脚本用本机凭据换当前账号的令牌）。说「这是你提交的」只在回读确认**创建者**字段 `openedBy`（反馈单与缺陷单都是它）是当前禅道账号时才能说；反馈者字段 `feedbackBy` 是业务字段，禅道不自动记录它，**不能拿它核对提交人**。提交人是别人时如实说是别人。`openedbyme` 指的是当前禅道账号本人提交的记录。
-6. **凭据与地址**：账号、密码、令牌由终端用户本人在自己的机器上写入接入凭据文件——**凭据必须由本人输入**，Agent 不代劳；不在对话里索要、不在回复里回显、不写进任何仓库文件。禅道地址只从 `config.local.json` 读，不主动回显具体值；唯一的例外是 2.7 交付单据链接，那一次给完整 URL。
+6. **凭据与地址**：账号、密码、令牌由终端用户本人在**本机一次性页面**（或他自己的终端）写入接入凭据文件——**凭据必须由本人输入**，Agent 不代劳；不在对话里索要、不在回复里回显、不写进任何仓库文件。禅道地址只从 `config.local.json` 读，不主动回显具体值；唯一的例外是 2.7 交付单据链接，那一次给完整 URL。
 7. **权限边界**：当前账号看不见的产品与单据就是看不见，不绕过禅道权限去达成写入目的；默认产品不可见时如实说明并指出该找谁开权限，不静默换产品建单。
 8. **不改技能包自身的文件**：未经终端用户明确要求修改技能，不动 `SKILL.md`、`references/`、`scripts/`、`config.local.json` 里的任何文件。**唯一例外是重装**：重装流程里删掉「本次更新作废的旧文件」（旧接入通道留下的脚本与参考文档）属于清理残留，不是改技能内容。终端用户把「希望这里能记住上次的筛选条件」这类话说成对产品的期望时，按**给产品的建议**处理（类型 `advice`），不是给技能加功能；真要改技能，请他到仓库提 issue。
 

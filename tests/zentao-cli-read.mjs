@@ -134,7 +134,9 @@ test('R08 没有本机凭据：给出可执行的指引，不索要密码', asyn
     const { code, stdout, stderr } = await runEntryScript(['products'], { ...env, ZENTAO_CREDENTIALS_FILE: path.join(dir, 'missing') });
     assert.equal(code, 1);
     assert.match(stderr, /本机没有禅道接入凭据/);
-    assert.match(stderr, /不要在对话里把密码告诉 Agent/);
+    assert.match(stderr, /connect\.mjs/, '本机页面是首选入口，用户不必离开对话去开终端');
+    assert.match(stderr, /set-credentials\.sh/, '终端脚本仍是兜底，不能丢');
+    assert.match(stderr, /不在对话里|不经过对话|不要问/, '仍然不许把密码带进对话');
     assert.equal(JSON.parse(stdout.trim()).ok, false);
   });
 });
