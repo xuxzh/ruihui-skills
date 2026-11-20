@@ -297,7 +297,7 @@ node <技能目录>/scripts/zentao.mjs bug-create --payload-file /tmp/rh-zentao-
 
 ### 6. 回读
 
-`bug-create` 已经按返回的编号做过回读核对：`product` / `title` / `steps`（**剥标签 + 归一化空白**后逐字比较）/ `openedBuild`（`trunk` 与「主干」归一化）/ `severity` / `pri` / `assignedTo`，以及 `actions` 里**本次新增**的 `opened`（历史上存在过不算）；CLI 0.4.4 不返回 `actions` 时，改用 `openedBy` + `openedDate` 核对。它把结论、交付要素与核对依据打成一行 JSON：
+`bug-create` 已经按返回的编号做过回读核对：`product` / `title` / `steps`（**剥标签 + 归一化空白**后逐字比较；图片引用按 `fileID` 归一，服务端补的属性不算内容差异）/ `openedBuild`（`trunk` 与「主干」归一化）/ `severity` / `pri` / `assignedTo`，以及 `actions` 里**本次新增**的 `opened`（历史上存在过不算）；CLI 0.4.4 不返回 `actions` 时，改用 `openedBy` + `openedDate` 核对。它把结论、交付要素与核对依据打成一行 JSON：
 
 ```
 {"ok":true,"kind":"bug","id":1935,"title":"设备列表导出按钮点击后无响应","status":"active","assignedTo":"","assigneeSource":"package","openedBy":"zhangsan","url":"<禅道 Web 地址>/bug-view-1935.html","verified":"readback"}
@@ -502,7 +502,7 @@ node <技能目录>/scripts/zentao.mjs bug-update --id 1936 --payload-file /tmp/
 
 ### 6. 回读
 
-脚本写完自己按编号回读：把正文与**完整预期正文**归一化后逐字比较（缺陷单先剥标签），有 `actions` 时确认这次**新增**了 `edited`（历史上有过 `edited` 不算）；CLI 0.4.4 不返回 `actions`，这时以正文逐字一致为准。
+脚本写完自己按编号回读：把正文与**完整预期正文**归一化后逐字比较（缺陷单先剥标签，图片引用按 `fileID` 归一），有 `actions` 时确认这次**新增**了 `edited`（历史上有过 `edited` 不算）；CLI 0.4.4 不返回 `actions`，这时以正文逐字一致为准。
 
 ```
 已更新反馈 #421（追加 1 段说明）
@@ -583,7 +583,7 @@ node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --objec
 - **正文写进去了**：更新命令自己回读，完整预期正文归一化后逐字一致才算成功；有 `actions` 时再确认本次新增了 `edited`（CLI 0.4.4 不返回 `actions`，不拿它判失败）。
 - **引用指向的就是这次上传的附件**：正文里那行引用的 `fileID` 与传图返回的 `fileId` 一致；附件挂载对象是传图输出里的 `objectType`/`objectId`（目标单据）。
 
-注意：查询输出（`bug --id` / `feedback --id`）会把 HTML 标签剥掉，`<img>` 本身在查询结果里看不到 —— 追加段落的说明文字看得到，要在页面上眼见为实就打开禅道单据。
+注意：查询输出（`bug --id` / `feedback --id`）会把 HTML 标签剥掉，**图片引用**保留成 `<img fileID="6530">`（只认文件标识，服务端补的 `onload` 等属性不显示）—— 看得到「正文里指着哪张图」，要看图本身就得打开禅道单据。
 
 交付时说明正文里带了几张图：
 

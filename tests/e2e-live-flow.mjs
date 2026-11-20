@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DefectAssistant, FeedbackAssistant } from './skill-flow.mjs';
+import { DefectAssistant, FeedbackAssistant, SEPARATOR } from './skill-flow.mjs';
 
 export const E2E_MARKER_PREFIX = '[rh-skill-e2e]';
 
@@ -114,6 +114,18 @@ function writeProbeImage() {
   return file;
 }
 
+/**
+ * 正文里的图片引用：只认 fileID（服务端会补 onload/setImageSize 等属性，属性差异不算内容差异）。
+ * 投影后的形态是 <img fileID="N">，原始引用是 <img src="…fileID=N" …>，两种都要认得出。
+ */
+const IMAGE_REF = /<img\b[^>]*\bfileID\s*=\s*["']?(\d+)/i;
+
+/** 正文里那条图片引用指向的文件 ID；没有图片引用时返回空串。 */
+function imageRefFileId(body) {
+  const matched = IMAGE_REF.exec(String(body || ''));
+  return matched ? matched[1] : '';
+}
+
 /** 传图 → 正文内联 → 回读核对 → 清理附件。 */
 async function attachImage({ zentao, objectType, objectId, currentBody, record }) {
   const probe = writeProbeImage();
@@ -123,17 +135,22 @@ async function attachImage({ zentao, objectType, objectId, currentBody, record }
     record('图片上传成功', okUpload, okUpload ? `文件 #${uploaded.data.fileId}` : describeMessage(uploaded));
     if (!okUpload) return null;
 
-    const nextBody = `${currentBody}\n【截图】\n${uploaded.data.reference}`;
+    // 更新正文走追加草稿契约：原文 + 分隔行 + 标注 + 追加段落。
+    // 少了分隔行，入口脚本会报「草稿里找不到分隔行」并拒绝写入。
+    const draft = `${currentBody}\n\n${SEPARATOR}\n${uploaded.data.reference}`;
+    const payload = objectType === 'feedback'
+      ? { desc: draft, expectedBody: currentBody, appendLabel: '截图 1' }
+      : { steps: draft, expectedBody: currentBody, appendLabel: '截图 1' };
     const updated = objectType === 'feedback'
-      ? await zentao.updateFeedback(objectId, { desc: nextBody, expectedBody: currentBody })
-      : await zentao.updateBug(objectId, { steps: nextBody, expectedBody: currentBody });
+      ? await zentao.updateFeedback(objectId, payload)
+      : await zentao.updateBug(objectId, payload);
     const readback = objectType === 'feedback' ? await zentao.feedback(objectId) : await zentao.bug(objectId);
     const body = String(readback.data?.body || '');
-    const embedded = body.includes(`fileID=${uploaded.data.fileId}`);
+    const embedded = imageRefFileId(body) === String(uploaded.data.fileId);
     record(
       '正文内联图片引用',
       updated.code === 0 && embedded,
-      embedded ? `fileID=${uploaded.data.fileId}` : '回读正文里没有这条图片引用',
+      embedded ? `fileID=${uploaded.data.fileId}` : `回读正文里没有这条图片引用：${describeMessage(updated)}`,
     );
 
     const del = await zentao.deleteRecord('file', uploaded.data.fileId);

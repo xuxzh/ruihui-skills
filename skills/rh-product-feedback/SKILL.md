@@ -172,7 +172,7 @@ node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-ze
 ## 4. 查询与解释进度
 
 - **列单据**（一次拉全量 + 字段投影 + 客户端筛选）：`node <技能目录>/scripts/zentao.mjs bugs --product <产品ID> [--status active] [--match 关键词]`；反馈单把 `bugs` 换成 `feedbacks`。脚本用 `--all` 翻完所有页、只留投影字段、在进程内按 `--status` / `--match` 筛，只打十几行表格（默认 10 条，要更多加 `--limit`），原始 JSON 不进上下文。表头的「可见 N 条」是当前账号在这个产品下能看到的全部，不是第一页。
-- **打开单据**：给了数字 ID → 缺陷 `bug --id <ID>`，反馈 `feedback --id <ID>`，输出**一行 JSON**：`status`（状态）、`assignee`（负责人）、`processor` + `processedDate`（处理人、处理时间）、`resolution`（结论）、`body`（正文：缺陷单已剥掉标签并归一化空白，可与原文逐字比对）、`actions`（流水），反馈单另有 `reviewer` / `reviewedDate`。只给了标题或产品 → 先用列表的 `--match` 列候选，让他挑编号再打详情。
+- **打开单据**：给了数字 ID → 缺陷 `bug --id <ID>`，反馈 `feedback --id <ID>`，输出**一行 JSON**：`status`（状态）、`assignee`（负责人）、`processor` + `processedDate`（处理人、处理时间）、`resolution`（结论）、`body`（正文：缺陷单已剥掉标签并归一化空白，可与原文逐字比对；图片引用保留成 `<img fileID="N">`，剥标签不丢它）、`actions`（流水），反馈单另有 `reviewer` / `reviewedDate`。只给了标题或产品 → 先用列表的 `--match` 列候选，让他挑编号再打详情。
 - **流水**：`actions` 每条有 `action` / `actor` / `date` / `comment`，`changes` 是这条动作的字段级差异（`field` + `from` → `to`，空值写「（空）」）。回读刚写过的那条单据时，把写前读到的动作 ID 传给 `--baseline-actions 19451,19452`，基线之外的动作才带 `"new": true`；不传基线就没有 `new` 字段——分不出来就说分不出来，不要把历史动作说成本次新增。CLI 0.4.4 的详情不返回 `actions` 时，如实说「这个版本取不到流水」，不要编。
 - **三段式解释**，不混写：**事实**（字段与 `actions` 直接给出的东西：谁、何时、把什么改成了什么）→ **推断**（基于事实的判断，每条标注「推断」）→ **无法确定**（禅道里没有的信息）。排期是最常见的坑：`plan` 与 `version` 均为空，只能说「禅道里没有排期记录」，不能写成「产品经理拒绝了需求」——那是推断，且必须写明只是推断。
 - **输出格式**：当前状态 / 负责人 / 处理时间线（`actions` 倒序）/ 结论 / 需要补充的信息。话术与样例见 [references/workflow.md](references/workflow.md) 的 F2 / F3。
@@ -186,7 +186,7 @@ node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-ze
 3. **用户确认**：展示完整的新正文（原文 + 分隔行 + 标注 + 追加段落），等他明确确认。
 4. **写前复核**：载荷带 `expectedBody`（用户确认时看到的那份原文），脚本写入前再读一次单据核对；对不上就**停手**、不写入，把当前原文与重新合并后的草稿交回终端用户。
 5. **更新**：走同一条写入通道（入口脚本，正文只走文件）：`node <技能目录>/scripts/zentao.mjs feedback-update --id <ID> --payload-file /tmp/rh-payload.json`（缺陷单是 `bug-update`）。载荷放请求体本身，不套 `payload`；`expectedBody` 必填。只发一次更新请求。
-6. **回读**：脚本按编号回读，正文与**完整预期正文**归一化后逐字比较（缺陷单先剥标签），有 `actions` 时确认这次**新增**了 `edited`（历史上存在过不算证据）；CLI 0.4.4 不返回 `actions`，这时以正文逐字一致为准；结果不明时只读核实，不重放更新，核实不了就报未确认。
+6. **回读**：脚本按编号回读，正文与**完整预期正文**归一化后逐字比较（缺陷单先剥标签，图片引用按 `fileID` 归一），有 `actions` 时确认这次**新增**了 `edited`（历史上存在过不算证据）；CLI 0.4.4 不返回 `actions`，这时以正文逐字一致为准；结果不明时只读核实，不重放更新，核实不了就报未确认。
 
 禅道更新接口无条件覆盖，没有版本号 CAS：写前复核能降低覆盖别人内容的风险，但复核与写入之间仍可能有别人改过——发现原文变了就停手，把当前原文给终端用户看。
 

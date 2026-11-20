@@ -65,12 +65,16 @@ export function createMockApiState(overrides = {}) {
     bugs: new Map(),
     feedbacks: new Map(),
     files: new Map(),
+    // 删掉的附件留个底（挂载对象在这），测试好回查图片附件挂在哪张单据上
+    deletedFiles: new Map(),
     // 反馈列表第一次请求返回全局记录，第二次起才按产品过滤（复刻真实 max 8.2：
     // 同一个令牌的第一次 feedbacks 请求会忽略 productID，第二次才生效）
     feedbackFirstListGlobal: false,
     feedbackListSeen: new Set(),
     // 反馈正文里的 <img> 落库时被服务端补 onload（真实实例行为），用来验证正文归一化
     feedbackImageOnload: false,
+    // 缺陷正文里的 <img> 落库时被服务端吃掉，用来验证回读核对能发现图片引用丢失
+    bugStepsDropImage: false,
     nextBugId: 1900,
     nextFeedbackId: 900,
     nextFileId: 1,
@@ -116,6 +120,12 @@ async function readBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   return Buffer.concat(chunks).toString('utf8');
+}
+
+/** multipart 表单里取一个字段的值（官方 CLI 的附件上传用 formdata 提交）。 */
+function multipartField(raw, name) {
+  const matched = String(raw || '').match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r\\n]*)`));
+  return matched ? matched[1].trim() : '';
 }
 
 function mintToken(state, account) {
@@ -262,7 +272,11 @@ function updateRecord(state, record, payload, kind) {
   const patched = { ...record };
   if (!noop) {
     if (payload.title !== undefined) patched.title = String(payload.title);
-    if (kind === 'bug' && payload.steps !== undefined) patched.steps = String(payload.steps);
+    if (kind === 'bug' && payload.steps !== undefined) {
+      patched.steps = String(payload.steps);
+      // 服务端没存住图片引用（禅道吞掉 <img> 的情形）：回读核对要能发现
+      if (state.bugStepsDropImage) patched.steps = patched.steps.replace(/<img\b[^>]*>/gi, '');
+    }
     if (kind === 'feedback' && payload.desc !== undefined) {
       patched.desc = String(payload.desc);
       if (state.feedbackImageOnload) patched.desc = patched.desc.replace(/<img\b/gi, '<img onload="setImageSize(this,0)"');
@@ -406,7 +420,15 @@ function route(state, req, pathname, query, token, payload) {
   if (req.method === 'POST' && pathname === '/api.php/v2/files') {
     const size = Buffer.byteLength(payload.__raw || '');
     const id = state.nextFileId++;
-    state.files.set(id, { id, size, addedBy: 'mock-user', addedDate: now() });
+    // 官方 CLI 用 multipart/form-data 提交附件，挂载对象在表单字段里
+    state.files.set(id, {
+      id,
+      size,
+      objectType: multipartField(payload.__raw, 'objectType'),
+      objectId: multipartField(payload.__raw, 'objectID'),
+      addedBy: 'mock-user',
+      addedDate: now(),
+    });
     return { body: { file: state.files.get(id) } };
   }
 
@@ -414,6 +436,8 @@ function route(state, req, pathname, query, token, payload) {
   if (req.method === 'DELETE' && m) {
     const id = Number(m[1]);
     if (!state.files.has(id)) return { status: 404, body: { message: '文件不存在' } };
+    // 删掉的附件留个底：测试要回查它挂在哪个单据上
+    state.deletedFiles.set(id, state.files.get(id));
     state.files.delete(id);
     return { body: { status: 'success' } };
   }

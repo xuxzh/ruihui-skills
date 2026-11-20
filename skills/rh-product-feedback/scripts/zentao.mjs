@@ -381,13 +381,25 @@ function assignee(value) {
   return value === undefined || value === null || value === '' ? '（未指派）' : cell(value);
 }
 
+/**
+ * 图片引用的归一形态：只认 fileID。服务端会补 onload/setImageSize 等属性，
+ * 属性差异不改变「引用的是哪张图」，不能因此判正文不一致。
+ * 认不出 fileID 的 <img> 不算图片引用：剥标签时按普通标签处理（反馈单正文是纯文本，那里原样保留）。
+ */
+function canonicalImageRef(tag) {
+  const fileId = tag.match(/\bfileID\s*=\s*["']?(\d+)/i);
+  return fileId ? `<img fileID="${fileId[1]}">` : '';
+}
+
 // 缺陷单的 steps 是结构化 HTML：剥掉标签、把实体与空白归一，正文才能与草稿逐字比。
 // 只给缺陷单用——反馈单的 desc 是纯文本，正文里的 < 是普通字符，剥了就把内容改掉了。
+// 图片引用是正文的一部分（图片引用指向图片附件）：剥标签时按 fileID 留一个归一标记，
+// 这样「图片引用落在正文里」在投影、逐字比较与回读核对里都看得见。
 function stripTags(html) {
   return String(html || '')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
+    .replace(/<[^>]+>/g, (tag) => (/^<img\b/i.test(tag) ? canonicalImageRef(tag) : ''))
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -410,10 +422,7 @@ function normalizeBody(text, kindName) {
   return String(text ?? '')
     // 反馈正文里的图片引用只认 fileID：服务端会补 onload/setImageSize 等属性，
     // 属性差异不改变“引用的是哪张图”，不能因此判正文不一致。
-    .replace(/<img\b[^>]*>/gi, (tag) => {
-      const fileId = tag.match(/\bfileID\s*=\s*["']?(\d+)/i);
-      return fileId ? `<img fileID="${fileId[1]}">` : tag;
-    })
+    .replace(/<img\b[^>]*>/gi, (tag) => canonicalImageRef(tag) || tag)
     .replace(/\r\n/g, '\n')
     .split('\n')
     .map((line) => line.replace(/[ \t]+$/, ''))

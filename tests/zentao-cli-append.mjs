@@ -493,3 +493,47 @@ test('A17 反馈单带图更新：服务端给 <img> 补 onload 属性，正文�
     assert.match(server.state.feedbacks.get(900).desc, /fileID=6530/);
   });
 });
+
+test('A18 缺陷单带图更新：图片引用按 fileID 归一，回读正文里看得见', { skip: NEEDS_CLI }, async () => {
+  await withMock({ bugs: new Map([[1900, seedBug()]]) }, async ({ server, env, dir }) => {
+    const reference = '<img src="/index.php?m=file&f=read&t=png&fileID=6530" alt="file-read-6530.png" />';
+    const file = writePayload(dir, {
+      title: '设备列表导出按钮点击后无响应',
+      steps: `${normalize(BUG_STEPS)}\n\n${SEPARATOR}\n${reference}`,
+      expectedBody: normalize(BUG_STEPS),
+      appendLabel: '截图 1',
+    });
+    const { code, stdout, stderr } = await runEntryScript(['bug-update', '--id', '1900', '--payload-file', file], env);
+    assert.equal(code, 0, stderr);
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.updated, true);
+    assert.match(server.state.bugs.get(1900).steps, /fileID=6530/, '图片引用要落进服务端存的正文');
+
+    // 回读投影：剥标签后图片引用仍在（按 fileID 归一），「图片落在正文里」看得见
+    const read = await runEntryScript(['bug', '--id', '1900'], env);
+    assert.equal(read.code, 0, read.stderr);
+    assert.match(singleLineJson(read.stdout).body, /<img fileID="6530">/);
+  });
+});
+
+test('A19 缺陷单带图更新：服务端没存住图片引用时，回读核对要报不一致', { skip: NEEDS_CLI }, async () => {
+  await withMock({ bugStepsDropImage: true, bugs: new Map([[1900, seedBug()]]) }, async ({ server, env, dir }) => {
+    const reference = '<img src="/index.php?m=file&f=read&t=png&fileID=6530" alt="file-read-6530.png" />';
+    const file = writePayload(dir, {
+      title: '设备列表导出按钮点击后无响应',
+      steps: `${normalize(BUG_STEPS)}\n\n${SEPARATOR}\n${reference}`,
+      expectedBody: normalize(BUG_STEPS),
+      appendLabel: '截图 1',
+    });
+    const { code, stdout } = await runEntryScript(['bug-update', '--id', '1900', '--payload-file', file], env);
+    assert.notEqual(code, 0, '回读核对没过就不能报成功');
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, false);
+    assert.equal(result.updated, true, '写是写进去了，但核对没过');
+    assert.deepEqual(result.mismatches, ['正文']);
+    assert.doesNotMatch(server.state.bugs.get(1900).steps, /fileID=6530/, '服务端确实没存住图片引用');
+  });
+});

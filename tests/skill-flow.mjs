@@ -27,7 +27,9 @@ export class SkillError extends Error {
   }
 }
 
-const SEPARATOR = '──────────────';
+// 追加草稿的分隔行：草稿 = 原文 + 分隔行 + 标注 + 追加段落。
+// 入口脚本按同一条线拆草稿（skills/rh-product-feedback/scripts/zentao.mjs 的 APPEND_SEPARATOR）。
+export const SEPARATOR = '──────────────';
 
 /** 禅道会把描述里的 \n 存成 \r\n（真实 E2E 实测确认），回读比较前先归一化换行符。 */
 function normalizeNewlines(text) {

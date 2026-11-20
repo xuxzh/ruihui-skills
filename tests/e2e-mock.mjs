@@ -12,7 +12,7 @@ import path from 'node:path';
 import { MOCK_API_ACCOUNT, MOCK_API_ACCOUNTS } from './mock-zentao-api.mjs';
 import { ZentaoEntry, findZentaoCli, installCliShim, withMockApi } from './zentao-client.mjs';
 import { FeedbackAssistant, DefectAssistant, pickProduct } from './skill-flow.mjs';
-import { runLiveE2E, runLiveBugE2E, resolveWriteGate } from './e2e-live-flow.mjs';
+import { runLiveE2E, runLiveBugE2E, resolveWriteGate, E2E_MARKER_PREFIX } from './e2e-live-flow.mjs';
 
 const ZENTAO_CLI = findZentaoCli();
 // 入口脚本靠官方禅道 CLI 取数；没装就别假装测过
@@ -530,6 +530,34 @@ test('L09 前置自检读不到产品：中止写入，整体不通过', { skip:
   });
 });
 
+test('L14 反馈单带图闭环：图片引用落在正文里、附件挂在目标单据上、附件清干净', { skip: NEEDS_CLI }, async () => {
+  // 删除故意失败：这样服务端落库的正文留在假服务里，测试能回查图片引用
+  await withAssistant({ deleteFails: true, feedbackImageOnload: true }, async ({ zentao, state }) => {
+    const result = await runLiveE2E({ zentao, env: LIVE_ENV, image: true });
+
+    const imageStep = result.steps.find((s) => s.name === '正文内联图片引用');
+    assert.ok(imageStep?.ok, `图片引用应落在正文里：${JSON.stringify(imageStep)}`);
+    const failed = result.steps.filter((s) => !s.ok).map((s) => s.name);
+    assert.ok(
+      failed.length > 0 && failed.every((n) => n.includes('清理') || n.includes('基线')),
+      `只有故意失败的清理步骤该红：${failed.join('、')}`,
+    );
+
+    // 断言落在假服务落库的正文上（不是入口脚本的投影）
+    const feedback = [...state.feedbacks.values()].find((f) => f.title.includes(E2E_MARKER_PREFIX));
+    assert.ok(feedback, '假服务里应留着这条反馈（删除故意失败）');
+    const fileId = (feedback.desc.match(/fileID=["']?(\d+)/) || [])[1];
+    assert.ok(fileId, `正文里应有图片引用：${feedback.desc}`);
+    assert.match(feedback.desc, /【截图 1】/, '追加段落应有标注行');
+
+    const attachment = state.deletedFiles.get(Number(fileId));
+    assert.ok(attachment, '这次上传的附件应已清理（删掉的附件留了底）');
+    assert.equal(attachment.objectType, 'feedback', '附件应挂在反馈单上');
+    assert.equal(String(attachment.objectId), String(feedback.id), '附件应挂在目标单据上');
+    assert.equal(state.files.size, 0, '附件应清理干净');
+  });
+});
+
 // ---- 缺陷单路径（禅道 bug 对象） ---------------------------------------
 
 test('B01 正常创建缺陷：字段名用 productID、开销版本填 trunk，回读一致', { skip: NEEDS_CLI }, async () => {
@@ -740,6 +768,34 @@ test('L13 缺陷创建超时且未落库：报告未确认、只调用一次创�
     assert.equal(bugCreates(state).length, 1, '不得重复创建');
     assert.equal(state.bugs.size, 0, '未落库时不应产生记录');
     assert.ok(result.steps.some((s) => !s.ok && s.name.includes('创建结果确认')), '应报告创建结果未确认');
+  });
+});
+
+test('L15 缺陷单带图闭环：图片引用落在正文里、附件挂在目标单据上、附件清干净', { skip: NEEDS_CLI }, async () => {
+  // 删除故意失败：这样服务端落库的正文留在假服务里，测试能回查图片引用
+  await withAssistant({ deleteFails: true }, async ({ zentao, state }) => {
+    const result = await runLiveBugE2E({ zentao, env: LIVE_ENV, image: true });
+
+    const imageStep = result.steps.find((s) => s.name === '正文内联图片引用');
+    assert.ok(imageStep?.ok, `图片引用应落在正文里：${JSON.stringify(imageStep)}`);
+    const failed = result.steps.filter((s) => !s.ok).map((s) => s.name);
+    assert.ok(
+      failed.length > 0 && failed.every((n) => n.includes('清理') || n.includes('基线')),
+      `只有故意失败的清理步骤该红：${failed.join('、')}`,
+    );
+
+    // 断言落在假服务落库的正文上（不是入口脚本的投影）
+    const bug = [...state.bugs.values()].find((b) => b.title.includes(E2E_MARKER_PREFIX));
+    assert.ok(bug, '假服务里应留着这条缺陷（删除故意失败）');
+    const fileId = (bug.steps.match(/fileID=["']?(\d+)/) || [])[1];
+    assert.ok(fileId, `正文里应有图片引用：${bug.steps}`);
+    assert.match(bug.steps, /【截图 1】/, '追加段落应有标注行');
+
+    const attachment = state.deletedFiles.get(Number(fileId));
+    assert.ok(attachment, '这次上传的附件应已清理（删掉的附件留了底）');
+    assert.equal(attachment.objectType, 'bug', '附件应挂在缺陷单上');
+    assert.equal(String(attachment.objectId), String(bug.id), '附件应挂在目标单据上');
+    assert.equal(state.files.size, 0, '附件应清理干净');
   });
 });
 
