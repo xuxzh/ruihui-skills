@@ -1,7 +1,7 @@
 ---
 name: rh-product-feedback
 description: 把自然语言产品反馈落成禅道单据：明确要 Bug 时建正式缺陷单，其余建反馈单；也支持查询进度、补充说明、正文带图。禅道连不上时，能引导你在当前宿主里完成接入与认证。触发场景：「提 Bug / 报缺陷 / 页面报错 / 复现步骤是…」「提需求 / 提建议 / 提交反馈」「查反馈 / 查缺陷 / 看反馈到哪了 / 补充反馈信息」「帮我装禅道 / 连不上禅道」「帮我重装 / 更新一下技能」，或 report a bug、file a feature request、check feedback status、connect zentao；斜杠命令 `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）走安装模式。
-compatibility: 需要本机 Node.js 18+ 与官方禅道 CLI（npm 包 zentao-cli，固定版本记在 config.local.json 的 zentaoCli），以及本人的禅道账号凭据（见 references/setup.md）。
+compatibility: 需要本机 Node.js 18+ 与官方禅道 CLI（npm 包 zentao-cli，固定版本记在 config.local.json 的 zentaoCli），以及本人的禅道账号凭据（见 references/setup.md）。本机没有 Node.js 时由当前 Agent 装（优先用机器上已有的版本管理器，见 setup.md）。
 metadata:
   rh-version: "0.12.0"
   rh-channel: cli
@@ -61,7 +61,7 @@ node <技能目录>/scripts/zentao.mjs bug-create --payload-file /tmp/rh-payload
 
 1. **脚本能连上吗**：跑一次 `node <技能目录>/scripts/zentao.mjs products`。成功 → 打印出来的**当前账号可见的产品就是后续选品范围**（选产品、查重、建单都只能落在这里面），直接进终端用户的诉求。失败 → 按 [references/error-handling.md](references/error-handling.md) 处理，并按 [references/setup.md](references/setup.md)「Agent 执行路径」引导：先看禅道 CLI 装没装，再写本机凭据。**不要**向终端用户索要禅道地址、IP、端口或账号密码。
 2. **认证由入口脚本做，Agent 不插手**：本机凭据 → 当次禅道令牌 → 经环境变量注入**官方禅道 CLI** → 由 CLI 进程取数并投影，全在 `scripts/zentao.mjs` 进程内完成（见 [references/zentao-cli.md](references/zentao-cli.md)）。Agent 不碰密码与令牌，也不用 curl 调试登录接口（那会把令牌打进终端日志）。凭据无效时脚本报错并退出非 0 → 按 [references/error-handling.md](references/error-handling.md)「认证失败」处理：让终端用户在自己机器上重写凭据，不要在对话里索要密码；连续失败可能触发禅道锁号，不要反复试。
-3. **禅道 CLI 不在 PATH**：脚本会如实报「找不到 zentao 命令」并退出非 0——照 [references/setup.md](references/setup.md)「Agent 执行路径」第 1 步按技能包钉住的固定版本把它装好（`config.local.json` 的 `zentaoCli.version`），装完校验版本，不要临时改用旧脚本顶替；本机没有 node 或装不上 CLI 时如实告知并给禅道网页端的替代路径，不退回用宿主里的禅道 MCP 工具建单。
+3. **禅道 CLI 不在 PATH**：脚本会如实报「找不到 zentao 命令」并退出非 0——照 [references/setup.md](references/setup.md)「Agent 执行路径」第 1 步按技能包钉住的固定版本把它装好（`config.local.json` 的 `zentaoCli.version`），装完校验版本，不要临时改用旧脚本顶替；**本机没有 Node.js 就由 Agent 装**（优先用机器上已有的版本管理器，没有就装官方的，装完让宿主重开），实在装不上时如实告知并给禅道网页端的替代路径，不退回用宿主里的禅道 MCP 工具建单。
 4. **不登记禅道 MCP**：首次接入不需要它（见 [references/setup.md](references/setup.md)「禅道 MCP：只给人手动查看」）。它的身份是**服务端配置的固定身份**，不是提交人自己，所以**只适合无关紧要的查看，不用于建单与更新**；终端用户自己登记过的条目属于他的宿主配置，技能不依赖、也不去改它。**不要为了让两边一致去改技能包里的 `config.local.json`**——那是分发下来的文件，用户没同意不要动。
 
 自检通过就**直接进入终端用户的诉求**（收集要素、查重、草稿），不要插入「自检报告 → 等确认」的往返；只在认证失败、产品不可见时停下来给下一步。

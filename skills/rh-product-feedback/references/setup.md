@@ -24,7 +24,11 @@ zentao version --format=json        # 校验 data.cli 与接入配置里的版�
 ```
 
 - 版本号**只认接入配置**：上面那句 `0.4.4` 是当前值，包内 `config.local.json` 才是真相。升级由发版流程显式发起（改 `zentaoCli.version` → 重新分发），Agent 不自行升级，也不跟着上游新版跑。
-- **没有 node**（`node --version` 报找不到）：如实说「本机没有 Node.js，装不了禅道 CLI」，按「装不上时」给禅道网页端的替代路径。
+- **没有 node**（`node --version` 报找不到）：**Agent 自己装**，按下面的顺序挑一种，**不要问终端用户选哪个**：
+  1. **机器上已有的版本管理器**（`fnm` / `nvm` / `volta` / `asdf`）：用它装 18 以上（当前 LTS 或更新的稳定版）。fnm：`fnm install 22 && fnm default 22`；nvm：`nvm install 22 && nvm alias default 22`；volta：`volta install node@22`。
+  2. **没有版本管理器**：macOS 有 Homebrew 就 `brew install node`；Windows 用 `winget install OpenJS.NodeJS.LTS`；都没有就先装 fnm（`curl -fsSL https://fnm.vercel.app/install | bash`）再用它装。
+  3. **装完要让宿主重开**：新装的 Node 不会进已经跑着的宿主进程的 PATH——装完告诉终端用户「Node 装好了，重开一下 Agent（或重开终端）再继续」，**等重开**再装 CLI 与做自检。
+- **已有 node 但低于 18**：**不要动它**（可能是别的项目在用），用版本管理器在旁边装一个 18+ 的，装 CLI 时用那个 node 的 npm。
 - **装不上**（权限、代理、离线、`npm` 全局目录不在 PATH）：如实说明卡在哪一步，同样给网页端的替代路径。**不要退回用宿主里的禅道 MCP 工具建单**——它的身份是服务端配置的固定身份，单据不会留痕在提交人名下。
 - Windows 用 PowerShell 跑同样的命令；`npm prefix -g` 的目录要能被找到，否则 CLI 装上了脚本仍报「找不到 zentao 命令」。
 
@@ -101,7 +105,7 @@ node <技能目录>/scripts/zentao.mjs products
 ```
 帮我把 ruihui 的产品反馈助手（rh-product-feedback）装好，已经装过就更新到最新：
 1. 技能：当前是装好的旧版还是根本没装，你自己判断，不用问我；需要更新就更新到最新。
-2. 禅道工具：把技能要求的那个禅道工具装好，版本固定取技能包 `config.local.json` 里 `zentaoCli.version` 的值，不要装最新版；已经装好且版本对得上就跳过。
+2. 禅道工具：先确认这台机器上有 Node.js 18 以上，没有就装一个（用机器上已有的版本管理器，没有就装官方的），再把技能要求的那个禅道工具装好——版本固定取技能包 `config.local.json` 里 `zentaoCli.version` 的值，不要装最新版；已经装好且版本对得上就跳过。
 3. 我的账号密码：告诉我怎么写入我自己的禅道账号密码——密码必须由我在自己的终端里输入，别替我输、也别写进对话。这台机器上已经写过就不用再写。
 4. 收尾：跑一次只读自检，报出我这个账号可见的产品，并说明凭据此刻起有没有生效。
 ```
@@ -145,8 +149,9 @@ bash ~/.agents/skills/rh-product-feedback/scripts/set-credentials.sh
 | 你看到的 | 原因 | 怎么办 |
 | --- | --- | --- |
 | Agent 说找不到技能 / 读不到 `SKILL.md` | 技能没装到宿主能发现的位置 | 让 Agent 跑 `npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`，或把技能包解压到宿主技能目录 |
-| Agent 说本机没有 node | 缺 Node.js，官方 CLI 跑不起来 | 装 Node.js 18+ 后重试；装不了就用禅道网页端提单 |
+| Agent 说本机没有 node | 缺 Node.js，官方 CLI 跑不起来 | 让 Agent 装一个（优先用机器上已有的版本管理器，没有就装官方的），装完**重开宿主**再试；实在装不上就用禅道网页端提单 |
 | Agent 说 CLI 装不上 | 权限、代理、离线，或 npm 全局目录不可写 | 换有网/有权限的环境装，或改用禅道网页端；技能与凭据不受影响 |
+| 装完 Node 后仍说找不到 `zentao` 命令 | 宿主进程还拿着旧的 PATH | 重开宿主（Claude Code 退出重开；pi 执行 `/reload`）再试 |
 | 装完 Agent 仍说找不到 `zentao` 命令 | `npm prefix -g` 的目录不在 PATH | 把它加进 PATH 再复查一次 |
 | 登录失败 | 账号或密码不对 | 核对后重跑凭据脚本；不要反复试，连续失败可能锁号 |
 | 装完没反应 | 宿主还没加载新技能 | Claude Code 退出重开；pi 执行 `/reload`；其它宿主按上面的对照表 |

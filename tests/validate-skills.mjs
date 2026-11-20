@@ -277,6 +277,19 @@ if (fs.existsSync(quickStart)) {
     ]) {
       check(`随包 setup.md 写了${label}`, setupText.includes(needle));
     }
+
+    // Node.js 兜底：本机没有 Node.js 时由 Agent 装，优先用机器上已有的版本管理器。
+    for (const [label, needle] of [
+      ['先确认 Node.js 版本', 'node --version'],
+      ['优先用已有的版本管理器', 'fnm'],
+      ['没有版本管理器时装官方的', 'winget install OpenJS.NodeJS.LTS'],
+      ['不动已有的旧 node', '不要动它'],
+      ['装完要重开宿主', '重开'],
+      ['装不上的兜底是网页端', '禅道网页端'],
+    ]) {
+      check(`随包 setup.md 写了${label}`, setupText.includes(needle));
+    }
+    check('安装 / 重装提示词要求先确认 Node.js', inQuickStart.includes('Node.js 18'));
   }
 } else {
   check('存在 docs/quick-start.md', false);

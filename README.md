@@ -189,6 +189,7 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 - [ADR-0018](docs/adr/0018-随包默认负责人改为不指派.md) — 随包默认负责人改为不指派
 - [ADR-0019](docs/adr/0019-重装用同一段提示词由Agent自己判版本.md) — 重装用同一段提示词，由 Agent 自己判版本
 - [ADR-0020](docs/adr/0020-发布线只有skills-sh一条.md) — 发布线只有 skills.sh 一条（删掉内网包）
+- [ADR-0021](docs/adr/0021-缺Nodejs时由Agent装.md) — 缺 Node.js 时由 Agent 装，优先用已有的版本管理器
 
 ## License
 
