@@ -574,14 +574,14 @@ node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --objec
 <img src="/index.php?m=file&f=read&t=png&fileID=6530" alt="file-read-6530.png" />
 ```
 
-载荷里的 `desc`（缺陷单是 `steps`）写「完整原文 + 空行 + 分隔行 + 图片引用」，`expectedBody` 写用户确认时看到的那份原文，`appendLabel` 写「截图 1」。
+载荷里的 `desc`（缺陷单是 `steps`）写「完整原文 + 空行 + 分隔行 + 图片引用」，`expectedBody` 写用户确认时看到的那份原文，`appendLabel` 写「截图 1」。缺陷单的追加部分按纯文本逐行写（分隔行、标注行、引用行，不包 `<p>`）——F4 的 `<p>` 规则说的是手写的补充说明段落。
 
 ### 5. 回读与交付
 
 回读分两件：
 
 - **正文写进去了**：更新命令自己回读，完整预期正文归一化后逐字一致才算成功；有 `actions` 时再确认本次新增了 `edited`（CLI 0.4.4 不返回 `actions`，不拿它判失败）。
-- **引用指向的就是这次上传的附件**：正文里那行引用的 `fileID` 与传图返回的 `fileId` 一致；附件挂载对象是传图输出里的 `objectType`/`objectId`（目标单据）。
+- **引用指向的就是这次上传的附件**：正文里那行引用的 `fileID` 与传图返回的 `fileId` 一致；附件挂载对象是传图输出里的 `objectType`/`objectId`（目标单据）——这两个值是**上传请求带的**，服务端不回读挂载对象（CLI 没有 `file get` / `file list`），所以「挂在哪张单据上」靠上传请求与正文里的引用两头对上。
 
 注意：查询输出（`bug --id` / `feedback --id`）会把 HTML 标签剥掉，**图片引用**保留成 `<img fileID="6530">`（只认文件标识，服务端补的 `onload` 等属性不显示）—— 看得到「正文里指着哪张图」，要看图本身就得打开禅道单据。
 
