@@ -673,8 +673,8 @@ const COMMANDS = {
 // ----- 建单（缺陷单与反馈单共用一条流水线）-----
 
 // 回读只取核对要用的字段：原始单据带几十个字段，进上下文没用
-const BUG_READBACK_FIELDS = 'id,title,product,steps,severity,pri,openedBuild,assignedTo,status,openedBy,actions';
-const FEEDBACK_READBACK_FIELDS = 'id,title,product,type,desc,feedbackBy,openedBy,status,actions';
+const BUG_READBACK_FIELDS = 'id,title,product,steps,severity,pri,openedBuild,assignedTo,status,openedBy,openedDate,actions';
+const FEEDBACK_READBACK_FIELDS = 'id,title,product,type,desc,feedbackBy,openedBy,openedDate,status,actions';
 
 // 来源与模块不填：禅道反馈单不要求这两项，填了只是多余信息
 const FEEDBACK_DROPPED_FIELDS = ['source', 'module'];
@@ -825,8 +825,14 @@ function bugMismatches(payload, bug) {
   if (payload.assignedTo !== undefined && String(bug.assignedTo ?? '').trim() !== String(payload.assignedTo).trim()) {
     mismatches.push('负责人');
   }
-  const actions = Array.isArray(bug.actions) ? bug.actions : [];
-  if (!actions.some((action) => String(action?.action) === 'opened')) mismatches.push('操作流水里本次新增的「创建」');
+  const actions = Array.isArray(bug.actions) ? bug.actions : null;
+  if (actions) {
+    if (!actions.some((action) => String(action?.action) === 'opened')) mismatches.push('操作流水里本次新增的「创建」');
+  } else {
+    // 真实 CLI 0.4.4 的 get 不映射 actions：创建者与创建时间就是可核对的身份证据
+    if (!String(bug.openedBy ?? '').trim()) mismatches.push('创建者字段（openedBy）');
+    if (!String(bug.openedDate ?? '').trim()) mismatches.push('创建时间（openedDate）');
+  }
   return mismatches;
 }
 
@@ -844,8 +850,13 @@ function feedbackMismatches(payload, feedback) {
   if (reporter && reporter !== String(payload.feedbackBy).trim()) mismatches.push('反馈者');
   // 创建者字段：字段名必须与实例一致，取不到就如实报告，不猜哪个字段是提交人
   if (!String(feedback.openedBy ?? '').trim()) mismatches.push('创建者字段（openedBy）');
-  const actions = Array.isArray(feedback.actions) ? feedback.actions : [];
-  if (!actions.some((action) => String(action?.action) === 'opened')) mismatches.push('操作流水里本次新增的「创建」');
+  const actions = Array.isArray(feedback.actions) ? feedback.actions : null;
+  if (actions) {
+    if (!actions.some((action) => String(action?.action) === 'opened')) mismatches.push('操作流水里本次新增的「创建」');
+  } else if (!String(feedback.openedDate ?? '').trim()) {
+    // 真实 CLI 0.4.4 的 get 不映射 actions：至少要有创建时间，不能只凭标题/正文认一条记录
+    mismatches.push('创建时间（openedDate）');
+  }
   return mismatches;
 }
 
@@ -1218,7 +1229,8 @@ async function readUpdateRecord(kindName, id, env) {
     title: String(record.title ?? ''),
     product: record.product ?? '',
     status: String(record.status ?? ''),
-    actions: rowsOf(record.actions),
+    // 保留「字段不存在」与「字段是空数组」的区别：前者是真实 CLI 不返回 actions，后者是服务端明说没有流水
+    actions: Array.isArray(record.actions) ? rowsOf(record.actions) : null,
   };
 }
 
@@ -1232,11 +1244,14 @@ function newEditedActions(actions, baseline) {
   return rowsOf(actions).filter((action) => !baseline.has(String(action.id)) && String(action.action) === 'edited');
 }
 
-/** 回读核对：完整预期正文归一化后逐字比较，并确认本次新增了「编辑」。 */
+/** 回读核对：完整预期正文归一化后逐字比较；有流水时再确认本次新增了「编辑」。 */
 function updateMismatches(expectedBody, before, after, kindName) {
   const mismatches = [];
   if (normalizeBody(after.body, kindName) !== normalizeBody(expectedBody, kindName)) mismatches.push('正文');
-  if (!newEditedActions(after.actions, actionIds(before.actions)).length) mismatches.push('操作流水里本次新增的「编辑」');
+  // 真实 CLI 0.4.4 的 get 不映射 actions；正文已经对上，就不拿一个取不到的字段判失败
+  if (Array.isArray(after.actions) && !newEditedActions(after.actions, actionIds(before.actions)).length) {
+    mismatches.push('操作流水里本次新增的「编辑」');
+  }
   return mismatches;
 }
 

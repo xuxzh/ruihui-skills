@@ -81,6 +81,8 @@ export function createMockApiState(overrides = {}) {
     noopWrites: false,
     // 更新接口返回成功但不生效（等同于标题带 __NOOP_UPDATE__ 的全局开关）
     noopUpdate: false,
+    // 回读不返回操作流水（复刻真实 CLI 0.4.4：API 有 actions，但 CLI 的 get 不映射这个字段）
+    omitActions: false,
     // 创建接口挂住不返回：'ghost' = 没落库，'persist' = 已落库（等同标题带 __TIMEOUT__）
     createHang: '',
     // 删除接口一律业务失败（模拟没有删除权限）
@@ -174,7 +176,9 @@ function newRecord(state, account, payload, kind) {
     openedBy: account,
     openedDate: now(),
     assignedTo: '',
-    actions: [{ id: id * 10, action: 'opened', actor: account, date: now(), comment: '' }],
+    ...(state.omitActions
+      ? {}
+      : { actions: [{ id: id * 10, action: 'opened', actor: account, date: now(), comment: '' }] }),
   };
 }
 
@@ -254,7 +258,9 @@ function updateRecord(state, record, payload, kind) {
     if (payload.title !== undefined) patched.title = String(payload.title);
     if (kind === 'bug' && payload.steps !== undefined) patched.steps = String(payload.steps);
     if (kind === 'feedback' && payload.desc !== undefined) patched.desc = String(payload.desc);
-    patched.actions = [...record.actions, { id: record.id * 10 + record.actions.length, action: 'edited', actor: 'mock-user', date: now(), comment: '' }];
+    if (!state.omitActions) {
+      patched.actions = [...record.actions, { id: record.id * 10 + record.actions.length, action: 'edited', actor: 'mock-user', date: now(), comment: '' }];
+    }
   }
   return { record: patched, persist: !noop };
 }

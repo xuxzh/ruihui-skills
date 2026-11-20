@@ -370,3 +370,21 @@ test('F19 查重基线不完整（服务端分页不前进）：建单后只能�
     assert.equal(creates(server).length, 1, '不重发');
   });
 });
+
+test('F20 回读没有 actions（真实 CLI 0.4.4 形状）：openedBy / openedDate 可核对就判成功', { skip: NEEDS_CLI }, async () => {
+  await withMock({ omitActions: true }, async ({ server, env, dir }) => {
+    const file = writePayload(dir, feedbackPayload());
+    const { code, stdout, stderr } = await runEntryScript(['feedback-create', '--payload-file', file], env);
+    assert.equal(code, 0, stderr);
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.verified, 'readback');
+    assert.equal(result.openedBy, ACCOUNT);
+    assert.equal(result.submitterField, 'openedBy');
+    assert.equal(result.submitterIsCurrentAccount, true);
+
+    assert.equal(creates(server).length, 1, '创建请求只能发一次');
+    assert.equal(readsOf(server, 900).length, 1, '写入后要按返回的编号回读一次');
+  });
+});

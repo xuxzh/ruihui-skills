@@ -433,3 +433,42 @@ test('A14 appendLabel 写空串：报错说清怎么改，一个更新请求都�
     assert.equal(updates(server, '/api.php/v2/feedbacks/900').length, 0, '载荷不对就不该发更新');
   });
 });
+
+test('A15 反馈单更新回读没有 actions（真实 CLI 0.4.4 形状）：正文对上就判成功，不凭空要求流水', { skip: NEEDS_CLI }, async () => {
+  await withMock({ omitActions: true, feedbacks: new Map([[900, seedFeedback({ actions: undefined })]]) }, async ({ server, env, dir }) => {
+    const file = writePayload(dir, {
+      product: 101,
+      title: '设备列表导出按钮点击后无响应',
+      desc: appendDraft(FEEDBACK_BODY),
+      expectedBody: FEEDBACK_BODY,
+    });
+    const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    assert.equal(code, 0, stderr);
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.updated, true);
+    assert.equal(result.verified, 'readback');
+    assert.deepEqual(result.newActions, [], '没有流水时不要凭空造一条');
+    assert.equal(normalize(server.state.feedbacks.get(900).desc), normalize(appendDraft(FEEDBACK_BODY)));
+  });
+});
+
+test('A16 缺陷单更新回读没有 actions（真实 CLI 0.4.4 形状）：正文对上就判成功', { skip: NEEDS_CLI }, async () => {
+  await withMock({ omitActions: true, bugs: new Map([[1900, seedBug({ actions: undefined })]]) }, async ({ server, env, dir }) => {
+    const file = writePayload(dir, {
+      title: '设备列表导出按钮点击后无响应',
+      steps: appendDraft(normalize(BUG_STEPS)),
+      expectedBody: normalize(BUG_STEPS),
+    });
+    const { code, stdout, stderr } = await runEntryScript(['bug-update', '--id', '1900', '--payload-file', file], env);
+    assert.equal(code, 0, stderr);
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.updated, true);
+    assert.equal(result.verified, 'readback');
+    assert.deepEqual(result.newActions, []);
+    assert.equal(normalize(server.state.bugs.get(1900).steps), normalize(appendDraft(normalize(BUG_STEPS))));
+  });
+});
