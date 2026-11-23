@@ -13,7 +13,7 @@ metadata:
 
 禅道 CLI 的命令、字段、枚举与错误码以实测为准 → [references/zentao-cli.md](references/zentao-cli.md)。本文件只留路由、写单据的主干与硬约束；模板、话术、错误处理按需下钻。
 
-**终端用户第一次用**：看三步速查——粘提示词、写凭据、验证 → [docs/quick-start.md](https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/quick-start.md#三步速查)（给人看的文档，Agent 不用读）。
+**终端用户第一次用**：看「快速开始」——粘提示词、写凭据、验证 → [docs/quick-start.md](https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/quick-start.md#快速开始)（给人看的文档，Agent 不用读）。
 
 ## 按需读
 

@@ -168,8 +168,8 @@ if (fs.existsSync(quickStart)) {
 
   // 速查段必须自足：业务用户只看这一段就能装好并提第一条单（ADR-0014）。
   const quickLines = quickText.split('\n');
-  const quickStartAt = quickLines.findIndex((l) => /^## 三步速查\s*$/.test(l));
-  check('快速上手有「三步速查」段', quickStartAt >= 0);
+  const quickStartAt = quickLines.findIndex((l) => /^## 快速开始\s*$/.test(l));
+  check('快速上手有「快速开始」段', quickStartAt >= 0);
   if (quickStartAt >= 0) {
     let quickEnd = quickLines.length;
     for (let i = quickStartAt + 1; i < quickLines.length; i++) {
@@ -180,7 +180,7 @@ if (fs.existsSync(quickStart)) {
     }
     const seg = quickLines.slice(quickStartAt, quickEnd);
     while (seg.length && !seg[seg.length - 1].trim()) seg.pop();
-    check('三步速查 ≤ 40 行', seg.length <= 40, `${seg.length} 行`);
+    check('快速开始 ≤ 40 行', seg.length <= 40, `${seg.length} 行`);
 
     // 内容块 = 围栏代码块 / 引用块 / 列表块，各算一块。
     let blocks = 0;
@@ -219,7 +219,7 @@ if (fs.existsSync(quickStart)) {
       }
       inList = false;
     }
-    check('三步速查 ≤ 5 个内容块', blocks <= 5, `${blocks} 块`);
+    check('快速开始 ≤ 5 个内容块', blocks <= 5, `${blocks} 块`);
 
     const segText = seg.join('\n');
     for (const [label, needle] of [
@@ -228,7 +228,7 @@ if (fs.existsSync(quickStart)) {
       ['提单的示例句', '帮我提个 Bug'],
       ['提交人不是本人的提示', '提交人'],
     ]) {
-      check(`三步速查里写了${label}`, segText.includes(needle));
+      check(`快速开始里写了${label}`, segText.includes(needle));
     }
   }
 

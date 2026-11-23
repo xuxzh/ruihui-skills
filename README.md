@@ -12,9 +12,9 @@
 
 完整步骤见 **[`docs/quick-start.md`](docs/quick-start.md)**——一页，含可直接复制的提示词、三个示例和常见问题。概览：
 
-> 直接发给别人（可贴进 IM / 邮件）：<https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/quick-start.md#三步速查>
+> 直接发给别人（可贴进 IM / 邮件）：<https://github.com/xuxzh/ruihui-skills/blob/HEAD/docs/quick-start.md#快速开始>
 
-1. **装技能 + 装官方禅道 CLI**：把速查里的提示词粘给你正在用的 Agent（pi、Claude Code、Codex 都行），它会装好技能（`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`），再按技能包 `config.local.json` 里的版本锁装好官方禅道 CLI——**不用挑、不用填 IP、不用改配置文件**。
+1. **装技能 + 装官方禅道 CLI**：把「快速开始」里的提示词粘给你正在用的 Agent（pi、Claude Code、Codex 都行），它会装好技能（`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`），再按技能包 `config.local.json` 里的版本锁装好官方禅道 CLI——**不用挑、不用填 IP、不用改配置文件**。
 2. **在 Agent 打开的本机页面上填账号密码**：Agent 起一个只监听 `127.0.0.1` 的一次性页面，你在页面上填账号密码（或粘个人令牌）——密码只在你自己的机器上输入，不进对话、也不进命令行历史；页面当场验证并写入本机凭据。
 3. **让 Agent 做接入自检**：凭据写好就能用，在 Agent 里说「验证一下禅道连接」。
 

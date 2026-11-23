@@ -112,7 +112,7 @@ node <技能目录>/scripts/zentao.mjs products
 
 ### 1. 安装 / 重装提示词
 
-首装和重装用**同一段**——把下面这段发给你正在用的 Agent（与仓库的 [`docs/quick-start.md`](https://github.com/xuxzh/ruihui-skills/blob/main/docs/quick-start.md) 速查逐字一致，由 `tests/validate-skills.mjs` 校验）：
+首装和重装用**同一段**——把下面这段发给你正在用的 Agent（与仓库的 [`docs/quick-start.md`](https://github.com/xuxzh/ruihui-skills/blob/main/docs/quick-start.md)「快速开始」段逐字一致，由 `tests/validate-skills.mjs` 校验）：
 
 ```
 帮我把 ruihui 的产品反馈助手（rh-product-feedback）装好，已经装过就更新到最新：
