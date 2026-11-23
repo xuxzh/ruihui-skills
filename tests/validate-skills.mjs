@@ -230,6 +230,17 @@ if (fs.existsSync(quickStart)) {
     ]) {
       check(`快速开始里写了${label}`, segText.includes(needle));
     }
+
+    // 提单话术必须点名技能（ADR-0023）：宿主只按 description 路由，示例句不点名，
+    // Agent 就可能自己调禅道接口建单，跳过查重、写入前确认与写入后回读。
+    for (const sample of ['帮我提个 Bug', '帮我提个需求', '建议保存上次的筛选条件']) {
+      const line = seg.find((l) => l.includes(sample));
+      check(
+        `快速开始的示例句点名了技能（${sample}）`,
+        !!line && line.includes('用 rh-product-feedback 技能：'),
+        line ? line.trim() : '找不到示例句',
+      );
+    }
   }
 
   // 安装 / 重装提示词只有一份真相：quick-start 与随包 setup.md 逐字一致（ADR-0014）。
@@ -307,6 +318,16 @@ if (fs.existsSync(quickStart)) {
   }
 } else {
   check('存在 docs/quick-start.md', false);
+}
+
+// README 与 quick-start 同口径：示例句必须点名技能（ADR-0023）。
+const readmePath = path.join(ROOT, 'README.md');
+if (fs.existsSync(readmePath)) {
+  const readmeText = fs.readFileSync(readmePath, 'utf8');
+  const readmeSamples = readmeText.split('\n').filter((l) => /^-\s*「/.test(l));
+  const unnamed = readmeSamples.filter((l) => !l.includes('用 rh-product-feedback 技能：'));
+  check('README 的示例句都点名了技能', unnamed.length === 0, unnamed.length ? `${unnamed.length} 条没点名` : '');
+  check('README 两处示例列表都点名了技能', readmeSamples.length >= 10, `${readmeSamples.length} 条示例`);
 }
 
 // ---- 4. 敏感信息扫描 ---------------------------------------------------
