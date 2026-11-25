@@ -131,6 +131,9 @@ node --test tests/package.mjs
 # 接入配置的 CLI 版本锁与接入提示词
 node --test tests/setup-cli-pin.mjs
 
+# 更新日志脚本：段落抽取、按提交出发版草稿、版本号建议
+node --test tests/release-notes.mjs
+
 # 入口脚本的读 / 写 / 查重 / 传图通道（装官方禅道 CLI 后才有意义，没装按 skip 计）
 for f in tests/zentao-cli-*.mjs; do node --test "$f"; done
 
@@ -169,12 +172,16 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 
 每个技能版本发一次版：产出 `v<技能版本>` 标签与同名的 GitHub Release。安装来源始终是 main 的最新提交，Release 只做记录；main 上尚未发版的改动记在 `CHANGELOG.md` 的 `[Unreleased]` 段。
 
-1. **写定该版本段落**：对照 `git log v<上一个标签>..HEAD -- skills/rh-product-feedback` 把差异写全，把 `[Unreleased]` 改成 `## [<版本>] - <日期>`，文件底部加这一版的对比链接。
+1. **写定该版本段落**：`node scripts/release-notes.mjs --draft` 按上个标签以来改动技能目录的提交出一份草稿（附版本号建议）；把草稿改写成行为层面的条目、合并同类项，与 `[Unreleased]` 里平时记下的合并，再把 `[Unreleased]` 改成 `## [<版本>] - <日期>` 并在文件底部加这一版的对比链接。
 2. **推进版本号三处**：`skills/rh-product-feedback/SKILL.md` 的 `metadata.rh-version`、`CHANGELOG.md` 最新段落、README 的两处版本（技能表格与「当前版本」）。
 3. **本地校验后提交到 main**：`node tests/validate-skills.mjs`，等 CI 通过。
 4. **打标签并推送**：`git tag -a v<版本> -m "v<版本>"`，`git push origin v<版本>`。`release` 工作流会校验「标签 = 标签提交里的 `rh-version` = 更新日志段落」，通过后用该段落生成 Release。
 
 标签发出后保持不动，修正走新的版本。全部版本见 [CHANGELOG.md](CHANGELOG.md) 与 [Releases](https://github.com/xuxzh/ruihui-skills/releases)。
+
+**让 Agent 代跑**：把下面这段发给 Agent。草稿改定后它先给你过目，你确认后它才提交：
+
+> 按 README「发版」小节给 rh-product-feedback 发一个新版：先跑 `node scripts/release-notes.mjs --draft` 拿草稿，对照 `git log v<上一个标签>..HEAD -- skills/rh-product-feedback` 与技能目录的差异，把草稿改写成行为层面的条目并合并同类项，需要时加一行「升级须做」，然后发给我过目。我确认后：把段落写进 `CHANGELOG.md`，推进 `SKILL.md`、`CHANGELOG.md`、README 三处版本号，跑 `node tests/validate-skills.mjs`，通过后提交到 main，在这个提交上打 `v<版本>` 标签并推送，等 `release` 工作流跑完把 Release 链接发给我。
 
 ## 贡献
 

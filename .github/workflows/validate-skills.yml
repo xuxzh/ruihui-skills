@@ -29,6 +29,9 @@ jobs:
       - name: 接入配置的 CLI 版本锁与接入提示词
         run: node --test tests/setup-cli-pin.mjs
 
+      - name: 更新日志脚本（段落抽取、发版草稿分组、版本号建议）
+        run: node --test tests/release-notes.mjs
+
       # 下面这些都要真的调官方禅道 CLI（runner 上没装就按 skip 计），
       # 装 CLI 的机器上跑才是全绿；不装时至少保证脚本加载与 skip 逻辑没坏。
       - name: 入口脚本读通道测试
