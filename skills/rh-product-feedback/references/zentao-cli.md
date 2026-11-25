@@ -53,19 +53,35 @@
 | `bug get` | GET | `/bugs/{bugID}` | — | — |
 | `bug create` | POST | `/bugs` | — | 有 |
 | `bug update` | PUT | `/bugs/{bugID}` | — | 有 |
+| `bug resolve` | PUT | `/bugs/{bugID}/resolve` | — | 有 |
+| `bug close` | PUT | `/bugs/{bugID}/close` | — | 有 |
+| `bug activate` | PUT | `/bugs/{bugID}/activate` | — | 有 |
 | `feedback list` | GET | `/products/{productID}/feedbacks` | 有 | — |
 | `feedback get` | GET | `/feedbacks/{feedbackID}` | — | — |
 | `feedback create` | POST | `/feedbacks` | — | 有 |
 | `feedback update` | PUT | `/feedbacks/{feedbackID}` | — | 有 |
+| `feedback close` | PUT | `/feedbacks/{feedbackID}/close` | — | 有 |
+| `feedback activate` | PUT | `/feedbacks/{feedbackID}/activate` | — | 有 |
 | `file create` | POST | `/files`（multipart/form-data） | — | 有 |
+
+`bug confirm`、`feedback create-bug` / `create-story` 等动作的最低版本是 `max8.5`，在 `max8.2` 实例上会被 CLI 以 `E2010` 拦下，技能不封装。`bug delete` / `feedback delete` 可用但**技能不开放**（物理删除走禅道网页端）。
 
 ## 字段
 
 - `bug create`：`productID`（整数，必填）、`title`（必填）、`openedBuild`（字符串数组，必填）、`project`、`execution`、`severity`、`pri`、`type`、`steps`（HTML）、`story`、`assignedTo`（字符串）。
 - `bug update`：`title`、`severity`、`pri`、`type`、`openedBuild`（数组）、`steps`、`project`、`execution`、`story`、`assignedTo`。
+- `bug resolve`：`resolution`（必填，8 项枚举）、`resolvedDate`、`resolvedBuild`、`assignedTo`、`comment`。
+- `bug close`：`comment`。`bug activate`：`openedBuild`、`assignedTo`、`comment`。
 - `feedback create`：`product`（整数，必填）、`title`（必填）、`module`、`type`、`desc`（纯文本）、`feedbackBy`（字符串）、`source`。
-- `feedback update`：`feedbackID`、`product`（必填）、`module`、`title`（必填）、`type`、`desc`、`feedbackBy`、`source`。
+- `feedback update`：`feedbackID`、`product`（必填）、`module`、`title`（必填）、`type`、`desc`、`feedbackBy`、`source`——**没有 `assignedTo`**。
+- `feedback close`：`closedReason`（必填，`commented` / `repeat` / `refuse`）、`comment`、`confirmClose`。`feedback activate`：`assignedTo`、`comment`。
 - `file create`：`file`（本地路径，必填）、`objectType`（`bug` \| `feedback`，必填）、`objectID`（整数，必填）。
+
+### `update` 的 autoFill 与 `--ids` 批量
+
+- **autoFill 只对 `update` 生效**：CLI 先 `GET` 一次当前对象，把 schema 里声明、用户没传、当前对象又有的字段补进请求体再 `PUT`——所以局部更新不会把未传字段覆盖为空。**状态流转（`resolve` / `close` / `activate`）不 autoFill**。
+- **显式空串不会被当成缺省**：`assignedTo: ""` 会原样送出去（取消指派）。
+- **`--ids` 批量**：`update` / `resolve` / `close` / `activate` 都认 `--ids <id,...>`（逗号分隔、去重）与 `--batch-fail-fast`；CLI 内部逐条串行调用，`--format=json` 时输出 `{ok, data:[{objectID, ok, data|skipped|error}], meta:{success, failed, skipped}}`，有失败则退出码 1。批量无服务端事务，中途失败不回滚已成功条目。
 
 ### 传图（`file create`）
 
@@ -126,7 +142,7 @@
 
 | 谁 | 干什么 |
 | --- | --- |
-| `scripts/zentao.mjs` | 读凭据、换令牌、注入 CLI、调子命令、投影输出；失败时给可读错误与非 0 退出码 |
+| `scripts/zentao.mjs` | 读凭据、换令牌、注入 CLI、调子命令、投影输出；写子命令（建单 / 更新 / 流转 / 传图）一律先做格式与状态预检，写后回读核对；批量先预检再串行执行并三栏汇报；失败时给可读错误与非 0 退出码 |
 | `scripts/connect.mjs` | 只在首次接入时用：起本机一次性页面收账号密码/个人令牌，验证通过后写本机凭据（0700/0600），写完自关；不读写任何禅道数据（只发一次换令牌与一次产品列表） |
 | 禅道 CLI | 拼 HTTP 请求、翻页、客户端过滤与字段投影 |
 | Agent | 只看投影后的表格与结论；凭据、令牌、原始 JSON 都不经手 |

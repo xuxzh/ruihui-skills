@@ -351,11 +351,12 @@ node <技能目录>/scripts/zentao.mjs bugs --product 29 --match 导出         
 node <技能目录>/scripts/zentao.mjs feedback --id 421                          # 反馈详情
 node <技能目录>/scripts/zentao.mjs dup --kind feedback --product 29 --title "…"  # 查重
 node <技能目录>/scripts/zentao.mjs feedback-create --payload-file <路径>       # 建反馈单
-node <技能目录>/scripts/zentao.mjs feedback-update --id 421 --payload-file <路径>  # 更新正文
+node <技能目录>/scripts/zentao.mjs feedback-update --id 421 --payload-file <路径>  # 更新正文（append）/ 局部编辑（edit）
+node <技能目录>/scripts/zentao.mjs bug-resolve --id 1936 --resolution fixed       # 解决缺陷（close / activate 同理）
 node <技能目录>/scripts/zentao.mjs file-create --file <图片路径> --object-type feedback --object-id 421
 ```
 
-- **完整清单**：`node <技能目录>/scripts/zentao.mjs --help` 列出全部 13 个子命令与各自认的选项；命令面、字段与错误码见 [zentao-cli.md](zentao-cli.md)。
+- **完整清单**：`node <技能目录>/scripts/zentao.mjs --help` 列出全部子命令与各自认的选项；命令面、字段与错误码见 [zentao-cli.md](zentao-cli.md)，流转 / 编辑 / 批量的契约见 [lifecycle.md](lifecycle.md)。
 - **全局旗标也能带**：`--timeout <毫秒>`（单次 HTTP 请求超时）与 `--insecure`（跳过 TLS 证书校验）对**所有子命令**都有效，原样转给官方禅道 CLI；`--timeout` 不是脚本等 CLI 子进程的超时，两者不是一回事。
 - **前置**：Node.js 18+（用 `fetch`）与**官方禅道 CLI**（`zentao` 命令，npm 包 `zentao-cli`，版本按 `config.local.json` 的 `zentaoCli`）装好且在 PATH 里。没有 node 或没有 CLI 时如实告诉终端用户并给替代路径（禅道 Web 端自提）；CLI 不在 PATH 时脚本报「找不到 zentao 命令」并退出非 0。
 - **凭据**：脚本自己读本机凭据文件并换当前账号的当次令牌，令牌经环境变量注入 CLI 子进程，密码与令牌不打印、不进命令行参数、不进上下文。没写凭据时它会提示去跑 `set-credentials.sh`。

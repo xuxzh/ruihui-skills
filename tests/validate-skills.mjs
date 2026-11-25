@@ -106,7 +106,7 @@ if (!parsed) {
 } else {
   // 版本号与通道标记：给 Agent 判「是不是旧版」用（业务用户看不到这些）。
   const meta = parsed.data.metadata || {};
-  check('rh-product-feedback: 版本号是 0.13.0', meta['rh-version'] === '0.13.0', meta['rh-version']);
+  check('rh-product-feedback: 版本号是 0.14.0', meta['rh-version'] === '0.14.0', meta['rh-version']);
   check('rh-product-feedback: 标记当前接入通道是 cli', meta['rh-channel'] === 'cli', meta['rh-channel']);
   check('rh-product-feedback: 不再标记 MCP 通道', !('rh-mcp-server' in meta));
 
@@ -137,6 +137,12 @@ if (!parsed) {
     ['不用调小页大小绕开截断', /--page-size/],
     ['地址核对按需触发', /按需触发/],
     ['随包入口脚本在 setup.md 里有说明', /随包入口脚本/],
+    ['生命周期流转走入口脚本并有预检回读', /bug-resolve[\s\S]*feedback-activate|feedback-activate[\s\S]*bug-resolve/],
+    ['两档分级确认规则（直通 / 必须确认）', /免二次确认直通执行[\s\S]*必须先展示草稿|写入前确认按操作分级/],
+    ['物理删除不开放', /物理删除不开放/],
+    ['批量上限 20 条', /最多 20 条|≤ 20/],
+    ['编辑模式改正文 / 标题带 CAS 复核', /expectedTitle|expectedBody/],
+    ['批量先预览再执行', /--preview/],
   ];
   for (const [label, re] of rules) check(`rh-product-feedback: ${label}`, re.test(all));
 
@@ -144,7 +150,7 @@ if (!parsed) {
     check(`rh-product-feedback: scripts/${script} 存在`, fs.existsSync(path.join(SKILLS_DIR, 'rh-product-feedback', 'scripts', script)));
   }
 
-  const refs = ['feedback-templates.md', 'zentao-cli.md', 'workflow.md', 'error-handling.md', 'setup.md'];
+  const refs = ['feedback-templates.md', 'zentao-cli.md', 'workflow.md', 'error-handling.md', 'setup.md', 'lifecycle.md'];
   for (const ref of refs) {
     check(`rh-product-feedback: SKILL.md 引用 references/${ref}`, parsed.body.includes(`references/${ref}`));
   }
