@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { REPO, SKILL_VERSION_RE, compareVersions, expectedLink, parseChangelog, readSkillVersion, releasedSections } from '../scripts/release-notes.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILLS_DIR = path.join(ROOT, 'skills');
@@ -105,8 +106,9 @@ if (!parsed) {
   check('rh-product-feedback 存在', false);
 } else {
   // 版本号与通道标记：给 Agent 判「是不是旧版」用（业务用户看不到这些）。
+  // 技能版本只有一处真相（这里的 rh-version）；README 与 CHANGELOG.md 跟它对齐的检查在下面「更新日志与版本号一致」。
   const meta = parsed.data.metadata || {};
-  check('rh-product-feedback: 版本号是 0.14.0', meta['rh-version'] === '0.14.0', meta['rh-version']);
+  check('rh-product-feedback: 版本号是 X.Y.Z 形式', SKILL_VERSION_RE.test(meta['rh-version'] || ''), meta['rh-version']);
   check('rh-product-feedback: 标记当前接入通道是 cli', meta['rh-channel'] === 'cli', meta['rh-channel']);
   check('rh-product-feedback: 不再标记 MCP 通道', !('rh-mcp-server' in meta));
 
@@ -327,6 +329,7 @@ if (fs.existsSync(quickStart)) {
 }
 
 // README 与 quick-start 同口径：示例句必须点名技能（ADR-0023）。
+const skillVersion = readSkillVersion(fs.readFileSync(path.join(SKILLS_DIR, 'rh-product-feedback', 'SKILL.md'), 'utf8'));
 const readmePath = path.join(ROOT, 'README.md');
 if (fs.existsSync(readmePath)) {
   const readmeText = fs.readFileSync(readmePath, 'utf8');
@@ -334,10 +337,48 @@ if (fs.existsSync(readmePath)) {
   const unnamed = readmeSamples.filter((l) => !l.includes('用 rh-product-feedback 技能：'));
   check('README 的示例句都点名了技能', unnamed.length === 0, unnamed.length ? `${unnamed.length} 条没点名` : '');
   check('README 两处示例列表都点名了技能', readmeSamples.length >= 10, `${readmeSamples.length} 条示例`);
+
+  // README 的两处版本跟技能版本对齐：技能表格里的版本列、「当前版本（vX.Y.Z）」。
+  const tableRow = readmeText.split('\n').find((l) => l.startsWith('| [`rh-product-feedback`]'));
+  const tableVersion = tableRow?.match(/\|\s*\[?(\d+\.\d+\.\d+)/)?.[1];
+  check('README 技能表格里的版本 = rh-version', tableVersion === skillVersion, `${tableVersion} vs ${skillVersion}`);
+  const currentVersion = readmeText.match(/当前版本（\[?v(\d+\.\d+\.\d+)/)?.[1];
+  check('README「当前版本」= rh-version', currentVersion === skillVersion, `${currentVersion} vs ${skillVersion}`);
 }
 
-// ---- 4. 敏感信息扫描 ---------------------------------------------------
-console.log('\n[4] 敏感信息扫描（公开仓库）');
+// ---- 4. 更新日志与版本号一致 ------------------------------------------
+// 技能版本只有一处真相（SKILL.md 的 rh-version）：CHANGELOG.md 的最新已发版段落、各段的对比链接都跟它对齐。
+// 发版流程见 README 的「发版」；Release 正文由 scripts/release-notes.mjs 从这里抽取。
+console.log('\n[4] 更新日志与版本号一致');
+const changelogPath = path.join(ROOT, 'CHANGELOG.md');
+if (fs.existsSync(changelogPath)) {
+  const { sections, links } = parseChangelog(fs.readFileSync(changelogPath, 'utf8'));
+  const released = releasedSections(sections);
+  check('更新日志以 [Unreleased] 段开头', sections[0]?.version === 'Unreleased', sections[0]?.version);
+
+  const malformed = released.filter((s) => !SKILL_VERSION_RE.test(s.version));
+  const descending = released.every((s, i) => i === 0 || released[i - 1].version !== s.version);
+  const ordered = released.every((s, i) => {
+    const prev = released[i + 1];
+    return !prev || compareVersions(s.version, prev.version) > 0;
+  });
+  check('更新日志里的版本号都是 X.Y.Z、从新到旧且不重复', malformed.length === 0 && descending && ordered, released.map((s) => s.version).join(', '));
+
+  check('更新日志最新已发版段落 = rh-version', released[0]?.version === skillVersion, `${released[0]?.version} vs ${skillVersion}`);
+  for (const [i, s] of released.entries()) {
+    const prev = released[i + 1]?.version;
+    check(`更新日志里 [${s.version}] 有日期且有内容`, /^\d{4}-\d{2}-\d{2}$/.test(s.date) && s.body.length > 0, s.date);
+    const linkName = prev ? `更新日志里 [${s.version}] 的对比链接指向 v${prev}...v${s.version}` : `更新日志里 [${s.version}] 是最早版本，链接指向它自己的 Release`;
+    check(linkName, links[s.version] === expectedLink(s.version, prev), links[s.version]);
+  }
+  const unreleasedLink = released[0] ? `https://github.com/${REPO}/compare/v${released[0].version}...HEAD` : '';
+  check('[Unreleased] 的对比链接指向最新版本...HEAD', links.Unreleased === unreleasedLink, links.Unreleased);
+} else {
+  check('存在 CHANGELOG.md', false);
+}
+
+// ---- 5. 敏感信息扫描 ---------------------------------------------------
+console.log('\n[5] 敏感信息扫描（公开仓库）');
 const tracked = walk(ROOT);
 const textFiles = tracked.filter((f) => /\.(md|mjs|js|json|yml|yaml|txt|example)$/.test(f) && !f.includes(`${path.sep}.git${path.sep}`));
 
