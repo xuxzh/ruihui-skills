@@ -4,7 +4,7 @@
 
 | 技能 | 版本 | 说明 |
 | --- | --- | --- |
-| [`rh-product-feedback`](skills/rh-product-feedback) | 0.14.0 | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），其余建**反馈单**；两条路径都支持查询、解释处理进度、补充说明、正文带图，以及**解决 / 关闭 / 激活、改派与字段编辑（含批量）**；接入只走官方禅道 CLI，第一次接入时引导你装 CLI 与写本人凭据 |
+| [`rh-product-feedback`](skills/rh-product-feedback) | [0.14.0](CHANGELOG.md#0140---2026-11-25) | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），其余建**反馈单**；两条路径都支持查询、解释处理进度、补充说明、正文带图，以及**解决 / 关闭 / 激活、改派与字段编辑（含批量）**；接入只走官方禅道 CLI，第一次接入时引导你装 CLI 与写本人凭据 |
 
 ## 业务用户：装完技能，一句话接入
 
@@ -40,7 +40,7 @@
 - **地址用 IP 而不是域名**：公司没有内网 DNS 域名可指禅道；地址随网络调整时改 `config.local.json` 再分发一次。
 - **分发渠道**：只有公网 `skills.sh` 一条——`npx skills add xuxzh/ruihui-skills --skill rh-product-feedback --global`。装完就有更新入口（`npx skills check` / `npx skills update rh-product-feedback`）。不再维护第二份拷贝渠道（内网包 / NAS / 软件中心推送）：内容与 skills.sh 上的完全相同，却多出一条必然漂移的发布线。
 - **本仓库不包含任何账号或凭据**；扫描器允许内网地址出现在 `config.local.json`，出现在别处一律 fail。
-- **CLI 版本升级走发版流程**：改 `config.local.json` 的 `zentaoCli.version` → 跑一次接入自检 → 重新分发。业务用户不要自己 `npm i -g zentao-cli@latest`，技能也不在运行时升级。
+- **CLI 版本升级走发版流程**：改 `config.local.json` 的 `zentaoCli.version` → 跑一次接入自检 → 重新分发（步骤见下面的[「发版」](#发版)）。业务用户不要自己 `npm i -g zentao-cli@latest`，技能也不在运行时升级。
 
 ## 开发与安装
 
@@ -94,7 +94,7 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 
 ## 能力边界
 
-当前版本（v0.14.0）的能力与限制：
+当前版本（[v0.14.0](https://github.com/xuxzh/ruihui-skills/releases/tag/v0.14.0)）的能力与限制：
 
 - **接入通道是官方禅道 CLI**（0.12.0 起）：此前的随包直连脚本与宿主里的禅道 MCP 工具已下线。旧版机器按 [`docs/quick-start.md`](docs/quick-start.md) 的「重装 / 更新」走一遍即可：同一段提示词，Agent 自己判版本、自己清残留，不用业务用户做任何选择。
 
@@ -165,6 +165,17 @@ ZENTAO_E2E_ALLOWED_PRODUCTS=<产品 id,...> \
 
 CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills.yml)）会跑静态校验、模拟层测试、技能目录与随包脚本测试、入口脚本各通道测试与规范校验；真实端到端测试需要内网禅道环境，不在 CI 中运行。
 
+### 发版
+
+每个技能版本发一次版：产出 `v<技能版本>` 标签与同名的 GitHub Release。安装来源始终是 main 的最新提交，Release 只做记录；main 上尚未发版的改动记在 `CHANGELOG.md` 的 `[Unreleased]` 段。
+
+1. **写定该版本段落**：对照 `git log v<上一个标签>..HEAD -- skills/rh-product-feedback` 把差异写全，把 `[Unreleased]` 改成 `## [<版本>] - <日期>`，文件底部加这一版的对比链接。
+2. **推进版本号三处**：`skills/rh-product-feedback/SKILL.md` 的 `metadata.rh-version`、`CHANGELOG.md` 最新段落、README 的两处版本（技能表格与「当前版本」）。
+3. **本地校验后提交到 main**：`node tests/validate-skills.mjs`，等 CI 通过。
+4. **打标签并推送**：`git tag -a v<版本> -m "v<版本>"`，`git push origin v<版本>`。`release` 工作流会校验「标签 = 标签提交里的 `rh-version` = 更新日志段落」，通过后用该段落生成 Release。
+
+标签发出后保持不动，修正走新的版本。全部版本见 [CHANGELOG.md](CHANGELOG.md) 与 [Releases](https://github.com/xuxzh/ruihui-skills/releases)。
+
 ## 贡献
 
 问题与需求用 GitHub Issues 跟踪：<https://github.com/xuxzh/ruihui-skills/issues>。
@@ -173,6 +184,10 @@ CI（[`.github/workflows/validate-skills.yml`](.github/workflows/validate-skills
 - [Issue #2](https://github.com/xuxzh/ruihui-skills/issues/2) — `rh-product-feedback` v0.1.0 实施
 
 改动请遵守仓库约定：技能目录只放技能本身、按需加载的参考文档与接入配置（`config.local.json` 存禅道地址，随包分发）；不要提交任何账号、凭据或真实业务数据。
+
+## 更新日志
+
+每个技能版本的改动记录在 [CHANGELOG.md](CHANGELOG.md)，GitHub 上对应 [Releases](https://github.com/xuxzh/ruihui-skills/releases)。
 
 ## 决策记录
 

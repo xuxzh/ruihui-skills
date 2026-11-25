@@ -65,6 +65,8 @@
 
 **别和「换禅道实例」搞混**：禅道地址写在技能包的接入配置里，换地址是管理员改配置再分发一次，跟换新版本是两件事。
 
+**想看每版改了什么**：[更新日志](https://github.com/xuxzh/ruihui-skills/blob/HEAD/CHANGELOG.md)、[Releases](https://github.com/xuxzh/ruihui-skills/releases)。
+
 ## 提单后会发生什么
 
 Agent 会依次做这些事：判断要建哪种单据 → 补齐缺的信息 → 确认属于哪个产品 → 查一下有没有重复的 → 把草稿给你看 → **等你确认** → 写进禅道 → 读回来核对 → 给你单据编号。
