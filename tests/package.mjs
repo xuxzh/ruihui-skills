@@ -56,6 +56,11 @@ test('入口脚本随包分发且 --help 列出全部子命令', () => {
     'feedback-create',
     'bug-update',
     'feedback-update',
+    'bug-resolve',
+    'bug-close',
+    'bug-activate',
+    'feedback-close',
+    'feedback-activate',
     'file-create',
     'dup',
   ]) {

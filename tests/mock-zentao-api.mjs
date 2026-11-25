@@ -99,6 +99,10 @@ export function createMockApiState(overrides = {}) {
     createHang: '',
     // 删除接口一律业务失败（模拟没有删除权限）
     deleteFails: false,
+    // 允许直接关闭 active 状态的缺陷（默认拒绝，复刻多数禅道工作流「先解决再关闭」）
+    allowCloseActiveBug: false,
+    // 命中这些动作名（resolve / close / activate）的流转返回成功但不改状态（复刻静默失败）
+    noopTransitions: [],
     // 这些产品的列表接口从第 2 页起返回空集，并把 pageID 钳回 1（复刻真实 max 8.2 实例的反馈列表：
     // CLI 的 --all 保护会报 E2008「服务端分页未向前推进」，整条读取失败）
     pagingStuckProducts: [],
@@ -267,28 +271,127 @@ function createFeedback(state, account, payload) {
   return createdResult(state, record);
 }
 
-// 更新：__NOOP_UPDATE__ 与全局 noopUpdate 都表示「响应成功但没生效」
+// 更新：__NOOP_UPDATE__ 与全局 noopUpdate 都表示「响应成功但没生效」。
+// 字段按 CLI autoFill 后的完整请求体原样落到记录上：这就是真实 PUT 的语义（未提交字段由 CLI 用现值补齐）。
+const UPDATABLE_FIELDS = [
+  'title', 'steps', 'desc', 'type', 'assignedTo', 'severity', 'pri', 'openedBuild',
+  'project', 'execution', 'story', 'product', 'module',
+];
+
 function updateRecord(state, record, payload, kind) {
   const marker = scenarioOf(record.title) || scenarioOf(payload.title);
   const noop = marker === '__NOOP_UPDATE__' || state.noopUpdate;
   const patched = { ...record };
   if (!noop) {
-    if (payload.title !== undefined) patched.title = String(payload.title);
-    if (kind === 'bug' && payload.steps !== undefined) {
-      patched.steps = String(payload.steps);
-      // 服务端没存住图片引用（禅道吞掉 <img> 的情形）：回读核对要能发现
+    for (const key of UPDATABLE_FIELDS) {
+      if (payload[key] === undefined) continue;
+      if (key === 'product' || key === 'project' || key === 'execution' || key === 'story' || key === 'module') {
+        patched[key] = Number(payload[key]);
+      } else if (key === 'severity' || key === 'pri') {
+        patched[key] = String(payload[key]);
+      } else {
+        patched[key] = payload[key];
+      }
+    }
+    // 正文里的图片引用：服务端可能吞掉 <img>，也可能给它补 onload（复刻真实实例行为，供回读核对用）
+    if (payload.steps !== undefined) {
       if (state.bugStepsDropImage) patched.steps = patched.steps.replace(/<img\b[^>]*>/gi, '');
       if (state.bugStepsOnload) patched.steps = patched.steps.replace(/<img\b/gi, '<img onload="setImageSize(this,0)"');
     }
-    if (kind === 'feedback' && payload.desc !== undefined) {
-      patched.desc = String(payload.desc);
-      if (state.feedbackImageOnload) patched.desc = patched.desc.replace(/<img\b/gi, '<img onload="setImageSize(this,0)"');
+    if (payload.desc !== undefined && state.feedbackImageOnload) {
+      patched.desc = patched.desc.replace(/<img\b/gi, '<img onload="setImageSize(this,0)"');
     }
+    // 只改派负责人时，禅道记的是一条「指派」流水（不是「编辑」）；字段比较按值（数组/对象按 JSON）
+    const sameValue = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const onlyAssigneeChanged =
+      Object.keys(payload).length > 0 &&
+      Object.keys(payload).every((key) => key === 'assignedTo' || sameValue(record[key], patched[key]));
+    const actionName = onlyAssigneeChanged && patched.assignedTo !== record.assignedTo ? 'assigned' : 'edited';
     if (!state.omitActions) {
-      patched.actions = [...record.actions, { id: record.id * 10 + record.actions.length, action: 'edited', actor: 'mock-user', date: now(), comment: '' }];
+      patched.actions = [...record.actions, { id: record.id * 10 + record.actions.length, action: actionName, actor: 'mock-user', date: now(), comment: '' }];
     }
   }
   return { record: patched, persist: !noop };
+}
+
+/** 追加一条流水（生命周期流转用）：omitActions 时不记，复刻真实 CLI 0.4.4 的 get 形状。 */
+function appendAction(state, record, action, extra = {}) {
+  if (state.omitActions) return record;
+  return {
+    ...record,
+    ...extra,
+    actions: [...(record.actions || []), { id: record.id * 10 + (record.actions || []).length, action, actor: 'mock-user', date: now(), comment: '' }],
+  };
+}
+
+/** 生命周期流转里「服务端返回成功但没生效」的注入：路径命中 noopTransitions 时状态保持原样。 */
+function transitionNoop(state, pathname) {
+  return (state.noopTransitions || []).includes(pathname);
+}
+
+/** 缺陷状态机：resolved/closed 不能再 resolve；closed 不能直接 close；active 不能 activate。 */
+function bugResolve(state, record, payload) {
+  if (record.status === 'closed') return { fail: '该缺陷已关闭，不能解决。' };
+  if (transitionNoop(state, 'resolve')) return { record };
+  let next = {
+    ...record,
+    status: 'resolved',
+    resolution: String(payload.resolution || ''),
+    resolvedBy: 'mock-user',
+    resolvedDate: payload.resolvedDate ? `${payload.resolvedDate} 10:00:00` : now(),
+  };
+  if (payload.resolvedBuild !== undefined) next.resolvedBuild = String(payload.resolvedBuild);
+  if (payload.assignedTo !== undefined) next.assignedTo = String(payload.assignedTo);
+  next = appendAction(state, next, 'resolved');
+  return { record: next };
+}
+
+function bugClose(state, record) {
+  if (record.status === 'closed') return { fail: '该缺陷已关闭。' };
+  // 复刻多数禅道工作流：active 的缺陷必须先解决才能关闭
+  if (record.status === 'active' && !state.allowCloseActiveBug) return { fail: '该缺陷未解决，不能关闭。' };
+  if (transitionNoop(state, 'close')) return { record };
+  const next = appendAction(state, { ...record, status: 'closed', closedBy: 'mock-user', closedDate: now() }, 'closed');
+  return { record: next };
+}
+
+function bugActivate(state, record, payload) {
+  if (record.status === 'active') return { fail: '该缺陷已是激活状态。' };
+  if (transitionNoop(state, 'activate')) return { record };
+  let next = {
+    ...record,
+    status: 'active',
+    activatedCount: Number(record.activatedCount || 0) + 1,
+    resolution: '',
+    resolvedBy: '',
+    resolvedDate: '',
+    closedBy: '',
+    closedDate: '',
+  };
+  if (payload.openedBuild !== undefined) next.openedBuild = Array.isArray(payload.openedBuild) ? payload.openedBuild : [String(payload.openedBuild)];
+  if (payload.assignedTo !== undefined) next.assignedTo = String(payload.assignedTo);
+  next = appendAction(state, next, 'activated');
+  return { record: next };
+}
+
+function feedbackClose(state, record, payload) {
+  if (record.status === 'closed') return { fail: '该反馈已关闭。' };
+  if (transitionNoop(state, 'close')) return { record };
+  const next = appendAction(
+    state,
+    { ...record, status: 'closed', closedReason: String(payload.closedReason || ''), closedBy: 'mock-user', closedDate: now() },
+    'closed',
+  );
+  return { record: next };
+}
+
+function feedbackActivate(state, record, payload) {
+  if (['active', 'wait', 'doing', 'review'].includes(record.status)) return { fail: '该反馈未关闭，无需激活。' };
+  if (transitionNoop(state, 'activate')) return { record };
+  let next = { ...record, status: payload.assignedTo ? 'doing' : 'wait', activatedBy: 'mock-user', activatedDate: now() };
+  if (payload.assignedTo !== undefined) next.assignedTo = String(payload.assignedTo);
+  next = appendAction(state, next, 'activated');
+  return { record: next };
 }
 
 function matchPath(patterns, pathname) {
@@ -374,6 +477,19 @@ function route(state, req, pathname, query, token, payload) {
     }
   }
 
+  // 缺陷生命周期：解决 / 关闭 / 激活（PUT /bugs/{id}/{action}，成功回 {status: success, ...}）
+  m = pathname.match(/^\/api\.php\/v2\/bugs\/(\d+)\/(resolve|close|activate)$/);
+  if (m && req.method === 'PUT') {
+    const record = state.bugs.get(Number(m[1]));
+    if (!record) return { status: 404, body: { message: '记录不存在' } };
+    if (!canSeeProduct(state, account, record.product)) return { body: { status: 'fail', message: '所属产品不存在，或当前账号没有权限。' } };
+    const handler = { resolve: bugResolve, close: bugClose, activate: bugActivate }[m[2]];
+    const result = handler(state, record, payload);
+    if (result.fail) return { body: { status: 'fail', message: result.fail } };
+    if (!transitionNoop(state, m[2])) state.bugs.set(record.id, result.record);
+    return { body: { status: 'success', bug: state.bugs.get(record.id), message: '' } };
+  }
+
   if (req.method === 'POST' && pathname === '/api.php/v2/bugs') {
     const result = createBug(state, account, payload);
     if (result.fail) return { body: { status: 'fail', message: result.fail } };
@@ -410,6 +526,19 @@ function route(state, req, pathname, query, token, payload) {
       if (result.persist) state.feedbacks.set(record.id, result.record);
       return { body: { feedback: result.record } };
     }
+  }
+
+  // 反馈生命周期：关闭 / 激活
+  m = pathname.match(/^\/api\.php\/v2\/feedbacks\/(\d+)\/(close|activate)$/);
+  if (m && req.method === 'PUT') {
+    const record = state.feedbacks.get(Number(m[1]));
+    if (!record) return { status: 404, body: { message: '记录不存在' } };
+    if (!canSeeProduct(state, account, record.product)) return { body: { status: 'fail', message: '所属产品不存在，或当前账号没有权限。' } };
+    const handler = { close: feedbackClose, activate: feedbackActivate }[m[2]];
+    const result = handler(state, record, payload);
+    if (result.fail) return { body: { status: 'fail', message: result.fail } };
+    if (!transitionNoop(state, m[2])) state.feedbacks.set(record.id, result.record);
+    return { body: { status: 'success', feedback: state.feedbacks.get(record.id), message: '' } };
   }
 
   if (req.method === 'POST' && pathname === '/api.php/v2/feedbacks') {

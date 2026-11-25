@@ -45,6 +45,8 @@ function usage(text) {
   return new UsageError(`用法：${text}`);
 }
 
+const BOOLEAN_OPTIONS = new Set(['help', 'insecure', 'fail-fast', 'preview']);
+
 function parseArgs(argv) {
   const [first, ...rest] = argv;
   const cmd = first && !first.startsWith('--') ? first : '';
@@ -52,13 +54,34 @@ function parseArgs(argv) {
   const opts = {};
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (!arg || !arg.startsWith('--')) continue;
+    if (!arg) continue;
+    if (!arg.startsWith('--')) {
+      throw usage(`意外的位置参数「${arg}」：所有参数请使用 --选项名 传参（详见 --help）`);
+    }
+    const eq = arg.indexOf('=');
+    if (eq > 2) {
+      const key = arg.slice(2, eq);
+      const val = arg.slice(eq + 1);
+      if (BOOLEAN_OPTIONS.has(key)) {
+        if (val === 'true' || val === '1' || val === '') opts[key] = true;
+        else if (val === 'false' || val === '0') opts[key] = false;
+        else throw usage(`--${key} 是开关选项，不接受「${val}」`);
+      } else {
+        opts[key] = val;
+      }
+      continue;
+    }
+    const key = arg.slice(2);
+    if (BOOLEAN_OPTIONS.has(key)) {
+      opts[key] = true;
+      continue;
+    }
     const next = args[i + 1];
     if (next !== undefined && !next.startsWith('--')) {
-      opts[arg.slice(2)] = next;
+      opts[key] = next;
       i++;
     } else {
-      opts[arg.slice(2)] = true;
+      opts[key] = true;
     }
   }
   return { cmd, opts };
@@ -183,7 +206,7 @@ function setCliGlobals(opts) {
     }
     globals.push('--timeout', raw);
   }
-  if (opts.insecure !== undefined) globals.push('--insecure');
+  if (opts.insecure) globals.push('--insecure');
   cliGlobals = globals;
 }
 
@@ -371,11 +394,11 @@ const DEFAULT_LIST_LIMIT = 10;
 // product 不进表格，但要参与归属校验（请求的是产品 X，回来的记录 product 字段不是 X 就不能算）
 const BUG_LIST_FIELDS = 'id,title,status,assignedTo,severity,pri,product';
 const FEEDBACK_LIST_FIELDS = 'id,title,status,assignedTo,product';
-// 详情投影：正文 + 状态 + 负责人 + 处理人/处理时间/结论 + 流水
+// 详情投影：正文 + 状态 + 负责人 + 处理人/处理时间/关闭/结论 + 流水
 const BUG_DETAIL_FIELDS =
-  'id,title,status,product,type,severity,pri,openedBuild,openedBy,openedDate,assignedTo,resolvedBy,resolvedDate,resolution,steps,actions';
+  'id,title,status,product,type,severity,pri,openedBuild,project,execution,story,openedBy,openedDate,assignedTo,resolvedBy,resolvedDate,resolvedBuild,resolution,closedBy,closedDate,activatedCount,steps,actions';
 const FEEDBACK_DETAIL_FIELDS =
-  'id,title,status,product,type,openedBy,openedDate,assignedTo,reviewedBy,reviewedDate,processedBy,processedDate,solution,desc,actions';
+  'id,title,status,product,module,type,openedBy,openedDate,assignedTo,reviewedBy,reviewedDate,processedBy,processedDate,solution,closedReason,closedBy,closedDate,desc,actions';
 
 // 负责人为空时写「未指派」：那是「没人接」，不是「字段缺失」
 function assignee(value) {
@@ -652,12 +675,19 @@ async function cmdBug(env, opts) {
       pri: bug.pri ?? '',
       type: bug.type ?? '',
       openedBuild: bug.openedBuild ?? [],
+      project: bug.project ?? 0,
+      execution: bug.execution ?? 0,
+      story: bug.story ?? 0,
       openedBy: bug.openedBy ?? '',
       openedDate: bug.openedDate ?? '',
       assignee: bug.assignedTo ?? '',
       processor: bug.resolvedBy ?? '',
       processedDate: bug.resolvedDate ?? '',
+      resolvedBuild: bug.resolvedBuild ?? '',
       resolution: bug.resolution ?? '',
+      closedBy: bug.closedBy ?? '',
+      closedDate: bug.closedDate ?? '',
+      activatedCount: bug.activatedCount ?? 0,
       body: stripTags(bug.steps),
       actions: actionViews(bug.actions, baseline),
     })
@@ -675,6 +705,7 @@ async function cmdFeedback(env, opts) {
       kind: 'feedback',
       id: feedback.id ?? Number(id),
       product: feedback.product ?? '',
+      module: feedback.module ?? 0,
       title: feedback.title ?? '',
       status: feedback.status ?? '',
       type: feedback.type ?? '',
@@ -686,6 +717,9 @@ async function cmdFeedback(env, opts) {
       processor: feedback.processedBy ?? '',
       processedDate: feedback.processedDate ?? '',
       resolution: feedback.solution ?? '',
+      closedReason: feedback.closedReason ?? '',
+      closedBy: feedback.closedBy ?? '',
+      closedDate: feedback.closedDate ?? '',
       body: normalizeBody(feedback.desc, 'feedback'),
       actions: actionViews(feedback.actions, baseline),
     })
@@ -1158,7 +1192,14 @@ Object.assign(COMMANDS, {
   'bug-create': { run: (env, opts) => cmdCreate('bug', env, opts), options: ['payload-file'] },
   'feedback-create': { run: (env, opts) => cmdCreate('feedback', env, opts), options: ['payload-file'] },
 });
-// ----- 更新单据 -----
+// ----- 更新、流转与批量编辑 -----
+
+const BATCH_MAX_IDS = 20;
+
+const BUG_TYPES = ['codeerror', 'config', 'install', 'security', 'performance', 'standard', 'automation', 'designdefect', 'others'];
+const BUG_RESOLUTIONS = ['fixed', 'notrepro', 'bydesign', 'duplicate', 'external', 'postponed', 'willnotfix', 'tostory'];
+const FEEDBACK_CLOSE_REASONS = ['commented', 'repeat', 'refuse'];
+const FEEDBACK_UPDATE_TYPES = ['story', 'task', 'bug', 'todo', 'advice', 'issue', 'risk', 'opportunity'];
 
 // 追加草稿的分隔行：草稿 = 原文 + 分隔行 + 标注 + 追加段落。
 // 文档（references/workflow.md F4）给终端用户看的草稿与脚本拆草稿用的是同一条线。
@@ -1166,9 +1207,133 @@ const APPEND_SEPARATOR = /^[─—\-=]{3,}$/;
 
 // 两种单据的正文载体与对应的禅道更新动作
 const UPDATE_KINDS = {
-  feedback: { label: '反馈单', bodyField: 'desc', cli: 'feedback', readFields: 'id,title,product,status,desc,actions' },
-  bug: { label: '缺陷单', bodyField: 'steps', cli: 'bug', readFields: 'id,title,product,status,steps,actions' },
+  feedback: {
+    label: '反馈单',
+    bodyField: 'desc',
+    cli: 'feedback',
+    readFields: 'id,title,product,module,type,status,desc,actions',
+  },
+  bug: {
+    label: '缺陷单',
+    bodyField: 'steps',
+    cli: 'bug',
+    readFields: 'id,title,product,status,severity,pri,type,openedBuild,project,execution,story,assignedTo,steps,actions',
+  },
 };
+
+function parseIntInRange(value, field, min, max = Number.MAX_SAFE_INTEGER) {
+  if (typeof value === 'boolean' || value === null || value === undefined || String(value).trim() === '') {
+    throw new Error(`载荷的 ${field} 要写整数`);
+  }
+  const num = Number(value);
+  if (!Number.isInteger(num) || num < min || num > max) {
+    const rangeText = max === Number.MAX_SAFE_INTEGER ? `≥ ${min} 的整数` : `${min} 到 ${max} 的整数`;
+    throw new Error(`载荷的 ${field} 要写 ${rangeText}`);
+  }
+  return num;
+}
+
+function parseStringArrayField(value, field) {
+  const rawList = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : null;
+  if (!rawList) throw new Error(`载荷的 ${field} 要写非空字符串数组`);
+  const list = rawList.map((item) => String(item ?? '').trim()).filter(Boolean);
+  if (!list.length) throw new Error(`载荷的 ${field} 不能为空`);
+  return list;
+}
+
+function parseDateYYYYMMDD(value, field) {
+  const text = String(value ?? '').trim();
+  const m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) throw new Error(`载荷的 ${field} 要写 YYYY-MM-DD 格式日期（如 2026-11-25）`);
+  const y = Number(m[1]);
+  const mon = Number(m[2]);
+  const d = Number(m[3]);
+  const dt = new Date(Date.UTC(y, mon - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mon - 1 || dt.getUTCDate() !== d) {
+    throw new Error(`载荷的 ${field} 不是有效日期：${text}`);
+  }
+  return text;
+}
+
+function parseConfirmClose(value) {
+  if (value === true) return '1';
+  if (typeof value === 'string') {
+    const norm = value.trim().toLowerCase();
+    if (norm === '1' || norm === 'yes' || norm === 'true') return value.trim();
+  }
+  throw new Error('载荷的 confirmClose 仅接受 true、"1"、"yes" 或 "true"');
+}
+
+function parseTargetSelection(opts, usageText) {
+  const hasId = opts.id !== undefined;
+  const hasIds = opts.ids !== undefined;
+  if (hasId && hasIds) {
+    throw usage(`${usageText}（--id 与 --ids 不能同时使用）`);
+  }
+  if (hasIds) {
+    if (opts.ids === true || !String(opts.ids).trim()) throw usage(usageText);
+    const seen = new Set();
+    const ids = [];
+    for (const part of String(opts.ids).split(',')) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      if (!/^\d+$/.test(trimmed) || Number(trimmed) <= 0) {
+        throw usage(`${usageText}（--ids 每个单据 ID 必须是正整数）`);
+      }
+      const num = Number(trimmed);
+      if (!seen.has(num)) {
+        seen.add(num);
+        ids.push(num);
+      }
+    }
+    if (!ids.length) throw usage(usageText);
+    if (ids.length > BATCH_MAX_IDS) {
+      throw new Error(`批量操作单批最多支持 ${BATCH_MAX_IDS} 条（当前 ${ids.length} 条），请分批执行`);
+    }
+    return { batch: true, ids };
+  }
+  if (hasId) {
+    const wanted = String(opts.id ?? '').trim();
+    if (opts.id === true || !wanted || !/^\d+$/.test(wanted) || Number(wanted) <= 0) {
+      throw usage(`${usageText}（单据 ID 是正整数）`);
+    }
+    return { batch: false, ids: [Number(wanted)] };
+  }
+  throw usage(usageText);
+}
+
+/** 合并命令行选项与 --payload-file（两边同时给了同名字段且值不同就报冲突，防止静默覆盖）。 */
+function mergeOptionsAndPayloadFile(opts, optToField, label) {
+  const file = opts['payload-file'] === undefined
+    ? ''
+    : opts['payload-file'] === true
+      ? (() => { throw usage('--payload-file 要给文件路径'); })()
+      : String(opts['payload-file']).trim();
+  const fromFile = file ? readPayloadObject(file, label) : {};
+  const merged = { ...fromFile };
+  for (const [optKey, fieldName] of Object.entries(optToField)) {
+    if (opts[optKey] === undefined) continue;
+    if (opts[optKey] === true) throw usage(`--${optKey} 需要传入值`);
+    const cliVal = opts[optKey];
+    if (Object.prototype.hasOwnProperty.call(fromFile, fieldName) && String(fromFile[fieldName]) !== String(cliVal)) {
+      throw new Error(`参数冲突：命令行 --${optKey} 与载荷文件的 ${fieldName} 值不一致`);
+    }
+    merged[fieldName] = cliVal;
+  }
+  return { raw: merged, file };
+}
+
+function rejectUnknownKeys(raw, allowedKeys, label) {
+  const allowed = new Set(allowedKeys);
+  const unknown = Object.keys(raw).filter((k) => !allowed.has(k));
+  if (unknown.length) {
+    throw new Error(`${label}载荷包含不支持的字段：${unknown.join('、')}`);
+  }
+}
 
 /**
  * 拆追加草稿：原文部分 + 追加部分（分隔行及其之后）。
@@ -1211,23 +1376,9 @@ function withAppendLabel(appended, label) {
  * + 可选的 appendLabel（追加段落的标签，如「截图 1」）。
  * 载荷文件用完即删：调用方会把生效载荷写回同一个文件，并在结束时删掉它。
  */
-function takeUpdatePayload(kindName, file) {
+function takeAppendPayload(kindName, file) {
   const kind = UPDATE_KINDS[kindName];
-  let text;
-  try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch (err) {
-    throw new Error(`读不到载荷文件：${err?.message || err}`);
-  }
-  let payload;
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    throw new Error('载荷文件不是合法 JSON：放更新请求体本身，不要再套一层 payload');
-  }
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new Error('载荷文件里要放一个 JSON 对象（更新请求体）');
-  }
+  const payload = readPayloadObject(file, '更新请求体');
   const body = payload[kind.bodyField];
   if (typeof body !== 'string' || !body.trim()) {
     throw new Error(`载荷缺 ${kind.bodyField}：要写完整的更新正文（原文 + 分隔行 + 标注 + 追加段落）`);
@@ -1253,19 +1404,24 @@ function appendLabelOf(value) {
   return text;
 }
 
-/** 按编号读一条单据（这条路径要用的字段：正文、标题、产品、状态、流水）。 */
-async function readUpdateRecord(kindName, id, env) {
-  const kind = UPDATE_KINDS[kindName];
-  const { data } = await runCli([kind.cli, 'get', String(id), '--fields', kind.readFields], env);
+/** 按编号读一条单据（读写校验共用投影）。 */
+async function readRecordWithFields(cliName, id, fields, bodyField, env) {
+  const { data } = await runCli([cliName, 'get', String(id), '--fields', fields], env);
   const record = data && typeof data === 'object' ? data : {};
   return {
-    body: String(record[kind.bodyField] ?? ''),
+    raw: record,
+    body: bodyField ? String(record[bodyField] ?? '') : '',
     title: String(record.title ?? ''),
-    product: record.product ?? '',
+    product: idOf(record.product),
     status: String(record.status ?? ''),
     // 保留「字段不存在」与「字段是空数组」的区别：前者是真实 CLI 不返回 actions，后者是服务端明说没有流水
     actions: Array.isArray(record.actions) ? rowsOf(record.actions) : null,
   };
+}
+
+async function readUpdateRecord(kindName, id, env) {
+  const kind = UPDATE_KINDS[kindName];
+  return readRecordWithFields(kind.cli, id, kind.readFields, kind.bodyField, env);
 }
 
 /** 流水基线：写前复核读到的动作 ID。 */
@@ -1273,72 +1429,850 @@ function actionIds(actions) {
   return new Set(rowsOf(actions).map((action) => String(action.id)));
 }
 
-/** 本次新增的「编辑」：基线之外、动作是 edited 的那几条。历史上存在过 edited 不算证据。 */
-function newEditedActions(actions, baseline) {
-  return rowsOf(actions).filter((action) => !baseline.has(String(action.id)) && String(action.action) === 'edited');
+/** 本次新增的指定动作：基线之外且 action 命中的记录。历史上存在过不算证据。 */
+function newMatchingActions(actions, baseline, allowedActionNames) {
+  const allowed = new Set(Array.isArray(allowedActionNames) ? allowedActionNames : [allowedActionNames]);
+  return rowsOf(actions).filter((action) => !baseline.has(String(action.id)) && allowed.has(String(action.action)));
 }
 
-/** 回读核对：完整预期正文归一化后逐字比较；有流水时再确认本次新增了「编辑」。 */
+/** 回读核对（追加模式）：完整预期正文归一化后逐字比较；有流水时再确认本次新增了「编辑」。 */
 function updateMismatches(expectedBody, before, after, kindName) {
   const mismatches = [];
   if (normalizeBody(after.body, kindName) !== normalizeBody(expectedBody, kindName)) mismatches.push('正文');
   // 真实 CLI 0.4.4 的 get 不映射 actions；正文已经对上，就不拿一个取不到的字段判失败
-  if (Array.isArray(after.actions) && !newEditedActions(after.actions, actionIds(before.actions)).length) {
+  if (Array.isArray(after.actions) && !newMatchingActions(after.actions, actionIds(before.actions), 'edited').length) {
     mismatches.push('操作流水里本次新增的「编辑」');
   }
   return mismatches;
 }
 
-/** 写前复核发现单据被改过：停手，把当前原文与重新合并后的草稿交回终端用户。 */
+/** 写前复核发现单据被改过：停手，把当前原文（及标题）与可选重新合并后的草稿交回终端用户。 */
 function reportUpdateConflict(kindName, id, changed, current, mergedDraft) {
   const kind = UPDATE_KINDS[kindName];
   const message =
     `这条${kind.label}在你确认期间被改过（${changed.join('、')}变了），我还没写入。` +
-    '下面是它现在的原文和我重新合并后的草稿，确认后我再更新。';
+    (mergedDraft !== null
+      ? '下面是它现在的原文和我重新合并后的草稿，确认后我再更新。'
+      : '请向终端用户核对当前内容后再决定是否继续。');
   process.stderr.write(`错误：${message}\n`);
-  out(
-    JSON.stringify({
-      ok: false,
-      kind: kindName,
-      id: Number(id),
-      conflict: true,
-      changed,
-      currentBody: current.body,
-      currentBodyText: normalizeBody(current.body, kindName),
-      mergedDraft,
-      mergedDraftText: normalizeBody(mergedDraft, kindName),
-      message,
-    })
-  );
+  const payload = {
+    ok: false,
+    kind: kindName,
+    id: Number(id),
+    conflict: true,
+    changed,
+    currentTitle: current.title,
+    currentBody: current.body,
+    currentBodyText: normalizeBody(current.body, kindName),
+    message,
+  };
+  if (mergedDraft !== null) {
+    payload.mergedDraft = mergedDraft;
+    payload.mergedDraftText = normalizeBody(mergedDraft, kindName);
+  }
+  out(JSON.stringify(payload));
   process.exitCode = 1;
 }
 
 /** 单据写进去了但回读对不上：不重放更新，把现状交回终端用户。 */
-function reportUpdateMismatch(kindName, id, mismatches) {
+function reportWriteMismatch(kindName, actionLabel, id, mismatches, extra = {}) {
   const kind = UPDATE_KINDS[kindName];
-  const message = `回读核对没通过（${kind.label} #${id} 已经写入）：${mismatches.join('、')}与预期不一致。不要重放更新，先把单据现状告诉终端用户。`;
+  const message = `回读核对没通过（${kind.label} #${id} ${actionLabel}已发出）：${mismatches.join('、')}与预期不一致。不要重放，先把单据现状告诉终端用户。`;
   process.stderr.write(`错误：${message}\n`);
-  out(JSON.stringify({ ok: false, kind: kindName, id: Number(id), updated: true, mismatches, message }));
+  out(JSON.stringify({ ok: false, kind: kindName, id: Number(id), updated: true, mismatches, ...extra, message }));
   process.exitCode = 1;
 }
 
-/** 结果不确定：只读核实过还是没核实成，都不重放更新。 */
-function reportUpdateUncertain(kindName, id, message, extra = {}) {
+/** 结果不确定：只读核实过还是没核实成，都不重放。 */
+function reportWriteUncertain(kindName, id, message, extra = {}) {
   process.stderr.write(`错误：${message}\n`);
   out(JSON.stringify({ ok: false, kind: kindName, id: Number(id), uncertain: true, ...extra, message }));
   process.exitCode = 1;
 }
 
-/**
- * 结果不确定（超时 / 断连 / 读不懂响应）时只读核实：正文与预期一致、且本次新增了「编辑」，
- * 才算写进去了；核实不了就报未确认。任何情况下都不重放更新。
- */
+function writeTempPayloadFile(data) {
+  const tmpFile = path.join(os.tmpdir(), `rh-zentao-cli-${process.pid}-${Math.random().toString(16).slice(2)}.json`);
+  fs.writeFileSync(tmpFile, JSON.stringify(data), { mode: 0o600 });
+  return tmpFile;
+}
+
+/** 执行一次底层 CLI 写动作（正文/备注全部走 @文件，不进 argv），并在内部清理临时文件。 */
+async function invokeCliWithPayloadFile(cliArgsPrefix, cliPayload, callerFile, env) {
+  if (callerFile) {
+    fs.writeFileSync(callerFile, JSON.stringify(cliPayload), { mode: 0o600 });
+    return runCli([...cliArgsPrefix, '--data', `@${callerFile}`], env);
+  }
+  const tmp = writeTempPayloadFile(cliPayload);
+  try {
+    return await runCli([...cliArgsPrefix, '--data', `@${tmp}`], env);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+/** 预览模式：只读逐条预检，不写入、不删文件。 */
+async function runActionPreview(spec, ids, env, warnings = []) {
+  const executable = [];
+  const skipped = [];
+  const failed = [];
+  const allWarnings = [...warnings];
+  for (const id of ids) {
+    let before;
+    try {
+      before = await spec.readRecord(id, env);
+    } catch (err) {
+      failed.push({ id, reason: err?.message || String(err) });
+      continue;
+    }
+    const check = spec.precheck(before, id);
+    if (!check.ok) {
+      skipped.push({ id, title: before.title, status: before.status, reason: check.reason });
+      continue;
+    }
+    const item = { id, title: before.title, status: before.status };
+    if (check.warning) item.warning = check.warning;
+    executable.push(item);
+  }
+  out(
+    JSON.stringify({
+      ok: true,
+      preview: true,
+      kind: spec.kindName,
+      action: spec.actionKey,
+      total: ids.length,
+      executable,
+      skipped,
+      failed,
+      ...(allWarnings.length ? { warnings: allWarnings } : {}),
+    }),
+  );
+}
+
+/** 单条动作执行：预检 → 单次写入 → 回读核对（含超时后只读核实，绝不重放）。 */
+async function runSingleAction(spec, id, env, callerFile, warnings = []) {
+  const before = await spec.readRecord(id, env);
+  const check = spec.precheck(before, id);
+  if (!check.ok) {
+    throw new Error(`${spec.noun} #${id} ${check.reason}`);
+  }
+  const itemWarnings = check.warning ? [...warnings, check.warning] : [...warnings];
+
+  const casConflict = spec.checkCas ? spec.checkCas(before) : null;
+  if (casConflict) {
+    reportUpdateConflict(spec.kindName, id, casConflict.changed, before, null);
+    return;
+  }
+
+  const cliPayload = spec.buildCliPayload(before);
+  try {
+    try {
+      await invokeCliWithPayloadFile([spec.cli, spec.cliAction, String(id)], cliPayload, callerFile, env);
+    } catch (err) {
+      if (!cliOutcomeUnknown(err)) {
+        const hint = spec.errorHint ? spec.errorHint(err, before) : '';
+        if (hint) throw new Error(`${err.message}${hint}`);
+        throw err;
+      }
+      let after;
+      try {
+        after = await spec.readRecord(id, env);
+      } catch (readErr) {
+        reportWriteUncertain(
+          spec.kindName,
+          id,
+          `请求结果不确定（${err.message}）；回读核实也失败（${readErr?.message || readErr}），${spec.actionLabel}是否生效未确认。不要重放。`,
+          { action: spec.actionKey },
+        );
+        return;
+      }
+      const mismatches = spec.mismatches(before, after);
+      if (!mismatches.length) {
+        const newActs = newMatchingActions(after.actions, actionIds(before.actions), spec.expectedActions).map((a) => String(a.action));
+        out(JSON.stringify(spec.formatSuccess(id, after, 'query', newActs, itemWarnings, env)));
+        return;
+      }
+      reportWriteUncertain(
+        spec.kindName,
+        id,
+        `请求结果不确定（${err.message}）；回读核实发现${mismatches.join('、')}与预期不一致，${spec.actionLabel}是否生效未确认。不要重放。`,
+        { action: spec.actionKey, mismatches },
+      );
+      return;
+    }
+
+    const after = await spec.readRecord(id, env);
+    const mismatches = spec.mismatches(before, after);
+    if (mismatches.length) {
+      reportWriteMismatch(spec.kindName, spec.actionLabel, id, mismatches, { action: spec.actionKey });
+      return;
+    }
+    const newActs = newMatchingActions(after.actions, actionIds(before.actions), spec.expectedActions).map((a) => String(a.action));
+    out(JSON.stringify(spec.formatSuccess(id, after, 'readback', newActs, itemWarnings, env)));
+  } finally {
+    if (callerFile) fs.rmSync(callerFile, { force: true });
+  }
+}
+
+/** 批量动作执行：先逐条预检过滤，再串行写入与回读，不自动重试，分三栏汇报。 */
+async function runBatchAction(spec, ids, env, callerFile, failFast, warnings = []) {
+  const executable = [];
+  const skipped = [];
+  const failed = [];
+  const succeeded = [];
+
+  try {
+    for (const id of ids) {
+      let before;
+      try {
+        before = await spec.readRecord(id, env);
+      } catch (err) {
+        failed.push({ id, stage: 'preflight', uncertain: false, reason: err?.message || String(err) });
+        continue;
+      }
+      const check = spec.precheck(before, id);
+      if (!check.ok) {
+        skipped.push({ id, title: before.title, status: before.status, reason: check.reason });
+        continue;
+      }
+      executable.push({ id, before, warning: check.warning });
+    }
+
+    for (let i = 0; i < executable.length; i++) {
+      const { id, before, warning } = executable[i];
+      const cliPayload = spec.buildCliPayload(before);
+      let wroteOk = false;
+      let uncertainErr = null;
+      try {
+        await invokeCliWithPayloadFile([spec.cli, spec.cliAction, String(id)], cliPayload, null, env);
+        wroteOk = true;
+      } catch (err) {
+        if (cliOutcomeUnknown(err)) {
+          uncertainErr = err;
+        } else {
+          const hint = spec.errorHint ? spec.errorHint(err, before) : '';
+          failed.push({
+            id,
+            title: before.title,
+            status: before.status,
+            stage: 'write',
+            uncertain: false,
+            reason: `${err.message}${hint}`,
+          });
+        }
+      }
+
+      if (wroteOk || uncertainErr) {
+        try {
+          const after = await spec.readRecord(id, env);
+          const mismatches = spec.mismatches(before, after);
+          if (!mismatches.length) {
+            const newActs = newMatchingActions(after.actions, actionIds(before.actions), spec.expectedActions).map((a) => String(a.action));
+            const itemWarnings = warning ? [...warnings, warning] : [...warnings];
+            const entry = {
+              id,
+              title: after.title,
+              status: after.status,
+              verified: uncertainErr ? 'query' : 'readback',
+              newActions: newActs,
+            };
+            if (itemWarnings.length) entry.warnings = itemWarnings;
+            succeeded.push(entry);
+          } else {
+            failed.push({
+              id,
+              title: before.title,
+              status: after.status,
+              stage: uncertainErr ? 'verify' : 'readback',
+              updated: !uncertainErr,
+              uncertain: !!uncertainErr,
+              mismatches,
+              reason: uncertainErr
+                ? `请求结果不确定（${uncertainErr.message}），回读核实发现${mismatches.join('、')}与预期不一致`
+                : `回读核对没通过：${mismatches.join('、')}与预期不一致`,
+            });
+          }
+        } catch (readErr) {
+          failed.push({
+            id,
+            title: before.title,
+            status: before.status,
+            stage: uncertainErr ? 'verify' : 'readback',
+            updated: !uncertainErr,
+            uncertain: true,
+            reason: uncertainErr
+              ? `请求结果不确定（${uncertainErr.message}），回读核实失败（${readErr?.message || readErr}）`
+              : `写后回读失败（${readErr?.message || readErr}）`,
+          });
+        }
+      }
+
+      if (failFast && failed.length > 0 && failed[failed.length - 1].id === id) {
+        for (const rest of executable.slice(i + 1)) {
+          skipped.push({
+            id: rest.id,
+            title: rest.before.title,
+            status: rest.before.status,
+            reason: '因 --fail-fast 前序失败已跳过',
+          });
+        }
+        break;
+      }
+    }
+  } finally {
+    if (callerFile) fs.rmSync(callerFile, { force: true });
+  }
+
+  const ok = failed.length === 0;
+  const counts = { succeeded: succeeded.length, skipped: skipped.length, failed: failed.length };
+  if (!ok) {
+    const message = `批量${spec.actionLabel}存在失败（成功 ${counts.succeeded} / 跳过 ${counts.skipped} / 失败 ${counts.failed}），失败项未自动重试。`;
+    process.stderr.write(`错误：${message}\n`);
+    process.exitCode = 1;
+  }
+  out(
+    JSON.stringify({
+      ok,
+      batch: true,
+      kind: spec.kindName,
+      action: spec.actionKey,
+      total: ids.length,
+      succeeded,
+      skipped,
+      failed,
+      counts,
+      ...(warnings.length ? { warnings } : {}),
+    }),
+  );
+}
+
+/** 调度单条、预览或批量动作。 */
+async function dispatchAction(spec, target, env, callerFile, opts, warnings = []) {
+  if (opts.preview) {
+    await runActionPreview(spec, target.ids, env, warnings);
+    return;
+  }
+  if (target.batch) {
+    await runBatchAction(spec, target.ids, env, callerFile, !!opts['fail-fast'], warnings);
+    return;
+  }
+  await runSingleAction(spec, target.ids[0], env, callerFile, warnings);
+}
+
+// ----- 生命周期流转子命令（bug-resolve / bug-close / bug-activate / feedback-close / feedback-activate） -----
+
+const TRANSITION_SPECS = {
+  'bug-resolve': {
+    kindName: 'bug',
+    noun: '缺陷',
+    cli: 'bug',
+    cliAction: 'resolve',
+    actionKey: 'resolve',
+    actionLabel: '解决缺陷',
+    expectedActions: ['resolved'],
+    readFields: 'id,title,product,status,assignedTo,resolvedBy,resolvedDate,resolvedBuild,resolution,actions',
+    usage: 'node zentao.mjs bug-resolve --id <ID>|--ids <ID,...> --resolution <枚举> [--resolved-date YYYY-MM-DD] [--resolved-build <版本>] [--assigned-to <账号>] [--comment <备注>] [--payload-file <路径>] [--preview] [--fail-fast]',
+    options: ['id', 'ids', 'resolution', 'resolved-date', 'resolved-build', 'assigned-to', 'comment', 'payload-file', 'fail-fast', 'preview'],
+    optToField: {
+      resolution: 'resolution',
+      'resolved-date': 'resolvedDate',
+      'resolved-build': 'resolvedBuild',
+      'assigned-to': 'assignedTo',
+      comment: 'comment',
+    },
+    validate(raw) {
+      rejectUnknownKeys(raw, ['resolution', 'resolvedDate', 'resolvedBuild', 'assignedTo', 'comment'], '解决缺陷');
+      const resolution = String(raw.resolution ?? '').trim();
+      if (!resolution) throw new Error('载荷缺必填字段：resolution');
+      if (!BUG_RESOLUTIONS.includes(resolution)) {
+        throw new Error(`resolution 必须是以下之一：${BUG_RESOLUTIONS.join(' | ')}`);
+      }
+      const payload = { resolution };
+      if (raw.resolvedDate !== undefined && raw.resolvedDate !== null && String(raw.resolvedDate).trim() !== '') {
+        payload.resolvedDate = parseDateYYYYMMDD(raw.resolvedDate, 'resolvedDate');
+      }
+      if (raw.resolvedBuild !== undefined && raw.resolvedBuild !== null && String(raw.resolvedBuild).trim() !== '') {
+        payload.resolvedBuild = String(raw.resolvedBuild).trim();
+      }
+      if (raw.assignedTo !== undefined && raw.assignedTo !== null) {
+        if (typeof raw.assignedTo !== 'string') throw new Error('载荷的 assignedTo 要写字符串');
+        payload.assignedTo = raw.assignedTo.trim();
+      }
+      if (raw.comment !== undefined && raw.comment !== null) {
+        if (typeof raw.comment !== 'string') throw new Error('载荷的 comment 要写字符串');
+        payload.comment = raw.comment;
+      }
+      const warnings = [];
+      if (resolution === 'duplicate' && (!payload.comment || !/\d+/.test(payload.comment))) {
+        warnings.push('resolution 为 duplicate 时请在 comment 中写明重复的缺陷单号（CLI 0.4.4 未暴露 duplicateBug 字段）');
+      }
+      return { payload, warnings };
+    },
+    precheck(before) {
+      if (before.status === 'resolved') return { ok: false, reason: '当前已是 resolved 状态，无需重复解决' };
+      if (before.status === 'closed') return { ok: false, reason: '当前已是 closed 状态，不能直接解决（如需重新处理请先激活）' };
+      return { ok: true };
+    },
+    mismatches(payload, before, after) {
+      const list = [];
+      if (after.status !== 'resolved') list.push('状态（应为 resolved）');
+      if (String(after.raw.resolution ?? '') !== payload.resolution) list.push('解决方案（resolution）');
+      if (payload.resolvedDate && String(after.raw.resolvedDate ?? '').slice(0, 10) !== payload.resolvedDate) {
+        list.push('解决日期（resolvedDate）');
+      }
+      if (payload.resolvedBuild !== undefined && String(after.raw.resolvedBuild ?? '').trim() !== payload.resolvedBuild) {
+        list.push('解决版本（resolvedBuild）');
+      }
+      if (payload.assignedTo !== undefined && String(after.raw.assignedTo ?? '').trim() !== payload.assignedTo) {
+        list.push('负责人（assignedTo）');
+      }
+      if (Array.isArray(after.actions) && !newMatchingActions(after.actions, actionIds(before.actions), 'resolved').length) {
+        list.push('操作流水里本次新增的「resolved」');
+      }
+      return list;
+    },
+    extraResult(after) {
+      return {
+        assignedTo: String(after.raw.assignedTo ?? ''),
+        resolution: String(after.raw.resolution ?? ''),
+        resolvedDate: String(after.raw.resolvedDate ?? ''),
+        resolvedBuild: String(after.raw.resolvedBuild ?? ''),
+      };
+    },
+  },
+  'bug-close': {
+    kindName: 'bug',
+    noun: '缺陷',
+    cli: 'bug',
+    cliAction: 'close',
+    actionKey: 'close',
+    actionLabel: '关闭缺陷',
+    expectedActions: ['closed'],
+    readFields: 'id,title,product,status,assignedTo,closedBy,closedDate,actions',
+    usage: 'node zentao.mjs bug-close --id <ID>|--ids <ID,...> [--comment <备注>] [--payload-file <路径>] [--preview] [--fail-fast]',
+    options: ['id', 'ids', 'comment', 'payload-file', 'fail-fast', 'preview'],
+    optToField: { comment: 'comment' },
+    validate(raw) {
+      rejectUnknownKeys(raw, ['comment'], '关闭缺陷');
+      const payload = {};
+      if (raw.comment !== undefined && raw.comment !== null) {
+        if (typeof raw.comment !== 'string') throw new Error('载荷的 comment 要写字符串');
+        payload.comment = raw.comment;
+      }
+      return { payload, warnings: [] };
+    },
+    precheck(before) {
+      if (before.status === 'closed') return { ok: false, reason: '当前已是 closed 状态，无需重复关闭' };
+      if (before.status === 'active') {
+        return { ok: true, warning: '当前为 active 状态，多数禅道工作流需先 bug-resolve 再关闭；若被服务端拒绝请先解决' };
+      }
+      return { ok: true };
+    },
+    mismatches(_payload, before, after) {
+      const list = [];
+      if (after.status !== 'closed') list.push('状态（应为 closed）');
+      if (Array.isArray(after.actions) && !newMatchingActions(after.actions, actionIds(before.actions), 'closed').length) {
+        list.push('操作流水里本次新增的「closed」');
+      }
+      return list;
+    },
+    errorHint(_err, before) {
+      return before.status === 'active' ? '（若实例工作流要求先解决再关闭，请先执行 bug-resolve 再执行 bug-close）' : '';
+    },
+    extraResult(after) {
+      return {
+        closedBy: String(after.raw.closedBy ?? ''),
+        closedDate: String(after.raw.closedDate ?? ''),
+      };
+    },
+  },
+  'bug-activate': {
+    kindName: 'bug',
+    noun: '缺陷',
+    cli: 'bug',
+    cliAction: 'activate',
+    actionKey: 'activate',
+    actionLabel: '激活缺陷',
+    expectedActions: ['activated'],
+    readFields: 'id,title,product,status,assignedTo,openedBuild,activatedCount,actions',
+    usage: 'node zentao.mjs bug-activate --id <ID>|--ids <ID,...> [--opened-build <版本,...>] [--assigned-to <账号>] [--comment <备注>] [--payload-file <路径>] [--preview] [--fail-fast]',
+    options: ['id', 'ids', 'opened-build', 'assigned-to', 'comment', 'payload-file', 'fail-fast', 'preview'],
+    optToField: {
+      'opened-build': 'openedBuild',
+      'assigned-to': 'assignedTo',
+      comment: 'comment',
+    },
+    validate(raw) {
+      rejectUnknownKeys(raw, ['openedBuild', 'assignedTo', 'comment'], '激活缺陷');
+      const payload = {};
+      if (raw.openedBuild !== undefined && raw.openedBuild !== null && raw.openedBuild !== '') {
+        payload.openedBuild = parseStringArrayField(raw.openedBuild, 'openedBuild');
+      }
+      if (raw.assignedTo !== undefined && raw.assignedTo !== null) {
+        if (typeof raw.assignedTo !== 'string') throw new Error('载荷的 assignedTo 要写字符串');
+        payload.assignedTo = raw.assignedTo.trim();
+      }
+      if (raw.comment !== undefined && raw.comment !== null) {
+        if (typeof raw.comment !== 'string') throw new Error('载荷的 comment 要写字符串');
+        payload.comment = raw.comment;
+      }
+      return { payload, warnings: [] };
+    },
+    precheck(before) {
+      if (before.status === 'active') return { ok: false, reason: '当前已是 active 状态，无需重复激活' };
+      if (before.status !== 'resolved' && before.status !== 'closed') {
+        return { ok: false, reason: `当前状态为 ${before.status || '未知'}，只有 resolved 或 closed 状态的缺陷可以激活` };
+      }
+      return { ok: true };
+    },
+    mismatches(payload, before, after) {
+      const list = [];
+      if (after.status !== 'active') list.push('状态（应为 active）');
+      if (payload.assignedTo !== undefined && String(after.raw.assignedTo ?? '').trim() !== payload.assignedTo) {
+        list.push('负责人（assignedTo）');
+      }
+      if (
+        payload.openedBuild !== undefined &&
+        versionListOf(after.raw.openedBuild).join('\n') !== versionListOf(payload.openedBuild).join('\n')
+      ) {
+        list.push('影响版本（openedBuild）');
+      }
+      if (Array.isArray(after.actions) && !newMatchingActions(after.actions, actionIds(before.actions), 'activated').length) {
+        list.push('操作流水里本次新增的「activated」');
+      }
+      return list;
+    },
+    extraResult(after) {
+      return {
+        assignedTo: String(after.raw.assignedTo ?? ''),
+        openedBuild: after.raw.openedBuild ?? [],
+      };
+    },
+  },
+  'feedback-close': {
+    kindName: 'feedback',
+    noun: '反馈',
+    cli: 'feedback',
+    cliAction: 'close',
+    actionKey: 'close',
+    actionLabel: '关闭反馈',
+    expectedActions: ['closed'],
+    readFields: 'id,title,product,status,closedReason,closedBy,closedDate,actions',
+    usage: 'node zentao.mjs feedback-close --id <ID>|--ids <ID,...> --closed-reason <commented|repeat|refuse> [--comment <备注>] [--confirm-close <1|yes|true>] [--payload-file <路径>] [--preview] [--fail-fast]',
+    options: ['id', 'ids', 'closed-reason', 'comment', 'confirm-close', 'payload-file', 'fail-fast', 'preview'],
+    optToField: {
+      'closed-reason': 'closedReason',
+      comment: 'comment',
+      'confirm-close': 'confirmClose',
+    },
+    validate(raw) {
+      rejectUnknownKeys(raw, ['closedReason', 'comment', 'confirmClose'], '关闭反馈');
+      const closedReason = String(raw.closedReason ?? '').trim();
+      if (!closedReason) throw new Error('载荷缺必填字段：closedReason');
+      if (!FEEDBACK_CLOSE_REASONS.includes(closedReason)) {
+        throw new Error(`closedReason 必须是以下之一：${FEEDBACK_CLOSE_REASONS.join(' | ')}`);
+      }
+      const payload = { closedReason };
+      if (raw.comment !== undefined && raw.comment !== null) {
+        if (typeof raw.comment !== 'string') throw new Error('载荷的 comment 要写字符串');
+        payload.comment = raw.comment;
+      }
+      if (raw.confirmClose !== undefined && raw.confirmClose !== null && raw.confirmClose !== '') {
+        payload.confirmClose = parseConfirmClose(raw.confirmClose);
+      }
+      return { payload, warnings: [] };
+    },
+    precheck(before) {
+      if (before.status === 'closed') return { ok: false, reason: '当前已是 closed 状态，无需重复关闭' };
+      return { ok: true };
+    },
+    mismatches(payload, before, after) {
+      const list = [];
+      if (after.status !== 'closed') list.push('状态（应为 closed）');
+      const actualReason = String(after.raw.closedReason ?? '').trim();
+      if (actualReason && actualReason !== payload.closedReason) {
+        list.push('关闭原因（closedReason）');
+      }
+      if (Array.isArray(after.actions) && !newMatchingActions(after.actions, actionIds(before.actions), 'closed').length) {
+        list.push('操作流水里本次新增的「closed」');
+      }
+      return list;
+    },
+    extraResult(after) {
+      return {
+        closedReason: String(after.raw.closedReason ?? ''),
+        closedBy: String(after.raw.closedBy ?? ''),
+        closedDate: String(after.raw.closedDate ?? ''),
+      };
+    },
+  },
+  'feedback-activate': {
+    kindName: 'feedback',
+    noun: '反馈',
+    cli: 'feedback',
+    cliAction: 'activate',
+    actionKey: 'activate',
+    actionLabel: '激活反馈',
+    expectedActions: ['activated'],
+    readFields: 'id,title,product,status,assignedTo,activatedBy,activatedDate,actions',
+    usage: 'node zentao.mjs feedback-activate --id <ID>|--ids <ID,...> [--assigned-to <账号>] [--comment <备注>] [--payload-file <路径>] [--preview] [--fail-fast]',
+    options: ['id', 'ids', 'assigned-to', 'comment', 'payload-file', 'fail-fast', 'preview'],
+    optToField: {
+      'assigned-to': 'assignedTo',
+      comment: 'comment',
+    },
+    validate(raw) {
+      rejectUnknownKeys(raw, ['assignedTo', 'comment'], '激活反馈');
+      const payload = {};
+      if (raw.assignedTo !== undefined && raw.assignedTo !== null) {
+        if (typeof raw.assignedTo !== 'string') throw new Error('载荷的 assignedTo 要写字符串');
+        payload.assignedTo = raw.assignedTo.trim();
+      }
+      if (raw.comment !== undefined && raw.comment !== null) {
+        if (typeof raw.comment !== 'string') throw new Error('载荷的 comment 要写字符串');
+        payload.comment = raw.comment;
+      }
+      return { payload, warnings: [] };
+    },
+    precheck(before) {
+      if (['active', 'wait', 'doing', 'review'].includes(before.status)) {
+        return { ok: false, reason: `当前状态为 ${before.status}（未关闭），无需激活` };
+      }
+      return { ok: true };
+    },
+    mismatches(payload, before, after) {
+      const list = [];
+      if (!after.status || after.status === 'closed') list.push('状态（激活后不能仍为 closed）');
+      if (payload.assignedTo !== undefined && String(after.raw.assignedTo ?? '').trim() !== payload.assignedTo) {
+        list.push('负责人（assignedTo）');
+      }
+      if (Array.isArray(after.actions) && !newMatchingActions(after.actions, actionIds(before.actions), 'activated').length) {
+        list.push('操作流水里本次新增的「activated」');
+      }
+      return list;
+    },
+    extraResult(after) {
+      return {
+        assignedTo: String(after.raw.assignedTo ?? ''),
+      };
+    },
+  },
+};
+
+async function cmdTransition(cmdName, env, opts) {
+  const def = TRANSITION_SPECS[cmdName];
+  const target = parseTargetSelection(opts, def.usage);
+  const { raw, file } = mergeOptionsAndPayloadFile(opts, def.optToField, def.actionLabel);
+  const { payload, warnings } = def.validate(raw);
+  const linkPath = def.kindName === 'bug' ? 'bug-view' : 'feedback-view';
+  const spec = {
+    kindName: def.kindName,
+    noun: def.noun,
+    cli: def.cli,
+    cliAction: def.cliAction,
+    actionKey: def.actionKey,
+    actionLabel: def.actionLabel,
+    expectedActions: def.expectedActions,
+    readRecord: (id, e) => readRecordWithFields(def.cli, id, def.readFields, '', e),
+    precheck: def.precheck,
+    buildCliPayload: () => payload,
+    mismatches: (before, after) => def.mismatches(payload, before, after),
+    errorHint: def.errorHint,
+    formatSuccess: (id, after, verified, newActions, itemWarnings, e) => ({
+      ok: true,
+      kind: def.kindName,
+      action: def.actionKey,
+      id: Number(id),
+      title: after.title,
+      status: after.status,
+      ...def.extraResult(after),
+      url: recordLink(e, linkPath, id),
+      verified,
+      newActions,
+      ...(itemWarnings.length ? { warnings: itemWarnings } : {}),
+    }),
+  };
+  await dispatchAction(spec, target, env, file, opts, warnings);
+}
+
+for (const [cmdName, def] of Object.entries(TRANSITION_SPECS)) {
+  COMMANDS[cmdName] = {
+    run: (env, opts) => cmdTransition(cmdName, env, opts),
+    options: def.options,
+  };
+}
+
+// ----- 更新子命令（追加模式 append 与字段/正文编辑模式 edit） -----
+
+const BUG_EDIT_OPT_TO_FIELD = {
+  'assigned-to': 'assignedTo',
+  pri: 'pri',
+  severity: 'severity',
+  type: 'type',
+  project: 'project',
+  execution: 'execution',
+  story: 'story',
+  'opened-build': 'openedBuild',
+};
+
+const FEEDBACK_EDIT_OPT_TO_FIELD = {
+  product: 'product',
+  module: 'module',
+  type: 'type',
+};
+
+const BUG_EDIT_ALLOWED = [
+  'mode', 'title', 'severity', 'pri', 'type', 'openedBuild', 'steps', 'project', 'execution', 'story', 'assignedTo',
+  'expectedTitle', 'expectedBody',
+];
+
+const FEEDBACK_EDIT_ALLOWED = [
+  'mode', 'product', 'module', 'title', 'type', 'desc', 'expectedTitle', 'expectedBody',
+];
+
+function validateEditPatch(kindName, raw, batch) {
+  if (kindName === 'feedback' && Object.prototype.hasOwnProperty.call(raw, 'assignedTo')) {
+    throw new Error('feedback-update 不支持修改 assignedTo；如需指派请使用 feedback-activate --assigned-to');
+  }
+  const allowed = kindName === 'bug' ? BUG_EDIT_ALLOWED : FEEDBACK_EDIT_ALLOWED;
+  rejectUnknownKeys(raw, allowed, kindName === 'bug' ? '编辑缺陷' : '编辑反馈');
+
+  const bodyField = UPDATE_KINDS[kindName].bodyField;
+  if (batch && (raw.title !== undefined || raw[bodyField] !== undefined || raw.expectedTitle !== undefined || raw.expectedBody !== undefined)) {
+    throw new Error('批量更新仅支持非正文统一字段编辑，不允许批量修改标题或正文');
+  }
+
+  const patch = {};
+  if (raw.title !== undefined) {
+    if (typeof raw.title !== 'string' || !raw.title.trim()) throw new Error('载荷的 title 要写非空字符串');
+    if (typeof raw.expectedTitle !== 'string') {
+      throw new Error('修改标题时载荷必须带 expectedTitle（用户确认时看到的原标题，用于写前并发复核）');
+    }
+    patch.title = raw.title.trim();
+  }
+  if (raw[bodyField] !== undefined) {
+    if (typeof raw[bodyField] !== 'string' || !raw[bodyField].trim()) {
+      throw new Error(`载荷的 ${bodyField} 要写非空字符串`);
+    }
+    if (kindName === 'feedback' && /<[a-zA-Z/!][^>]*>/.test(raw[bodyField])) {
+      throw new Error('载荷的 desc 是纯文本描述，不要写 HTML 标签（禅道的反馈单正文就是纯文本）');
+    }
+    if (typeof raw.expectedBody !== 'string') {
+      throw new Error(`修改正文时载荷必须带 expectedBody（用户确认时看到的原正文，用于写前并发复核）`);
+    }
+    patch[bodyField] = raw[bodyField];
+  }
+
+  if (kindName === 'bug') {
+    if (raw.severity !== undefined) patch.severity = parseIntInRange(raw.severity, 'severity', 1, 4);
+    if (raw.pri !== undefined) patch.pri = parseIntInRange(raw.pri, 'pri', 1, 4);
+    if (raw.type !== undefined) {
+      const t = String(raw.type).trim();
+      if (!BUG_TYPES.includes(t)) throw new Error(`bug type 必须是以下之一：${BUG_TYPES.join(' | ')}`);
+      patch.type = t;
+    }
+    if (raw.openedBuild !== undefined) patch.openedBuild = parseStringArrayField(raw.openedBuild, 'openedBuild');
+    for (const intKey of ['project', 'execution', 'story']) {
+      if (raw[intKey] !== undefined) patch[intKey] = parseIntInRange(raw[intKey], intKey, 0);
+    }
+    if (raw.assignedTo !== undefined) {
+      if (typeof raw.assignedTo !== 'string') throw new Error('载荷的 assignedTo 要写字符串（取消指派传空串 ""）');
+      patch.assignedTo = raw.assignedTo.trim();
+    }
+  } else {
+    if (raw.product !== undefined) patch.product = parseIntInRange(raw.product, 'product', 1);
+    if (raw.module !== undefined) patch.module = parseIntInRange(raw.module, 'module', 0);
+    if (raw.type !== undefined) {
+      const t = String(raw.type).trim();
+      if (!FEEDBACK_UPDATE_TYPES.includes(t)) {
+        throw new Error(`feedback type 必须是以下之一：${FEEDBACK_UPDATE_TYPES.join(' | ')}`);
+      }
+      patch.type = t;
+    }
+  }
+
+  if (!Object.keys(patch).length) {
+    throw new Error('载荷里没有可更新的字段');
+  }
+  return {
+    patch,
+    expectedTitle: raw.expectedTitle,
+    expectedBody: raw.expectedBody,
+  };
+}
+
+function editMismatches(kindName, patch, before, after) {
+  const list = [];
+  const bodyField = UPDATE_KINDS[kindName].bodyField;
+  if (patch.title !== undefined) {
+    if (String(after.title ?? '').trim() !== patch.title) list.push('标题');
+  } else if (String(after.title ?? '').trim() !== String(before.title ?? '').trim()) {
+    list.push('标题（未请求修改但发生意外变动）');
+  }
+  if (patch[bodyField] !== undefined) {
+    if (normalizeBody(after.body, kindName) !== normalizeBody(patch[bodyField], kindName)) list.push('正文');
+  } else if (normalizeBody(after.body, kindName) !== normalizeBody(before.body, kindName)) {
+    list.push('正文（未请求修改但发生意外变动）');
+  }
+  if (patch.assignedTo !== undefined && String(after.raw.assignedTo ?? '').trim() !== patch.assignedTo) {
+    list.push('负责人（assignedTo）');
+  }
+  if (patch.openedBuild !== undefined && versionListOf(after.raw.openedBuild).join('\n') !== versionListOf(patch.openedBuild).join('\n')) {
+    list.push('影响版本（openedBuild）');
+  }
+  if (patch.type !== undefined && String(after.raw.type ?? '') !== patch.type) list.push('类型（type）');
+  for (const [key, label] of [
+    ['severity', '严重程度'], ['pri', '优先级'], ['project', '所属项目'],
+    ['execution', '所属执行'], ['story', '相关需求'], ['product', '所属产品'], ['module', '所属模块'],
+  ]) {
+    if (patch[key] === undefined) continue;
+    const actual = key === 'product' || key === 'project' ? idOf(after.raw[key]) : after.raw[key];
+    if (Number(actual || 0) !== Number(patch[key])) list.push(label);
+  }
+  if (Array.isArray(after.actions)) {
+    const allowed = patch.assignedTo !== undefined && kindName === 'bug' ? ['edited', 'assigned'] : ['edited'];
+    if (!newMatchingActions(after.actions, actionIds(before.actions), allowed).length) {
+      list.push('操作流水里本次新增的「编辑」');
+    }
+  }
+  return list;
+}
+
+function resolveUpdateMode(kindName, opts, file, raw, batch) {
+  const optMode = opts.mode === undefined ? '' : opts.mode === true ? (() => { throw usage('--mode 要传 append 或 edit'); })() : String(opts.mode).trim();
+  const fileMode = raw.mode === undefined ? '' : String(raw.mode).trim();
+  for (const m of [optMode, fileMode].filter(Boolean)) {
+    if (m !== 'append' && m !== 'edit') throw new Error(`更新模式 mode 只能是 append 或 edit（收到「${m}」）`);
+  }
+  if (optMode && fileMode && optMode !== fileMode) {
+    throw new Error(`参数冲突：--mode ${optMode} 与载荷文件的 mode=${fileMode} 不一致`);
+  }
+  const explicit = optMode || fileMode;
+  if (batch) {
+    if (explicit === 'append') throw new Error('批量更新仅支持非正文统一字段编辑（edit 模式），不支持追加或改写正文');
+    return 'edit';
+  }
+  if (explicit) return explicit;
+  const optToField = kindName === 'bug' ? BUG_EDIT_OPT_TO_FIELD : FEEDBACK_EDIT_OPT_TO_FIELD;
+  const hasInlineField = Object.keys(optToField).some((k) => opts[k] !== undefined);
+  if (!file && !hasInlineField) {
+    throw usage(`node zentao.mjs ${kindName}-update --id <单据ID>|--ids <ID,...> [--mode <append|edit>] [--payload-file <路径>]`);
+  }
+  if (!file) return 'edit';
+  const bodyField = UPDATE_KINDS[kindName].bodyField;
+  return Object.prototype.hasOwnProperty.call(raw, bodyField) ? 'append' : 'edit';
+}
+
+/** 结果不确定（超时 / 断连 / 读不懂响应）时只读核实：正文与预期一致、且本次新增了「编辑」才算生效，绝不重放。 */
 async function verifyUpdateByRead(kindName, id, env, bodyToWrite, before, why) {
   let after;
   try {
     after = await readUpdateRecord(kindName, id, env);
   } catch (err) {
-    reportUpdateUncertain(kindName, id, `${why}；回读核实也失败（${err?.message || err}），这次补充说明是否写进去未确认。不要重放更新。`);
+    reportWriteUncertain(
+      kindName,
+      id,
+      `${why}；回读核实也失败（${err?.message || err}），这次补充说明是否写进去未确认。不要重放更新。`,
+    );
     return;
   }
   const mismatches = updateMismatches(bodyToWrite, before, after, kindName);
@@ -1352,92 +2286,162 @@ async function verifyUpdateByRead(kindName, id, env, bodyToWrite, before, why) {
         status: after.status,
         updated: true,
         verified: 'query',
-        newActions: newEditedActions(after.actions, actionIds(before.actions)).map((action) => String(action.action)),
-      })
+        newActions: newMatchingActions(after.actions, actionIds(before.actions), 'edited').map((action) => String(action.action)),
+      }),
     );
     return;
   }
-  reportUpdateUncertain(kindName, id, `${why}；回读核实发现${mismatches.join('、')}与预期不一致，这次补充说明是否写进去未确认。不要重放更新。`, {
-    mismatches,
-  });
+  reportWriteUncertain(
+    kindName,
+    id,
+    `${why}；回读核实发现${mismatches.join('、')}与预期不一致，这次补充说明是否写进去未确认。不要重放更新。`,
+    { mismatches },
+  );
 }
 
 /**
- * 更新单据（补充说明走这条通道）：写前复核 → 只发一次更新 → 回读核对。
- * 禅道没有「只评论不改状态」的接口，补充说明就是改正文；
- * 禅道更新接口无条件覆盖、没有版本号 CAS，所以写入前要再读一次核对原文。
+ * 更新单据：支持「追加模式（append）」与「编辑模式（edit）」。
+ * 禅道更新接口无条件覆盖、没有版本号 CAS，所以改写正文/标题或追加时写入前必须再读一次核对原文。
  */
 async function cmdUpdate(kindName, env, opts) {
   const kind = UPDATE_KINDS[kindName];
-  const file = String(opts['payload-file'] ?? '').trim();
-  if (!file) throw usage(`node zentao.mjs ${kindName}-update --id <单据ID> --payload-file <路径>`);
-  const id = recordIdOf(opts, `${kindName}-update`);
-  const payload = takeUpdatePayload(kindName, file);
+  const usageText = `node zentao.mjs ${kindName}-update --id <单据ID>|--ids <ID,...> [--mode <append|edit>] [--payload-file <路径>]`;
+  const target = parseTargetSelection(opts, usageText);
+  const optToField = kindName === 'bug' ? BUG_EDIT_OPT_TO_FIELD : FEEDBACK_EDIT_OPT_TO_FIELD;
+  const { raw, file } = mergeOptionsAndPayloadFile(opts, optToField, kind.label);
+  const mode = resolveUpdateMode(kindName, opts, file, raw, target.batch);
 
-  const draft = splitAppendDraft(payload.body, payload.expectedBody, kindName);
-  if (draft.error) throw new Error(draft.error);
-  // 追加段落的标签按载荷指定（带图流程写「截图 1」）；不带就用草稿里自己写的那行
-  const appended = withAppendLabel(draft.appended, payload.appendLabel);
+  if (mode === 'append') {
+    if (opts.preview || opts['fail-fast']) throw usage(`${kindName}-update 的追加模式（append）不支持 --preview 或 --fail-fast`);
+    if (!file) throw usage(`node zentao.mjs ${kindName}-update --id <单据ID> --payload-file <路径>`);
+    if (Object.keys(optToField).some((k) => opts[k] !== undefined)) {
+      throw usage(`${kindName}-update 追加模式（append）请把内容放进 --payload-file，不要混用字段编辑选项`);
+    }
+    const id = String(target.ids[0]);
+    const payload = takeAppendPayload(kindName, file);
 
-  // 写前复核：再读一次当前单据，正文/标题/产品与用户确认时看到的那份对不上就停手
-  const current = await readUpdateRecord(kindName, id, env);
-  const changed = [];
-  if (normalizeBody(current.body, kindName) !== normalizeBody(payload.expectedBody, kindName)) changed.push('正文');
-  if (payload.title !== undefined && String(payload.title) !== current.title) changed.push('标题');
-  if (payload.product !== undefined && Number(payload.product) !== Number(current.product)) changed.push('产品');
-  if (changed.length) {
-    // 停手：把当前原文与重新合并后的草稿交回终端用户重新确认，不写入
-    const mergedDraft = `${current.body}\n\n${appended}`;
-    reportUpdateConflict(kindName, id, changed, current, mergedDraft);
+    const draft = splitAppendDraft(payload.body, payload.expectedBody, kindName);
+    if (draft.error) throw new Error(draft.error);
+    // 追加段落的标签按载荷指定（带图流程写「截图 1」）；不带就用草稿里自己写的那行
+    const appended = withAppendLabel(draft.appended, payload.appendLabel);
+
+    // 写前复核：再读一次当前单据，正文/标题/产品与用户确认时看到的那份对不上就停手
+    const current = await readUpdateRecord(kindName, id, env);
+    const changed = [];
+    if (normalizeBody(current.body, kindName) !== normalizeBody(payload.expectedBody, kindName)) changed.push('正文');
+    if (payload.title !== undefined && String(payload.title) !== current.title) changed.push('标题');
+    if (payload.product !== undefined && Number(payload.product) !== Number(current.product)) changed.push('产品');
+    if (changed.length) {
+      // 停手：把当前原文与重新合并后的草稿交回终端用户重新确认，不写入
+      const mergedDraft = `${current.body}\n\n${appended}`;
+      reportUpdateConflict(kindName, id, changed, current, mergedDraft);
+      return;
+    }
+
+    // 写进去的正文：服务端那份当前原文原样保留 + 追加段落（追加段落单独标出来）
+    const bodyToWrite = `${current.body}\n\n${appended}`;
+    // 交给禅道的请求体：标题与产品沿用当前值；正文只走文件，不进命令行参数
+    const cliPayload =
+      kindName === 'feedback'
+        ? { product: Number(current.product), title: current.title, desc: bodyToWrite }
+        : { title: current.title, steps: bodyToWrite };
+    fs.writeFileSync(file, JSON.stringify(cliPayload), { mode: 0o600 });
+
+    try {
+      try {
+        // 只发一次更新：禅道更新接口无条件覆盖，重放就是把同一份内容再盖一遍
+        await runCli([kind.cli, 'update', String(id), '--data', `@${file}`], env);
+      } catch (err) {
+        if (!cliOutcomeUnknown(err)) throw err;
+        await verifyUpdateByRead(kindName, id, env, bodyToWrite, current, `更新请求结果不确定（${err.message}）`);
+        return;
+      }
+
+      const after = await readUpdateRecord(kindName, id, env);
+      const mismatches = updateMismatches(bodyToWrite, current, after, kindName);
+      if (mismatches.length) {
+        reportWriteMismatch(kindName, '补充说明', id, mismatches);
+        return;
+      }
+      out(
+        JSON.stringify({
+          ok: true,
+          kind: kindName,
+          id: Number(id),
+          title: after.title,
+          status: after.status,
+          updated: true,
+          verified: 'readback',
+          newActions: newMatchingActions(after.actions, actionIds(current.actions), 'edited').map((action) => String(action.action)),
+        })
+      );
+    } finally {
+      // 临时载荷文件用完删掉：正文不留在磁盘上
+      fs.rmSync(file, { force: true });
+    }
     return;
   }
 
-  // 写进去的正文：服务端那份当前原文原样保留 + 追加段落（追加段落单独标出来）
-  const bodyToWrite = `${current.body}\n\n${appended}`;
-  // 交给禅道的请求体：标题与产品沿用当前值；正文只走文件，不进命令行参数
-  const cliPayload =
-    kindName === 'feedback'
-      ? { product: Number(current.product), title: current.title, desc: bodyToWrite }
-      : { title: current.title, steps: bodyToWrite };
-  fs.writeFileSync(file, JSON.stringify(cliPayload), { mode: 0o600 });
-
-  try {
-    try {
-      // 只发一次更新：禅道更新接口无条件覆盖，重放就是把同一份内容再盖一遍
-      await runCli([kind.cli, 'update', String(id), '--data', `@${file}`], env);
-    } catch (err) {
-      if (!cliOutcomeUnknown(err)) throw err;
-      await verifyUpdateByRead(kindName, id, env, bodyToWrite, current, `更新请求结果不确定（${err.message}）`);
-      return;
-    }
-
-    const after = await readUpdateRecord(kindName, id, env);
-    const mismatches = updateMismatches(bodyToWrite, current, after, kindName);
-    if (mismatches.length) {
-      reportUpdateMismatch(kindName, id, mismatches);
-      return;
-    }
-    out(
-      JSON.stringify({
-        ok: true,
-        kind: kindName,
-        id: Number(id),
-        title: after.title,
-        status: after.status,
-        updated: true,
-        verified: 'readback',
-        newActions: newEditedActions(after.actions, actionIds(current.actions)).map((action) => String(action.action)),
-      })
-    );
-  } finally {
-    // 临时载荷文件用完删掉：正文不留在磁盘上
-    fs.rmSync(file, { force: true });
-  }
+  // 编辑模式（edit）：支持非正文字段局部编辑（CLI autoFill）及单条 CAS 正文/标题修改
+  const { patch, expectedTitle, expectedBody } = validateEditPatch(kindName, raw, target.batch);
+  const linkPath = kindName === 'bug' ? 'bug-view' : 'feedback-view';
+  const expectedActions = patch.assignedTo !== undefined && kindName === 'bug' ? ['edited', 'assigned'] : ['edited'];
+  const spec = {
+    kindName,
+    noun: kind.label,
+    cli: kind.cli,
+    cliAction: 'update',
+    actionKey: 'update',
+    actionLabel: `编辑${kind.label}`,
+    expectedActions,
+    readRecord: (id, e) => readUpdateRecord(kindName, id, e),
+    precheck: () => ({ ok: true }),
+    checkCas(before) {
+      const changed = [];
+      if (expectedTitle !== undefined && String(expectedTitle) !== before.title) changed.push('标题');
+      if (expectedBody !== undefined && normalizeBody(before.body, kindName) !== normalizeBody(expectedBody, kindName)) {
+        changed.push('正文');
+      }
+      return changed.length ? { changed } : null;
+    },
+    buildCliPayload(before) {
+      if (kindName === 'feedback') {
+        return {
+          product: patch.product ?? Number(before.product),
+          title: patch.title ?? before.title,
+          ...patch,
+        };
+      }
+      return { ...patch };
+    },
+    mismatches: (before, after) => editMismatches(kindName, patch, before, after),
+    formatSuccess: (id, after, verified, newActions, itemWarnings, e) => ({
+      ok: true,
+      kind: kindName,
+      mode: 'edit',
+      id: Number(id),
+      title: after.title,
+      status: after.status,
+      ...(kindName === 'bug' ? { assignedTo: String(after.raw.assignedTo ?? '') } : {}),
+      updated: true,
+      verified,
+      newActions,
+      url: recordLink(e, linkPath, id),
+      ...(itemWarnings.length ? { warnings: itemWarnings } : {}),
+    }),
+  };
+  await dispatchAction(spec, target, env, file, opts, []);
 }
 
 Object.assign(COMMANDS, {
-  'feedback-update': { run: (env, opts) => cmdUpdate('feedback', env, opts), options: ['id', 'payload-file'] },
-  'bug-update': { run: (env, opts) => cmdUpdate('bug', env, opts), options: ['id', 'payload-file'] },
+  'feedback-update': {
+    run: (env, opts) => cmdUpdate('feedback', env, opts),
+    options: ['id', 'ids', 'mode', 'payload-file', 'product', 'module', 'type', 'fail-fast', 'preview'],
+  },
+  'bug-update': {
+    run: (env, opts) => cmdUpdate('bug', env, opts),
+    options: ['id', 'ids', 'mode', 'payload-file', 'assigned-to', 'pri', 'severity', 'type', 'project', 'execution', 'story', 'opened-build', 'fail-fast', 'preview'],
+  },
 });
 // ----- 传图 -----
 
@@ -1662,14 +2666,25 @@ const HELP = `禅道入口脚本（rh-product-feedback）
                                         查重扫描：列候选，最后一行 JSON 带 baseline
   qd --product <产品ID或名称>            产品 QD：账号、姓名、账号状态（已删除 / 已锁定 / 可用）、最后登录
 
-写（载荷只走文件：正文不进命令行参数，也不进 Agent 上下文）：
+写（载荷只走文件或非正文短参数；正文与批量均经脚本护栏与写后回读）：
   bug-create --payload-file <路径>                 建缺陷单：只发一次 → 回读核对
   feedback-create --payload-file <路径>            建反馈单：同上
-  bug-update --id <缺陷ID> --payload-file <路径>   更新缺陷单：写前复核 → 更新 → 回读
-  feedback-update --id <反馈ID> --payload-file <路径>
-                                                 更新反馈单：同上
+  bug-update (--id <ID> | --ids <ID,...>) [--mode <append|edit>] [--payload-file <路径>] [--assigned-to <账号>] [--pri <1-4>] [--severity <1-4>] [--type <类型>] [--project <ID>] [--execution <ID>] [--story <ID>] [--opened-build <版本,...>] [--preview] [--fail-fast]
+                                                   更新缺陷单：append 走分隔行追加，edit 走局部更新与 CAS 复核
+  feedback-update (--id <ID> | --ids <ID,...>) [--mode <append|edit>] [--payload-file <路径>] [--product <ID>] [--module <ID>] [--type <类型>] [--preview] [--fail-fast]
+                                                   更新反馈单：append 走分隔行追加，edit 走局部更新与 CAS 复核
+  bug-resolve (--id <ID> | --ids <ID,...>) --resolution <枚举> [--resolved-date YYYY-MM-DD] [--resolved-build <版本>] [--assigned-to <账号>] [--comment <备注>] [--payload-file <路径>] [--preview] [--fail-fast]
+                                                   解决缺陷：校验枚举/日期 → 预检状态 → 写入并回读
+  bug-close (--id <ID> | --ids <ID,...>) [--comment <备注>] [--payload-file <路径>] [--preview] [--fail-fast]
+                                                   关闭缺陷：预检状态 → 写入并回读
+  bug-activate (--id <ID> | --ids <ID,...>) [--opened-build <版本,...>] [--assigned-to <账号>] [--comment <备注>] [--payload-file <路径>] [--preview] [--fail-fast]
+                                                   激活缺陷：预检状态 → 写入并回读
+  feedback-close (--id <ID> | --ids <ID,...>) --closed-reason <commented|repeat|refuse> [--comment <备注>] [--confirm-close <1|yes|true>] [--payload-file <路径>] [--preview] [--fail-fast]
+                                                   关闭反馈：校验原因 → 预检状态 → 写入并回读
+  feedback-activate (--id <ID> | --ids <ID,...>) [--assigned-to <账号>] [--comment <备注>] [--payload-file <路径>] [--preview] [--fail-fast]
+                                                   激活反馈：预检状态 → 写入并回读
   file-create --file <图片路径> --object-type <bug|feedback> --object-id <单据ID>
-                                                 传图，返回文件标识与正文里的图片引用
+                                                   传图，返回文件标识与正文里的图片引用
 
 环境变量：ZENTAO_WEB_URL 覆盖禅道站点地址  ZENTAO_CREDENTIALS_FILE 覆盖本机凭据文件路径
 全局选项（所有子命令都能带，原样转给官方禅道 CLI）：
