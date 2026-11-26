@@ -4,7 +4,7 @@
 
 | 技能 | 版本 | 说明 |
 | --- | --- | --- |
-| [`rh-product-feedback`](skills/rh-product-feedback) | [0.14.0](CHANGELOG.md#0140---2026-11-25) | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），其余建**反馈单**；两条路径都支持查询、解释处理进度、补充说明、正文带图，以及**解决 / 关闭 / 激活、改派与字段编辑（含批量）**；接入只走官方禅道 CLI，第一次接入时引导你装 CLI 与写本人凭据 |
+| [`rh-product-feedback`](skills/rh-product-feedback) | [0.15.0](CHANGELOG.md#0150---2026-11-26) | 产品反馈助手：用自然语言把 Bug / 需求 / 优化建议提交到禅道——明确要 Bug 时直接建**正式缺陷单**（进开发流程），项目推进中的障碍登记成**项目问题**，其余建**反馈单**；三条路径都支持查询、解释处理进度、补充说明、正文带图，以及**解决 / 关闭 / 激活、改派与字段编辑（含批量）**；接入只走官方禅道 CLI，第一次接入时引导你装 CLI 与写本人凭据 |
 
 ## 业务用户：装完技能，一句话接入
 
@@ -96,7 +96,7 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 
 ## 能力边界
 
-当前版本（[v0.14.0](https://github.com/xuxzh/ruihui-skills/releases/tag/v0.14.0)）的能力与限制：
+当前版本（[v0.15.0](https://github.com/xuxzh/ruihui-skills/releases/tag/v0.15.0)）的能力与限制：
 
 - **接入通道是官方禅道 CLI**（0.12.0 起）：此前的随包直连脚本与宿主里的禅道 MCP 工具已下线。旧版机器按 [`docs/quick-start.md`](docs/quick-start.md) 的「重装 / 更新」走一遍即可：同一段提示词，Agent 自己判版本、自己清残留，不用业务用户做任何选择。
 
@@ -115,6 +115,7 @@ cp -r skills/rh-product-feedback ~/.agents/skills/       # pi
 - **生命周期流转与字段编辑**（0.14.0 起，见 [ADR-0024](docs/adr/0024-放开缺陷与反馈生命周期流转并按操作分级护栏.md)）：缺陷单可 `bug-resolve` / `bug-close` / `bug-activate`，反馈单可 `feedback-close` / `feedback-activate`；`bug-update` / `feedback-update` 多了 `edit` 模式做改派、改优先级 / 严重程度 / 类型 / 项目 / 影响版本，改标题或正文带 `expectedTitle` / `expectedBody` 做写前 CAS 复核。全部经入口脚本做格式校验、状态预检、单次写入与写后回读；**物理删除不开放**（要删单走禅道网页端）。
 - **批量操作**：`--ids` 单批最多 20 条，仅开放状态流转与非正文统一字段编辑；先 `--preview` 看三栏清单，确认后串行执行并按「成功 / 跳过 / 失败」汇报，失败项不自动重试（可加 `--fail-fast`）。单条明确的可逆流转免二次确认，批量、改正文 / 标题与 AI 推断参数的操作必须先确认——规则见 [lifecycle.md](skills/rh-product-feedback/references/lifecycle.md)。
 - **更新没有版本号 CAS**：禅道的更新接口无条件覆盖。补充说明与编辑模式会在写入前再读一次原文，发现被改过就停手交回你确认——这能显著降低覆盖他人内容的风险，但复核与写入之间仍可能有竞态。
+- **8.7 的反馈详情权限**（0.15.0 起）：本实例的 v2 反馈详情接口对所有账号返回 403，技能内置临时绕行——读走 v1 回退、补充说明走直连更新；服务端把权限修好后（issue #30），用 `ZENTAO_FEEDBACK_V1_FALLBACK=0` 与 `ZENTAO_FEEDBACK_DIRECT_UPDATE=0` 关掉即可回到纯官方 CLI 路径。
 
 ## 开发与测试
 

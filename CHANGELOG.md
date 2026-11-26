@@ -9,23 +9,26 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-26
+
 ### 新增
 
-- 把禅道**项目问题**（`issue`）作为第三种对象纳入技能（[ADR-0025](docs/adr/0025-把项目问题纳入技能作为第三种对象.md)）：`issue-create` 登记（只发一次、按 ID 回读核对项目 / 标题 / 类型 / 严重程度 / 描述 / 创建者）、`issues --project <项目ID>` 列表（客户端筛选与表格输出）、`issue --id <ID>` 详情，`dup --kind issue --project` 按项目标题查重
+- 把禅道**项目问题**（`issue`）作为第三种对象纳入技能（[ADR-0025](docs/adr/0025-把项目问题纳入技能作为第三种对象.md)）：`issue-create` 登记（只发一次写入、按返回 ID 回读核对项目 / 标题 / 类型 / 严重程度 / 描述 / 创建者）、`issues --project <项目ID>` 列表（客户端筛选与表格输出）、`issue --id <ID>` 详情，`dup --kind issue --project` 按项目标题查重
 - 项目问题沿用同一套护栏：项目必须点名或追问一次（不默认挂任何项目）、`type` 必问（8 项枚举）、`severity` / `pri` 默认 3、`owner` 为当前账号、`assignedTo` 默认不写、草稿带「不是缺陷单」声明行、登记前查重并展示可见范围
-- 路由表加「项目问题」与「项目 bug」辨析；项目问题的流转 / 改字段不开放（CLI 没有 `issue` 的 update / resolve / close / activate），指向禅道网页端
+- 路由表加「项目问题」与「项目 bug」辨析；项目问题的流转与改字段不开放（官方 CLI 没有 `issue` 的 update / resolve / close / activate），需要时指向禅道网页端
 
 ### 变更
 
-- 测试 mock 的实例版本从 `max8.2` 提到 `max8.7`，补齐 `issue` 资源的创建 / 详情 / 项目问题列表；新增 `tests/zentao-cli-issue.mjs`
 - 入口脚本的列表扫描与查重按「归属容器」泛化：缺陷单 / 反馈单挂产品，项目问题挂项目
-- 文档同步：`description` 触发词、快速开始与 README 示例句、CLI 参考的 `issue` 命令面与字段、`workflow.md` 的 F1c、`error-handling.md` 的项目问题条目
+- 文档同步：`description` 触发词、快速开始与 README 示例句、CLI 参考的 `issue` 命令面与字段、`workflow.md` 的项目问题登记流程、`error-handling.md` 的项目问题条目
+- 测试侧：mock 模拟的禅道版本提到 `max8.7`，补齐项目问题的创建 / 详情 / 列表，新增 `tests/zentao-cli-issue.mjs`
 
 ### 修复
 
-- 禅道 8.7 的 `GET /api.php/v2/feedbacks/{id}` 对普通账号返回 403（E2006），导致 `feedback --id`、`feedback-create` 回读和 `feedback-update` 的写前复核失败（[issue #28](https://github.com/xuxzh/ruihui-skills/issues/28)）。入口脚本在 v2 明确返回 2006 时用同一账号 token 回退到 v1 详情，并归一化 v1 的对象字段与 HTML 正文；v1 也拒绝时，建单输出 `created:true` + `readbackDenied:true`。
-- `feedback-update` 在 v1 回退路径上明确报 `writeBlocked:true`：CLI 的 update autoFill 仍走 v2 详情，8.7 上会被 2006 拒绝；入口脚本不发出写入，也不重放。可用 `ZENTAO_FEEDBACK_V1_FALLBACK=0` 关闭回退。
-- 反馈「补充说明」在 8.7 上改走直连 v2 更新：v2 详情被 2006 拒绝时（官方 CLI 的 update autoFill 会卡在这次 GET），入口脚本用同一账号 token 直连 `PUT /api.php/v2/feedbacks/{feedbackID}`，请求体按 CLI 的 update schema 白名单从当前记录拼齐；写前复核、只发一次写入、写后回读都保留。直连被拒报 `writeBlocked:true`（没写进去），回执 5xx 或断连按「结果不确定」只读核实、不重放。输出带 `writePath:"direct-v2"`；`ZENTAO_FEEDBACK_DIRECT_UPDATE=0` 可关掉直连。
+- 禅道 8.7 的 v2 反馈详情接口对所有账号返回 403（E2006），反馈单读不回来：入口脚本在 v2 明确返回 2006 时改用同一账号的 v1 详情，并归一账号字段与 HTML 正文，`feedback --id`、`feedback-create` 的回读、`feedback-update` 的写前复核都恢复可用（[#28](https://github.com/xuxzh/ruihui-skills/issues/28)）
+- 建单回读被拒时不再报成「没建成」：输出 `created:true` + `readbackDenied:true`，明确告知「单已提交、当前账号无权回读，请到禅道核对」
+- 反馈「补充说明」在 8.7 上改走直连更新接口：官方 CLI 的 update 会先读 v2 详情做自动补全，这一步被 403 挡住、更新发不出去；入口脚本改为用同一账号 token 直连更新接口，请求体按官方 schema 白名单从当前记录拼齐，写前复核、只发一次写入、写后回读都保留；直连被拒报「没写进去」，回执异常按「结果不确定」只读核实、不重放
+- 上面两条是临时绕行：服务端把 v2 反馈详情权限修好后（[#30](https://github.com/xuxzh/ruihui-skills/issues/30)），用 `ZENTAO_FEEDBACK_V1_FALLBACK=0` 与 `ZENTAO_FEEDBACK_DIRECT_UPDATE=0` 关掉，技能回到纯官方 CLI 路径
 
 ## [0.14.0] - 2026-11-25
 
@@ -222,7 +225,8 @@
 - 写入结果不确定时先查后报，同一份内容不重复创建（禅道创建没有幂等键）
 - 边界写进技能：写入经禅道 MCP 的共享身份，单据留痕在该账号名下；附件上传、关闭、删除、指派不开放
 
-[Unreleased]: https://github.com/xuxzh/ruihui-skills/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/xuxzh/ruihui-skills/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/xuxzh/ruihui-skills/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/xuxzh/ruihui-skills/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/xuxzh/ruihui-skills/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/xuxzh/ruihui-skills/compare/v0.11.0...v0.12.0

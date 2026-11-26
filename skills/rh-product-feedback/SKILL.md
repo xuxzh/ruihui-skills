@@ -3,7 +3,7 @@ name: rh-product-feedback
 description: 把自然语言产品反馈落成禅道单据：明确要 Bug 时建正式缺陷单，其余建反馈单；项目推进中的障碍、需求变更、环境依赖可登记为项目问题；也支持查询进度、补充说明、正文带图，以及缺陷单/反馈单的解决、关闭、激活与字段编辑（含批量）。禅道连不上时，能引导你在当前宿主里完成接入与认证。触发场景：「提 Bug / 报缺陷 / 页面报错 / 复现步骤是…」「提需求 / 提建议 / 提交反馈」「登记项目问题 / 项目有问题要记 / 给某项目提个问题」「查反馈 / 查缺陷 / 查项目问题 / 看反馈到哪了 / 补充反馈信息」「把缺陷 1936 标记已解决 / 关闭 / 重新激活」「批量把这些 bug 指给张三 / 改优先级」「帮我装禅道 / 连不上禅道」「帮我重装 / 更新一下技能」，或 report a bug、file a feature request、check feedback status、log a project issue、connect zentao；斜杠命令 `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）走安装模式。
 compatibility: 需要本机 Node.js 18+ 与官方禅道 CLI（npm 包 zentao-cli，固定版本记在 config.local.json 的 zentaoCli），以及本人的禅道账号凭据（见 references/setup.md）。本机没有 Node.js 时由当前 Agent 装（优先用机器上已有的版本管理器，见 setup.md）。
 metadata:
-  rh-version: "0.14.0"
+  rh-version: "0.15.0"
   rh-channel: cli
 ---
 
