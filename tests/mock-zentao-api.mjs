@@ -101,6 +101,10 @@ export function createMockApiState(overrides = {}) {
     feedbackV2GetDenied: false,
     // v1 详情也拒绝，用来验证 readbackDenied 分支
     feedbackV1GetDenied: false,
+    // v2 更新一律 403：直连写也要被权限挡住
+    feedbackV2PutDenied: false,
+    // v2 更新落库但回执 500：客户端只能靠回读判断写没写进去
+    feedbackV2PutFails: false,
     // 创建接口挂住不返回：'ghost' = 没落库，'persist' = 已落库（等同标题带 __TIMEOUT__）
     createHang: '',
     // 删除接口一律业务失败（模拟没有删除权限）
@@ -611,9 +615,12 @@ function route(state, req, pathname, query, token, payload) {
     }
     if (req.method === 'PUT') {
       if (!record) return { status: 404, body: { message: '记录不存在' } };
+      if (state.feedbackV2PutDenied) return { status: 403, body: { error: 'Access not allowed' } };
       if (!canSeeProduct(state, account, record.product)) return { body: { status: 'fail', message: '所属产品不存在，或当前账号没有权限。' } };
       const result = updateRecord(state, record, payload, 'feedback');
       if (result.persist) state.feedbacks.set(record.id, result.record);
+      // 已经落库但回执失败：客户端只能靠回读判断写没写进去（复刻「结果不确定」）
+      if (state.feedbackV2PutFails) return { status: 500, body: { message: '服务端内部错误' } };
       return { body: { feedback: result.record } };
     }
   }

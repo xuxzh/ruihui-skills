@@ -60,7 +60,8 @@
 - **先查后报，不重发**：禅道创建没有幂等键，重发会造两条记录。
 - **「没查到」≠「没创建」**：不把没查到说成没创建，也不把「保存成功」当成落库证据。
 - 权限类如实说「你的账号看不到」，不暗示「对象不存在」。
-- **反馈详情有 v1 回退**：8.7 的 v2 反馈详情会被 403 拒绝，入口脚本在 v2 明确返回 2006 时用同一账号 token 回退 v1 详情（`ZENTAO_FEEDBACK_V1_FALLBACK=0` 可关闭）。两边都 403 时，建单报 `created:true` + `readbackDenied:true`；`feedback-update` 因 CLI 的 autoFill 仍走 v2，报 `writeBlocked:true`，更新请求没有发出。
+- **反馈详情有 v1 回退**：8.7 的 v2 反馈详情会被 403 拒绝，入口脚本在 v2 明确返回 2006 时用同一账号 token 回退 v1 详情（`ZENTAO_FEEDBACK_V1_FALLBACK=0` 可关闭）。两边都 403 时，建单报 `created:true` + `readbackDenied:true`。
+- **反馈追加说明走直连 v2**：官方 CLI 的 `feedback update` 在 PUT 前要先 GET v2 详情做 autoFill，这一步被 2006 拒绝时更新发不出去。入口脚本检测到详情来自 v1 回退后，追加模式改直连 `PUT /api.php/v2/feedbacks/{feedbackID}`（同一账号 token，权限照旧由服务端判定），输出带 `writePath:"direct-v2"`；直连被拒报 `writeBlocked:true`（没写进去），回执异常按「结果不确定」只读核实、不重放。`ZENTAO_FEEDBACK_DIRECT_UPDATE=0` 可关掉。
 
 ## 结果不确定：先查后报
 

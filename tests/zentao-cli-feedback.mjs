@@ -504,21 +504,61 @@ test('F25 v2 返回非权限错误：不回退 v1，保持原错误', { skip: NE
   );
 });
 
-test('F26 反馈补充说明：v2 详情被拒时 CLI 的 autoFill 无法工作，明确报未写入', { skip: NEEDS_CLI }, async () => {
+/** 追加草稿的载荷：原文 + 分隔行 + 标注 + 追加段落（与 references/workflow.md F4 一致）。 */
+const APPEND_SEPARATOR_LINE = '──────────────';
+const APPEND_ANNOTATION = '【补充说明 · 2026-11-20 · 用户口述，AI 整理】';
+const APPEND_ADDITION = '补充：必须先选中至少一行设备，点「导出」才复现。';
+
+function appendPayloadFor(feedback) {
+  return {
+    product: feedback.product,
+    title: feedback.title,
+    desc: `${feedback.desc}\n\n${APPEND_SEPARATOR_LINE}\n${APPEND_ANNOTATION}\n${APPEND_ADDITION}`,
+    expectedBody: feedback.desc,
+  };
+}
+
+test('F26 反馈补充说明：v2 详情被拒时改走直连 v2 更新，只发一次写入并回读核对', { skip: NEEDS_CLI }, async () => {
   const feedback = seedOneFeedback();
   await withMock({ feedbacks: new Map([[900, feedback]]), feedbackV2GetDenied: true }, async ({ server, env, dir }) => {
-    const addition = '补充：必须先选中至少一行设备，点「导出」才复现。';
-    const separator = '──────────────';
-    const annotation = '【补充说明 · 2026-11-20 · 用户口述，AI 整理】';
-    const draft = `${feedback.desc}\n\n${separator}\n${annotation}\n${addition}`;
-    const file = writePayload(dir, {
-      product: feedback.product,
-      title: feedback.title,
-      desc: draft,
-      expectedBody: feedback.desc,
-    });
+    const file = writePayload(dir, appendPayloadFor(feedback));
 
     const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    assert.equal(code, 0, stderr);
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.id, 900);
+    assert.equal(result.updated, true);
+    assert.equal(result.verified, 'readback');
+    assert.equal(result.writePath, 'direct-v2');
+    assert.deepEqual(result.newActions, ['edited']);
+
+    const updates = server.state.calls.filter(
+      (call) => call.method === 'PUT' && call.path === '/api.php/v2/feedbacks/900',
+    );
+    assert.equal(updates.length, 1, '更新只发一次');
+    const body = JSON.parse(updates[0].body);
+    assert.equal(body.product, feedback.product);
+    assert.equal(body.title, feedback.title);
+    assert.ok(body.desc.includes(APPEND_ADDITION), '追加段落要写进 desc');
+    const v1Reads = server.state.calls.filter(
+      (call) => call.method === 'GET' && call.path === '/api.php/v1/feedbacks/900',
+    );
+    assert.equal(v1Reads.length, 2, '写前复核 + 写后回读各一次');
+    assert.ok(!fs.existsSync(file), '临时载荷文件用完要删掉');
+  });
+});
+
+test('F27 直连更新开关关闭：v2 详情被拒时明确报未写入，不发出更新', { skip: NEEDS_CLI }, async () => {
+  const feedback = seedOneFeedback();
+  await withMock({ feedbacks: new Map([[900, feedback]]), feedbackV2GetDenied: true }, async ({ server, env, dir }) => {
+    const file = writePayload(dir, appendPayloadFor(feedback));
+
+    const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], {
+      ...env,
+      ZENTAO_FEEDBACK_DIRECT_UPDATE: '0',
+    });
     assert.equal(code, 1);
 
     const result = singleLineJson(stdout);
@@ -526,7 +566,7 @@ test('F26 反馈补充说明：v2 详情被拒时 CLI 的 autoFill 无法工作�
     assert.equal(result.id, 900);
     assert.equal(result.writeBlocked, true);
     assert.match(stderr, /更新请求没有发出/);
-    assert.match(stderr, /autoFill|自动补全/);
+    assert.match(stderr, /直连更新已关闭/);
 
     const updates = server.state.calls.filter(
       (call) => call.method === 'PUT' && call.path === '/api.php/v2/feedbacks/900',
@@ -538,4 +578,47 @@ test('F26 反馈补充说明：v2 详情被拒时 CLI 的 autoFill 无法工作�
     assert.equal(v2Reads.length, 1, '只试过写前复核，没有让 CLI 再走一次 autoFill');
     assert.ok(!fs.existsSync(file), '临时载荷文件用完要删掉');
   });
+});
+
+test('F28 直连更新被权限拒绝：如实报没写进去，不重放', { skip: NEEDS_CLI }, async () => {
+  const feedback = seedOneFeedback();
+  await withMock(
+    { feedbacks: new Map([[900, feedback]]), feedbackV2GetDenied: true, feedbackV2PutDenied: true },
+    async ({ server, env, dir }) => {
+      const file = writePayload(dir, appendPayloadFor(feedback));
+
+      const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+      assert.equal(code, 1);
+      assert.match(stderr, /直连 v2 更新被拒绝/);
+      assert.equal(singleLineJson(stdout).writeBlocked, true);
+
+      const updates = server.state.calls.filter(
+        (call) => call.method === 'PUT' && call.path === '/api.php/v2/feedbacks/900',
+      );
+      assert.equal(updates.length, 1, '被拒也不重放');
+    },
+  );
+});
+
+test('F29 直连更新回执失败：按结果不确定只读核实，不重放', { skip: NEEDS_CLI }, async () => {
+  const feedback = seedOneFeedback();
+  await withMock(
+    { feedbacks: new Map([[900, feedback]]), feedbackV2GetDenied: true, feedbackV2PutFails: true },
+    async ({ server, env, dir }) => {
+      const file = writePayload(dir, appendPayloadFor(feedback));
+
+      const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+      assert.equal(code, 0, stderr);
+
+      const result = singleLineJson(stdout);
+      assert.equal(result.ok, true);
+      assert.equal(result.updated, true);
+      assert.equal(result.verified, 'query', '结论来自回读核实，不是写请求的回执');
+
+      const updates = server.state.calls.filter(
+        (call) => call.method === 'PUT' && call.path === '/api.php/v2/feedbacks/900',
+      );
+      assert.equal(updates.length, 1, '结果不确定也不重放');
+    },
+  );
 });

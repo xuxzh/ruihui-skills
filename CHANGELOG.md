@@ -25,6 +25,7 @@
 
 - 禅道 8.7 的 `GET /api.php/v2/feedbacks/{id}` 对普通账号返回 403（E2006），导致 `feedback --id`、`feedback-create` 回读和 `feedback-update` 的写前复核失败（[issue #28](https://github.com/xuxzh/ruihui-skills/issues/28)）。入口脚本在 v2 明确返回 2006 时用同一账号 token 回退到 v1 详情，并归一化 v1 的对象字段与 HTML 正文；v1 也拒绝时，建单输出 `created:true` + `readbackDenied:true`。
 - `feedback-update` 在 v1 回退路径上明确报 `writeBlocked:true`：CLI 的 update autoFill 仍走 v2 详情，8.7 上会被 2006 拒绝；入口脚本不发出写入，也不重放。可用 `ZENTAO_FEEDBACK_V1_FALLBACK=0` 关闭回退。
+- 反馈「补充说明」在 8.7 上改走直连 v2 更新：v2 详情被 2006 拒绝时（官方 CLI 的 update autoFill 会卡在这次 GET），入口脚本用同一账号 token 直连 `PUT /api.php/v2/feedbacks/{feedbackID}`，请求体按 CLI 的 update schema 白名单从当前记录拼齐；写前复核、只发一次写入、写后回读都保留。直连被拒报 `writeBlocked:true`（没写进去），回执 5xx 或断连按「结果不确定」只读核实、不重放。输出带 `writePath:"direct-v2"`；`ZENTAO_FEEDBACK_DIRECT_UPDATE=0` 可关掉直连。
 
 ## [0.14.0] - 2026-11-25
 

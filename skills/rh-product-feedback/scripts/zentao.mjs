@@ -572,6 +572,147 @@ async function readFeedbackWithFields(id, fields, env) {
   }
 }
 
+// ---------------------------------------------------------------- 反馈更新：直连 v2（绕开 CLI 的 autoFill）
+//
+// 官方 CLI 的 feedback update 在 PUT 前会先 GET v2 详情做 autoFill；8.7 上那次 GET 被 2006
+// 拒绝，更新请求根本发不出去。详情读不到时，入口脚本改用同一账号 token 直连 v2 的
+// PUT /feedbacks/{id}：请求体按 CLI 的 schema 白名单从当前记录拼齐，写前复核、只发一次写入、
+// 写后回读这些护栏都还在。只有「详情是走 v1 回退读到的」时才启用，v2 正常时仍走官方 CLI。
+
+/** 直连写开关：默认开；用 ZENTAO_FEEDBACK_DIRECT_UPDATE=0 关掉，回到「不发出更新」。 */
+function feedbackDirectUpdateEnabled(env) {
+  const raw = String(env.ZENTAO_FEEDBACK_DIRECT_UPDATE ?? '').trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(raw);
+}
+
+/** 请求体只覆盖官方 CLI 的 update schema 里这几个字段；空值字段不发，免得把现有值抹掉。 */
+function feedbackUpdatePayload(record, body) {
+  const raw = record?.raw || {};
+  const payload = {
+    product: Number(raw.product ?? record?.product ?? 0),
+    title: String(raw.title ?? record?.title ?? ''),
+    desc: String(body ?? ''),
+  };
+  const module = Number(raw.module ?? 0);
+  if (module > 0) payload.module = module;
+  const type = String(raw.type ?? '').trim();
+  if (type) payload.type = type;
+  const feedbackBy = String(raw.feedbackBy ?? '').trim();
+  if (feedbackBy) payload.feedbackBy = feedbackBy;
+  const source = String(raw.source ?? '').trim();
+  if (source) payload.source = source;
+  return payload;
+}
+
+/** 从禅道的错误响应里取一句人话。 */
+function serverMessage(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '服务端未给原因';
+  try {
+    const body = JSON.parse(raw);
+    return String(body?.message || body?.error?.message || body?.error || raw).slice(0, 200);
+  } catch {
+    return raw.slice(0, 200);
+  }
+}
+
+/**
+ * 直连 v2 更新反馈：一次写入。
+ * 错误分三类——权限拒绝（没写进去）、参数/业务失败（没写进去）、5xx 与断连（写没写不确定，要只读核实）。
+ */
+async function putFeedbackV2(id, payload, env) {
+  const site = String(env.ZENTAO_URL || '').replace(/\/+$/, '');
+  const token = String(env.ZENTAO_TOKEN || '');
+  if (!site || !token) throw new Error('缺少禅道站点或令牌，无法直连更新反馈。');
+  let res;
+  try {
+    res = await fetch(`${site}/api.php/v2/feedbacks/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', Token: token, 'ZenTao-Action-Assistant': ASSISTANT },
+      body: JSON.stringify(payload),
+      redirect: 'manual',
+      signal: AbortSignal.timeout(V1_FEEDBACK_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const error = new Error(`直连更新反馈请求失败：${err?.message || err}`);
+    error.outcomeUnknown = true;
+    throw error;
+  }
+  const text = await res.text().catch(() => '');
+  if (res.status === 403) {
+    const error = new Error('直连更新反馈被拒绝（HTTP 403）：当前账号没有更新反馈的权限。');
+    error.writeDenied = true;
+    throw error;
+  }
+  if (res.status === 404) throw new Error('直连更新反馈失败：记录不存在（HTTP 404）。');
+  if (!res.ok) {
+    const error = new Error(`直连更新反馈失败（HTTP ${res.status}）：${serverMessage(text)}`);
+    // 5xx 可能是「写进去了但回执没回来」，按结果不确定处理：只读核实，不重放
+    error.outcomeUnknown = res.status >= 500;
+    throw error;
+  }
+  let body = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = null;
+  }
+  if (body && body.status === 'fail') {
+    throw new Error(`直连更新反馈被服务端拒绝：${serverMessage(text)}`);
+  }
+  return body;
+}
+
+/**
+ * 直连 v2 的反馈追加（append）：写前复核已在调用方完成，这里只发一次写入，再回读核对。
+ * 回读同样走 v1 回退（v2 详情读不到），所以照样能拿到「本次新增的编辑」流水。
+ */
+async function directFeedbackAppend({ kindName, id, current, bodyToWrite, env }) {
+  const payload = feedbackUpdatePayload(current, bodyToWrite);
+  try {
+    await putFeedbackV2(id, payload, env);
+  } catch (err) {
+    if (err?.writeDenied) {
+      reportUpdateWriteBlocked(kindName, id, `直连 v2 更新被拒绝（${err.message}）`);
+      return;
+    }
+    if (err?.outcomeUnknown) {
+      // 写没写进去不确定：只读核实，绝不重放
+      await verifyUpdateByRead(kindName, id, env, bodyToWrite, current, `直连更新结果不确定（${err.message}）`);
+      return;
+    }
+    throw err;
+  }
+  let after;
+  try {
+    after = await readUpdateRecord(kindName, id, env);
+  } catch (err) {
+    if (err?.readDenied) {
+      reportWriteReadbackDenied(kindName, id, '补充说明');
+      return;
+    }
+    throw err;
+  }
+  const mismatches = updateMismatches(bodyToWrite, current, after, kindName);
+  if (mismatches.length) {
+    reportWriteMismatch(kindName, '补充说明', id, mismatches);
+    return;
+  }
+  out(
+    JSON.stringify({
+      ok: true,
+      kind: kindName,
+      id: Number(id),
+      title: after.title,
+      status: after.status,
+      updated: true,
+      verified: 'readback',
+      writePath: 'direct-v2',
+      newActions: newMatchingActions(after.actions, actionIds(current.actions), 'edited').map((action) => String(action.action)),
+    }),
+  );
+}
+
 function productIdOf(opts, cmd) {
   const wanted = String(opts.product ?? '').trim();
   if (!wanted) throw usage(`node zentao.mjs ${cmd} --product <产品ID>`);
@@ -2711,19 +2852,25 @@ async function cmdUpdate(kindName, env, opts) {
       return;
     }
 
-    // CLI 的 feedback update 会先 GET v2 详情做 autoFill；8.7 上这一步被拒，写请求根本发不出去
+    // 写进去的正文：服务端那份当前原文原样保留 + 追加段落（追加段落单独标出来）
+    const bodyToWrite = `${current.body}\n\n${appended}`;
+
+    // v2 详情读不到时（8.7 上官方 CLI 的 update 会卡在 autoFill 那次 GET），改直连 v2 更新接口。
+    // 只在「详情是 v1 回退读到的」时启用；v2 正常时仍走官方 CLI。
     if (kindName === 'feedback' && current.v1Fallback) {
-      reportUpdateWriteBlocked(
-        kindName,
-        id,
-        'CLI 的 update 自动补全需要读 v2 反馈详情，而当前实例返回 2006',
-      );
+      if (!feedbackDirectUpdateEnabled(env)) {
+        reportUpdateWriteBlocked(
+          kindName,
+          id,
+          'CLI 的 update 自动补全需要读 v2 反馈详情，而当前实例返回 2006；直连更新已关闭（ZENTAO_FEEDBACK_DIRECT_UPDATE=0）',
+        );
+        fs.rmSync(file, { force: true });
+        return;
+      }
+      await directFeedbackAppend({ kindName, id, current, bodyToWrite, env });
       fs.rmSync(file, { force: true });
       return;
     }
-
-    // 写进去的正文：服务端那份当前原文原样保留 + 追加段落（追加段落单独标出来）
-    const bodyToWrite = `${current.body}\n\n${appended}`;
     // 交给禅道的请求体：标题与产品沿用当前值；正文只走文件，不进命令行参数
     const cliPayload =
       kindName === 'feedback'
@@ -3123,6 +3270,7 @@ const HELP = `禅道入口脚本（rh-product-feedback）
 
 环境变量：ZENTAO_WEB_URL 覆盖禅道站点地址  ZENTAO_CREDENTIALS_FILE 覆盖本机凭据文件路径
           ZENTAO_FEEDBACK_V1_FALLBACK=0 关闭反馈详情 v1 回退（默认开启；v1 下线或 v2 修好后用）
+          ZENTAO_FEEDBACK_DIRECT_UPDATE=0 关闭反馈更新的直连 v2 回退（默认开启；服务端修好 v2 详情后用）
 全局选项（所有子命令都能带，原样转给官方禅道 CLI）：
   --timeout <毫秒>                      单次 HTTP 请求的超时（与脚本等 CLI 进程的超时无关）
   --insecure                            跳过 TLS 证书校验（自签证书的实例）
