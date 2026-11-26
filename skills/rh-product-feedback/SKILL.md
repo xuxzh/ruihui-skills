@@ -140,7 +140,7 @@ node <技能目录>/scripts/zentao.mjs issue-create    --payload-file /tmp/rh-ze
 
 ### 2.6 回读校验
 
-用返回的 `id` 调入口脚本 `feedback --id <ID>` / `bug --id <ID>`，核对：产品、标题、完整描述（缺陷单是 `steps`，比较前先剥掉 HTML 标签并归一化换行与空白；图片引用按 `<img fileID="N">` 保留，剥标签不丢它），以及 `actions` 里**本次新增**了 `opened`（历史上存在过不算）；真实 CLI 0.4.4 的 `get` 不返回 `actions` 时，改用 `openedBy` + `openedDate` 核对。缺陷单另核对 `openedBuild`（列表显示「主干」、详情显示 `trunk`，两者指同一个值）与 `severity` / `pri`，以及 `assignedTo` 是否与生效值一致（生效值是产品 QD 时由禅道侧指派：草稿里用 `qd` 查到的是承接人，回读到的 `assignedTo` 才是生效结果，对不上就如实说明——例如账号已锁定——不要改单据）。缺陷单的 `bug-create`、反馈单的 `feedback-create` 已经按返回编号做完这套核对（输出里的 `verified` 说明结论是回读还是查询核实），终端用户要细节时再调入口脚本 `bug --id <ID>` / `feedback --id <ID>`。
+用返回的 `id` 调入口脚本 `feedback --id <ID>` / `bug --id <ID>`，核对：产品、标题、完整描述（缺陷单是 `steps`，比较前先剥掉 HTML 标签并归一化换行与空白；图片引用按 `<img fileID="N">` 保留，剥标签不丢它），以及 `actions` 里**本次新增**了 `opened`（历史上存在过不算）；真实 CLI 0.4.4 的 `get` 不返回 `actions` 时，改用 `openedBy` + `openedDate` 核对。缺陷单另核对 `openedBuild`（列表显示「主干」、详情显示 `trunk`，两者指同一个值）与 `severity` / `pri`，以及 `assignedTo` 是否与生效值一致（生效值是产品 QD 时由禅道侧指派：草稿里用 `qd` 查到的是承接人，回读到的 `assignedTo` 才是生效结果，对不上就如实说明——例如账号已锁定——不要改单据）。缺陷单的 `bug-create`、反馈单的 `feedback-create` 已经按返回编号做完这套核对（输出里的 `verified` 说明结论是回读还是查询核实），终端用户要细节时再调入口脚本 `bug --id <ID>` / `feedback --id <ID>`。**8.7 的反馈详情回退**：v2 `feedback get` 可能返回 2006，入口脚本会用同一账号 token 回退 v1 详情并归一字段与正文；v1 也拒绝时，`feedback-create` 输出 `created:true` + `readbackDenied:true`，`feedback --id` 如实报权限。`feedback-update` 的 CLI autoFill 仍走 v2，8.7 上报 `writeBlocked:true`，更新请求没有发出——不要把 `writeBlocked` 当成更新成功。
 
 任一不一致 → 按 [references/error-handling.md](references/error-handling.md) 处理：先查后报，不重复创建。
 

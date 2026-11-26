@@ -31,6 +31,8 @@ const CLI_BIN = 'zentao';
 // --assistant 的值会进 HTTP 头，不能含中文或换行
 const ASSISTANT = 'AI rh-product-feedback';
 const CLI_TIMEOUT_MS = 180000;
+// v1 反馈详情回退的单次请求超时：只读、短请求，不能像 CLI 写请求那样等三分钟
+const V1_FEEDBACK_TIMEOUT_MS = 30000;
 
 // ===== 公共：换令牌 / 注入 CLI / 调用 / 投影 =====
 
@@ -459,6 +461,117 @@ function normalizeBody(text, kindName) {
     .trim();
 }
 
+// ---------------------------------------------------------------- 反馈详情：v2 被拒时回退 v1
+//
+// 禅道 8.7 的 GET /api.php/v2/feedbacks/{id} 对普通账号一律 403（issue #28），而同一账号
+// token 的 v1 详情、v2 列表和 Web 页面都正常。官方 CLI 固定走 v2，所以只在 v2 明确返回
+// 2006（HTTP 403）时回退 v1；超时、断连、404、5xx 都保持原错误，不拿回退掩盖别的问题。
+
+/** v1 回退开关：默认开；服务端修好 v2 或 v1 下线后，用 ZENTAO_FEEDBACK_V1_FALLBACK=0 关掉。 */
+function feedbackV1FallbackEnabled(env) {
+  const raw = String(env.ZENTAO_FEEDBACK_V1_FALLBACK ?? '').trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(raw);
+}
+
+/** v1 的账号字段是对象（openedBy / assignedTo 等），投影只认账号名。 */
+function accountOf(value) {
+  if (value && typeof value === 'object') return String(value.account ?? '');
+  return value === undefined || value === null ? '' : String(value);
+}
+
+/**
+ * v1 的反馈正文是 HTML（<p> / <br> / <span>），而反馈单的 desc 契约是纯文本。
+ * 转成纯文本时保留段落边界（</p> → 空行）和 <img fileID="N"> 引用，回读才能逐字比。
+ */
+function feedbackTextFromV1(html) {
+  return String(html ?? '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<\/(p|div|h[1-6]|tr)>/gi, '\n\n')
+    .replace(/<[^>]+>/g, (tag) => (/^<img\b/i.test(tag) ? canonicalImageRef(tag) : ''))
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;/g, "'")
+    .replace(/&#x0*27;/gi, "'")
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** v1 详情 → 现有投影/回读核对认得的形态（账号字段变字符串、正文变纯文本）。 */
+function normalizeFeedbackV1(raw) {
+  const record = raw && typeof raw === 'object' ? raw : {};
+  return {
+    ...record,
+    openedBy: accountOf(record.openedBy),
+    assignedTo: accountOf(record.assignedTo),
+    reviewedBy: accountOf(record.reviewedBy),
+    processedBy: accountOf(record.processedBy),
+    closedBy: accountOf(record.closedBy),
+    feedbackBy: accountOf(record.feedbackBy),
+    desc: feedbackTextFromV1(record.desc),
+  };
+}
+
+/** 同一账号 token 直读 v1 反馈详情；只用于读，不用于写。 */
+async function fetchFeedbackV1(id, env) {
+  const site = String(env.ZENTAO_URL || '').replace(/\/+$/, '');
+  const token = String(env.ZENTAO_TOKEN || '');
+  if (!site || !token) throw new Error('缺少禅道站点或令牌，无法回退 v1 读取反馈详情。');
+  let res;
+  try {
+    res = await fetch(`${site}/api.php/v1/feedbacks/${encodeURIComponent(id)}`, {
+      headers: { Token: token },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(V1_FEEDBACK_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new Error(`v1 反馈详情请求失败：${err?.message || err}`);
+  }
+  if (res.status === 403) {
+    const error = new Error('v1 反馈详情也被拒绝（HTTP 403）。');
+    error.readDenied = true;
+    throw error;
+  }
+  if (res.status === 404) throw new Error('v1 反馈详情不存在（HTTP 404）。');
+  if (!res.ok) throw new Error(`v1 反馈详情请求失败（HTTP ${res.status}）。`);
+  const body = await res.json().catch(() => null);
+  if (!body || typeof body !== 'object') throw new Error('v1 反馈详情响应看不懂。');
+  return body;
+}
+
+/**
+ * 读反馈详情：先走官方 CLI 的 v2；只有 v2 明确返回 2006（HTTP 403）时才回退 v1。
+ * 两边都被拒绝时抛 readDenied，让建单/更新能把它和普通读失败区分开。
+ */
+async function readFeedbackWithFields(id, fields, env) {
+  try {
+    const { data } = await runCli(['feedback', 'get', String(id), '--fields', fields], env);
+    return data && typeof data === 'object' ? data : {};
+  } catch (err) {
+    if (String(err?.cliCode) !== '2006' || !feedbackV1FallbackEnabled(env)) throw err;
+    try {
+      const record = normalizeFeedbackV1(await fetchFeedbackV1(id, env));
+      // 只在本进程内标记来源：写路径据此判断 CLI 的 update autoFill 是否还能读到 v2 详情
+      Object.defineProperty(record, '__v1Fallback', { value: true, enumerable: false });
+      return record;
+    } catch (v1Err) {
+      if (v1Err?.readDenied) {
+        const error = new Error(`反馈 #${id} 的详情读取被拒（v2: E2006；v1: HTTP 403）。`);
+        error.readDenied = true;
+        throw error;
+      }
+      throw v1Err;
+    }
+  }
+}
+
 function productIdOf(opts, cmd) {
   const wanted = String(opts.product ?? '').trim();
   if (!wanted) throw usage(`node zentao.mjs ${cmd} --product <产品ID>`);
@@ -739,8 +852,7 @@ async function cmdBug(env, opts) {
 async function cmdFeedback(env, opts) {
   const id = recordIdOf(opts, 'feedback');
   const baseline = baselineOf(opts);
-  const { data } = await runCli(['feedback', 'get', id, '--fields', FEEDBACK_DETAIL_FIELDS], env);
-  const feedback = data && typeof data === 'object' ? data : {};
+  const feedback = await readFeedbackWithFields(id, FEEDBACK_DETAIL_FIELDS, env);
   out(
     JSON.stringify({
       ok: true,
@@ -1181,6 +1293,8 @@ const CREATE_KINDS = {
     createArgs: (file) => ['feedback', 'create', '--data', `@${file}`],
     recordOf: (created) => created.data?.feedback ?? created.data,
     readArgs: (id) => ['feedback', 'get', String(id), '--fields', FEEDBACK_READBACK_FIELDS],
+    // 反馈详情在 8.7 的 v2 接口上会被拒，读路径统一走带 v1 回退的 helper
+    read: (id, env) => readFeedbackWithFields(id, FEEDBACK_READBACK_FIELDS, env),
     mismatches: (payload, record) => feedbackMismatches(payload, record),
     mismatchNotes: {
       '创建者字段（openedBy）': '（本实例的创建者字段名可能与 openedBy 不同，不要猜哪个字段是提交人）',
@@ -1230,7 +1344,10 @@ async function idsOf(kindName, container, env) {
 
 /** 按编号读一条单据（只取核对要用的字段）。 */
 async function readRecord(kindName, id, env) {
-  const { data } = await runCli(CREATE_KINDS[kindName].readArgs(id), env);
+  const kind = CREATE_KINDS[kindName];
+  // 反馈单有 v1 回退，走自己的读函数；缺陷单 / 项目问题仍走 CLI
+  if (typeof kind.read === 'function') return kind.read(id, env);
+  const { data } = await runCli(kind.readArgs(id), env);
   return data && typeof data === 'object' ? data : {};
 }
 
@@ -1242,6 +1359,15 @@ function reportCreateMismatches(kindName, id, mismatches) {
   const message = `回读核对没通过（${noun} #${id} 已经写入）：${mismatches.join('、')}与载荷不一致${note}。不要重建，先把单据现状告诉终端用户。`;
   process.stderr.write(`错误：${message}\n`);
   out(JSON.stringify({ ok: false, kind: kindName, id, created: true, mismatches, message }));
+  process.exitCode = 1;
+}
+
+/** 建单成功但详情读不到：编号已知，回读被权限拒绝；不重发，让人去禅道核对。 */
+function reportCreateReadbackDenied(kindName, id) {
+  const { noun } = CREATE_KINDS[kindName];
+  const message = `${noun} #${id} 已经创建，但当前账号无权回读详情（v2 与 v1 都被拒绝），无法核对内容。不要重发；请到禅道核对这条单据。`;
+  process.stderr.write(`错误：${message}\n`);
+  out(JSON.stringify({ ok: false, kind: kindName, id: Number(id), created: true, readbackDenied: true, message }));
   process.exitCode = 1;
 }
 
@@ -1369,6 +1495,11 @@ async function cmdCreate(kindName, env, opts) {
     try {
       record = await readRecord(kindName, id, env);
     } catch (err) {
+      // 编号已经拿到、只是详情被权限拒绝：不要走「结果不确定」的查询核实，直接报 readbackDenied
+      if (err?.readDenied) {
+        reportCreateReadbackDenied(kindName, id);
+        return;
+      }
       await confirmCreateByQuery(kindName, env, payload, ctx, baseline, `按返回的 #${id} 回读失败（${err.message}）`);
       return;
     }
@@ -1604,14 +1735,23 @@ function appendLabelOf(value) {
 
 /** 按编号读一条单据（读写校验共用投影）。 */
 async function readRecordWithFields(cliName, id, fields, bodyField, env) {
-  const { data } = await runCli([cliName, 'get', String(id), '--fields', fields], env);
-  const record = data && typeof data === 'object' ? data : {};
+  let record;
+  if (cliName === 'feedback') {
+    // 8.7 的 v2 反馈详情会被拒；统一走带 v1 回退的读函数（更新写前复核 / 写后回读也用它）
+    record = await readFeedbackWithFields(id, fields, env);
+  } else {
+    const { data } = await runCli([cliName, 'get', String(id), '--fields', fields], env);
+    record = data;
+  }
+  record = record && typeof record === 'object' ? record : {};
   return {
     raw: record,
     body: bodyField ? String(record[bodyField] ?? '') : '',
     title: String(record.title ?? ''),
     product: idOf(record.product),
     status: String(record.status ?? ''),
+    // 这条记录是不是从 v1 回退读到的：feedback update 的 autoFill 仍走 v2，写前要据此拦下
+    v1Fallback: Boolean(record.__v1Fallback),
     // 保留「字段不存在」与「字段是空数组」的区别：前者是真实 CLI 不返回 actions，后者是服务端明说没有流水
     actions: Array.isArray(record.actions) ? rowsOf(record.actions) : null,
   };
@@ -1685,6 +1825,24 @@ function reportWriteMismatch(kindName, actionLabel, id, mismatches, extra = {}) 
 function reportWriteUncertain(kindName, id, message, extra = {}) {
   process.stderr.write(`错误：${message}\n`);
   out(JSON.stringify({ ok: false, kind: kindName, id: Number(id), uncertain: true, ...extra, message }));
+  process.exitCode = 1;
+}
+
+/** 写请求没有发出：CLI 的 update 自动补全需要读 v2 详情，而 v2 详情被拒。 */
+function reportUpdateWriteBlocked(kindName, id, reason) {
+  const kind = UPDATE_KINDS[kindName];
+  const message = `${kind.label} #${id} 的更新请求没有发出：${reason}。请到禅道网页端更新，或等 v2 详情接口修复后再试。`;
+  process.stderr.write(`错误：${message}\n`);
+  out(JSON.stringify({ ok: false, kind: kindName, id: Number(id), writeBlocked: true, message }));
+  process.exitCode = 1;
+}
+
+/** 写请求已经发出，但详情因权限读不到：是否生效未确认，不重放。 */
+function reportWriteReadbackDenied(kindName, id, actionLabel) {
+  const kind = UPDATE_KINDS[kindName];
+  const message = `${kind.label} #${id} ${actionLabel}：请求已发出，但当前账号无权回读详情（v2 与 v1 都被拒绝），是否生效未确认。不要重放，请到禅道核对。`;
+  process.stderr.write(`错误：${message}\n`);
+  out(JSON.stringify({ ok: false, kind: kindName, id: Number(id), uncertain: true, readbackDenied: true, message }));
   process.exitCode = 1;
 }
 
@@ -1775,6 +1933,10 @@ async function runSingleAction(spec, id, env, callerFile, warnings = []) {
       try {
         after = await spec.readRecord(id, env);
       } catch (readErr) {
+        if (readErr?.readDenied) {
+          reportWriteReadbackDenied(spec.kindName, id, spec.actionLabel);
+          return;
+        }
         reportWriteUncertain(
           spec.kindName,
           id,
@@ -1798,7 +1960,16 @@ async function runSingleAction(spec, id, env, callerFile, warnings = []) {
       return;
     }
 
-    const after = await spec.readRecord(id, env);
+    let after;
+    try {
+      after = await spec.readRecord(id, env);
+    } catch (readErr) {
+      if (readErr?.readDenied) {
+        reportWriteReadbackDenied(spec.kindName, id, spec.actionLabel);
+        return;
+      }
+      throw readErr;
+    }
     const mismatches = spec.mismatches(before, after);
     if (mismatches.length) {
       reportWriteMismatch(spec.kindName, spec.actionLabel, id, mismatches, { action: spec.actionKey });
@@ -2466,6 +2637,10 @@ async function verifyUpdateByRead(kindName, id, env, bodyToWrite, before, why) {
   try {
     after = await readUpdateRecord(kindName, id, env);
   } catch (err) {
+    if (err?.readDenied) {
+      reportWriteReadbackDenied(kindName, id, '补充说明');
+      return;
+    }
     reportWriteUncertain(
       kindName,
       id,
@@ -2536,6 +2711,17 @@ async function cmdUpdate(kindName, env, opts) {
       return;
     }
 
+    // CLI 的 feedback update 会先 GET v2 详情做 autoFill；8.7 上这一步被拒，写请求根本发不出去
+    if (kindName === 'feedback' && current.v1Fallback) {
+      reportUpdateWriteBlocked(
+        kindName,
+        id,
+        'CLI 的 update 自动补全需要读 v2 反馈详情，而当前实例返回 2006',
+      );
+      fs.rmSync(file, { force: true });
+      return;
+    }
+
     // 写进去的正文：服务端那份当前原文原样保留 + 追加段落（追加段落单独标出来）
     const bodyToWrite = `${current.body}\n\n${appended}`;
     // 交给禅道的请求体：标题与产品沿用当前值；正文只走文件，不进命令行参数
@@ -2555,7 +2741,16 @@ async function cmdUpdate(kindName, env, opts) {
         return;
       }
 
-      const after = await readUpdateRecord(kindName, id, env);
+      let after;
+      try {
+        after = await readUpdateRecord(kindName, id, env);
+      } catch (err) {
+        if (err?.readDenied) {
+          reportWriteReadbackDenied(kindName, id, '补充说明');
+          return;
+        }
+        throw err;
+      }
       const mismatches = updateMismatches(bodyToWrite, current, after, kindName);
       if (mismatches.length) {
         reportWriteMismatch(kindName, '补充说明', id, mismatches);
@@ -2593,6 +2788,11 @@ async function cmdUpdate(kindName, env, opts) {
     actionLabel: `编辑${kind.label}`,
     expectedActions,
     readRecord: (id, e) => readUpdateRecord(kindName, id, e),
+    // 反馈单的 update autoFill 也走 v2 详情；8.7 被拒时把原因说清楚，别让终端用户以为是普通权限问题
+    errorHint: (err) =>
+      kindName === 'feedback' && String(err?.cliCode) === '2006'
+        ? '（本实例的 v2 反馈详情被拒，CLI 的 update 自动补全无法读取现值；更新未写入，请到禅道网页端操作）'
+        : '',
     precheck: () => ({ ok: true }),
     checkCas(before) {
       const changed = [];
@@ -2922,6 +3122,7 @@ const HELP = `禅道入口脚本（rh-product-feedback）
                                                    传图，返回文件标识与正文里的图片引用
 
 环境变量：ZENTAO_WEB_URL 覆盖禅道站点地址  ZENTAO_CREDENTIALS_FILE 覆盖本机凭据文件路径
+          ZENTAO_FEEDBACK_V1_FALLBACK=0 关闭反馈详情 v1 回退（默认开启；v1 下线或 v2 修好后用）
 全局选项（所有子命令都能带，原样转给官方禅道 CLI）：
   --timeout <毫秒>                      单次 HTTP 请求的超时（与脚本等 CLI 进程的超时无关）
   --insecure                            跳过 TLS 证书校验（自签证书的实例）

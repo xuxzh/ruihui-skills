@@ -332,6 +332,24 @@ test('F18 结果不确定（保存成功但查不到）：报未确认，不把�
   });
 });
 
+/** 一条已存在的反馈：用来验证 v2 详情 403 时的 v1 回退（详情、回读、更新复核）。 */
+function seedOneFeedback(overrides = {}) {
+  return {
+    id: 900,
+    title: '设备列表导出按钮点击后无响应',
+    status: 'active',
+    openedBy: ACCOUNT,
+    openedDate: '2026-11-20 10:00:00',
+    assignedTo: '',
+    product: 101,
+    desc: DESC_TEXT,
+    type: 'bug',
+    feedbackBy: ACCOUNT,
+    actions: [{ id: 9000, action: 'opened', actor: ACCOUNT, date: '2026-11-20 10:00:00', comment: '' }],
+    ...overrides,
+  };
+}
+
 // 已经有 25 条反馈的产品：基线扫描超过一页（假服务每页 20 条）
 function manyFeedbacks(count) {
   const map = new Map();
@@ -386,5 +404,138 @@ test('F20 回读没有 actions（真实 CLI 0.4.4 形状）：openedBy / openedD
 
     assert.equal(creates(server).length, 1, '创建请求只能发一次');
     assert.equal(readsOf(server, 900).length, 1, '写入后要按返回的编号回读一次');
+  });
+});
+
+test('F21 v2 反馈详情 403：同一账号 token 回退 v1，详情字段归一化后交付', { skip: NEEDS_CLI }, async () => {
+  const feedback = seedOneFeedback();
+  await withMock({ feedbacks: new Map([[900, feedback]]), feedbackV2GetDenied: true }, async ({ server, env }) => {
+    const { code, stdout, stderr } = await runEntryScript(['feedback', '--id', '900'], env);
+    assert.equal(code, 0, stderr);
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.id, 900);
+    assert.equal(result.title, feedback.title);
+    assert.equal(result.status, feedback.status);
+    assert.equal(result.openedBy, ACCOUNT, 'v1 的 openedBy 对象要归一成账号字符串');
+    assert.equal(result.assignee, '', 'v1 的 assignedTo=null 要归一成空串');
+    assert.equal(result.body, DESC_TEXT, 'v1 的 HTML 正文要归一成纯文本');
+    assert.deepEqual(result.actions.map((action) => action.action), ['opened']);
+
+    assert.ok(
+      server.state.calls.some((call) => call.method === 'GET' && call.path === '/api.php/v2/feedbacks/900'),
+      '先试 v2 详情',
+    );
+    assert.ok(
+      server.state.calls.some((call) => call.method === 'GET' && call.path === '/api.php/v1/feedbacks/900'),
+      'v2 403 后回退 v1 详情',
+    );
+  });
+});
+
+test('F22 建单回读遇到 v2 403：回退 v1 后仍按 readback 交付', { skip: NEEDS_CLI }, async () => {
+  await withMock({ feedbackV2GetDenied: true }, async ({ server, env, dir }) => {
+    const file = writePayload(dir, feedbackPayload());
+    const { code, stdout, stderr } = await runEntryScript(['feedback-create', '--payload-file', file], env);
+    assert.equal(code, 0, stderr);
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.id, 900);
+    assert.equal(result.verified, 'readback');
+    assert.equal(result.openedBy, ACCOUNT);
+    assert.equal(result.submitterIsCurrentAccount, true);
+
+    assert.equal(creates(server).length, 1, '创建请求只能发一次');
+    assert.ok(
+      server.state.calls.some((call) => call.method === 'GET' && call.path === '/api.php/v1/feedbacks/900'),
+      '回读要走 v1',
+    );
+  });
+});
+
+test('F23 v2 与 v1 都拒绝：建单报 created + readbackDenied，不重发', { skip: NEEDS_CLI }, async () => {
+  await withMock({ feedbackV2GetDenied: true, feedbackV1GetDenied: true }, async ({ server, env, dir }) => {
+    const file = writePayload(dir, feedbackPayload());
+    const { code, stdout, stderr } = await runEntryScript(['feedback-create', '--payload-file', file], env);
+    assert.equal(code, 1);
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, false);
+    assert.equal(result.id, 900, '编号已经拿到，要交代清楚');
+    assert.equal(result.created, true);
+    assert.equal(result.readbackDenied, true);
+    assert.equal(result.uncertain, undefined, '编号已知时不要报成结果不确定');
+    assert.match(stderr, /无权回读详情/);
+    assert.equal(creates(server).length, 1, '不重发');
+  });
+});
+
+test('F24 回退开关关闭：v2 403 不再请求 v1', { skip: NEEDS_CLI }, async () => {
+  const feedback = seedOneFeedback();
+  await withMock({ feedbacks: new Map([[900, feedback]]), feedbackV2GetDenied: true }, async ({ server, env }) => {
+    const { code, stdout, stderr } = await runEntryScript(['feedback', '--id', '900'], {
+      ...env,
+      ZENTAO_FEEDBACK_V1_FALLBACK: '0',
+    });
+    assert.equal(code, 1);
+    assert.match(stderr, /2006/);
+    assert.equal(singleLineJson(stdout).ok, false);
+    assert.ok(
+      !server.state.calls.some((call) => call.path === '/api.php/v1/feedbacks/900'),
+      '开关关闭时不该请求 v1',
+    );
+  });
+});
+
+test('F25 v2 返回非权限错误：不回退 v1，保持原错误', { skip: NEEDS_CLI }, async () => {
+  const feedback = seedOneFeedback();
+  await withMock(
+    { feedbacks: new Map([[900, feedback]]), failPaths: ['/api.php/v2/feedbacks/900'] },
+    async ({ server, env }) => {
+      const { code } = await runEntryScript(['feedback', '--id', '900'], env);
+      assert.equal(code, 1);
+      assert.ok(
+        !server.state.calls.some((call) => call.path === '/api.php/v1/feedbacks/900'),
+        '只有 v2 明确返回 2006 才回退',
+      );
+    },
+  );
+});
+
+test('F26 反馈补充说明：v2 详情被拒时 CLI 的 autoFill 无法工作，明确报未写入', { skip: NEEDS_CLI }, async () => {
+  const feedback = seedOneFeedback();
+  await withMock({ feedbacks: new Map([[900, feedback]]), feedbackV2GetDenied: true }, async ({ server, env, dir }) => {
+    const addition = '补充：必须先选中至少一行设备，点「导出」才复现。';
+    const separator = '──────────────';
+    const annotation = '【补充说明 · 2026-11-20 · 用户口述，AI 整理】';
+    const draft = `${feedback.desc}\n\n${separator}\n${annotation}\n${addition}`;
+    const file = writePayload(dir, {
+      product: feedback.product,
+      title: feedback.title,
+      desc: draft,
+      expectedBody: feedback.desc,
+    });
+
+    const { code, stdout, stderr } = await runEntryScript(['feedback-update', '--id', '900', '--payload-file', file], env);
+    assert.equal(code, 1);
+
+    const result = singleLineJson(stdout);
+    assert.equal(result.ok, false);
+    assert.equal(result.id, 900);
+    assert.equal(result.writeBlocked, true);
+    assert.match(stderr, /更新请求没有发出/);
+    assert.match(stderr, /autoFill|自动补全/);
+
+    const updates = server.state.calls.filter(
+      (call) => call.method === 'PUT' && call.path === '/api.php/v2/feedbacks/900',
+    );
+    assert.equal(updates.length, 0, '不发出更新请求');
+    const v2Reads = server.state.calls.filter(
+      (call) => call.method === 'GET' && call.path === '/api.php/v2/feedbacks/900',
+    );
+    assert.equal(v2Reads.length, 1, '只试过写前复核，没有让 CLI 再走一次 autoFill');
+    assert.ok(!fs.existsSync(file), '临时载荷文件用完要删掉');
   });
 });

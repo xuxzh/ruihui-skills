@@ -21,6 +21,11 @@
 - 入口脚本的列表扫描与查重按「归属容器」泛化：缺陷单 / 反馈单挂产品，项目问题挂项目
 - 文档同步：`description` 触发词、快速开始与 README 示例句、CLI 参考的 `issue` 命令面与字段、`workflow.md` 的 F1c、`error-handling.md` 的项目问题条目
 
+### 修复
+
+- 禅道 8.7 的 `GET /api.php/v2/feedbacks/{id}` 对普通账号返回 403（E2006），导致 `feedback --id`、`feedback-create` 回读和 `feedback-update` 的写前复核失败（[issue #28](https://github.com/xuxzh/ruihui-skills/issues/28)）。入口脚本在 v2 明确返回 2006 时用同一账号 token 回退到 v1 详情，并归一化 v1 的对象字段与 HTML 正文；v1 也拒绝时，建单输出 `created:true` + `readbackDenied:true`。
+- `feedback-update` 在 v1 回退路径上明确报 `writeBlocked:true`：CLI 的 update autoFill 仍走 v2 详情，8.7 上会被 2006 拒绝；入口脚本不发出写入，也不重放。可用 `ZENTAO_FEEDBACK_V1_FALLBACK=0` 关闭回退。
+
 ## [0.14.0] - 2026-11-25
 
 ### 新增

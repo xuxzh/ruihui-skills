@@ -43,7 +43,7 @@
 
 ## 命令面
 
-路径相对 `{ZENTAO_URL}/api.php/v2`。
+路径相对 `{ZENTAO_URL}/api.php/v2`。例外：8.7 的 `feedback get` 会被 v2 详情接口 403 拒绝，入口脚本在 v2 明确返回 2006 时用同一账号 token 回退 `GET {ZENTAO_URL}/api.php/v1/feedbacks/{id}`，并归一化 v1 的账号对象与 HTML 正文；`ZENTAO_FEEDBACK_V1_FALLBACK=0` 可关闭回退。
 
 | 命令 | HTTP | 路径 | 分页 | 请求体 |
 | --- | --- | --- | --- | --- |
@@ -143,7 +143,8 @@
 - **产品 QD 的字段名是大写 `QD`**：`product list --fields id,name,QD` 能取到（形如 `{"id":"1","name":"<产品名>","QD":"<账号>"}`）；小写 `qd` 不是合法字段名，会被静默忽略（字段投影里就没这一列了）。QD 属于运行时事实：只查不存，不写进随包配置或仓库文件。
 - **选品不再有 `prep` 合并调用**：旧查询器的 `prep`（产品 + 项目 + 查重候选一次拿全）随旧通道下线，迁移后改成显式的三个子命令：`products` → `projects --product <id>` → `dup --kind … --product … --title …`。这不是漏做，是拆开让每一步都能单独重试与核对。
 - **正文里的图片引用会被服务端补属性**：落库后 `<img>` 会多出 `onload="setImageSize(this,0)"` 等属性；入口脚本比较正文时只按 `fileID` 归一化图片标签，不比较属性差异，避免把“同一张图”误判成正文不一致。缺陷单的 `steps` 还会被剥标签，剥之前先把图片引用归一成 `<img fileID="N">` 留下——「图片引用落在正文里」在回读投影与逐字比较里都看得见，认不出 `fileID` 的 `<img>` 按普通标签剥掉。
-- **`get` 不返回 `actions`**：CLI 0.4.4 的 `bug get` / `feedback get` 即使 `--fields` 里带 `actions`，返回的 JSON 里也没有这个字段（服务端 API 有流水，CLI 没映射；实测缺陷 1936 与反馈 51）。因此入口脚本的回读策略是：**有 `actions` 字段**时按 `opened` / `edited` 核对；**字段不存在**时，建单用 `openedBy` + `openedDate`，更新用“正文与完整预期正文逐字一致”（写前复核已确认原文不同）。不要要求用户为了流水去换通道或升级 CLI。
+- **`get` 不返回 `actions`**：CLI 0.4.4 的 `bug get` / `feedback get` 即使 `--fields` 里带 `actions`，返回的 JSON 里也没有这个字段（服务端 API 有流水，CLI 没映射；实测缺陷 1936 与反馈 51）。因此入口脚本的回读策略是：**有 `actions` 字段**时按 `opened` / `edited` 核对；**字段不存在**时，建单用 `openedBy` + `openedDate`，更新用“正文与完整预期正文逐字一致”（写前复核已确认原文不同）。不要要求用户为了流水去换通道或升级 CLI。反馈详情走 v1 回退时，v1 详情**有** `actions`（实测反馈 75）；所以 8.7 上 `feedback --id` 可能看到流水，而 `bug --id` 仍没有——按实际返回的字段核对即可。
+- **`feedback update` 的 autoFill 也走 v2 详情**：CLI 在 PUT 前会先 GET 当前对象补齐未提交字段；8.7 上这一步被 2006 拒绝，更新请求根本发不出去。入口脚本在写前发现详情来自 v1 回退时直接报 `writeBlocked:true`，不发出更新、不重放；需要改反馈请走禅道网页端，或等 v2 详情修复。
 - **项目问题的创建者字段是 `createdBy`**：`issue get` 没有 `openedBy`，创建者看 `createdBy`、创建时间看 `createdDate`；提出人是业务字段 `owner`（入口脚本建单时显式填当前账号）。状态以实例工作流为准（常见 `open` / `assigned` / `resolved` / `closed` / `canceled`），列表 browseType 与缺陷相近（`all` / `open` / `assignto` / `assignby` / `closed` / `resolved` / `canceled`）。
 
 ## 与随包脚本的分工

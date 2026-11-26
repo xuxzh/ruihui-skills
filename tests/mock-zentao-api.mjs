@@ -97,6 +97,10 @@ export function createMockApiState(overrides = {}) {
     noopUpdate: false,
     // 回读不返回操作流水（复刻真实 CLI 0.4.4：API 有 actions，但 CLI 的 get 不映射这个字段）
     omitActions: false,
+    // 复刻 8.7 的 v2 反馈详情 403：v1 详情仍可用，用来验证入口脚本的 v1 回退
+    feedbackV2GetDenied: false,
+    // v1 详情也拒绝，用来验证 readbackDenied 分支
+    feedbackV1GetDenied: false,
     // 创建接口挂住不返回：'ghost' = 没落库，'persist' = 已落库（等同标题带 __TIMEOUT__）
     createHang: '',
     // 删除接口一律业务失败（模拟没有删除权限）
@@ -275,6 +279,49 @@ function createFeedback(state, account, payload) {
   if (marker === '__NOOP__' || state.noopWrites) return { record, persist: false };
   if (marker === '__TIMEOUT__') return { record, persist: true, hang: true };
   return createdResult(state, record);
+}
+
+/** 复刻 v1 反馈详情的形态：账号字段是对象、正文是 HTML（<p>/<br>）、流水在详情里。 */
+function feedbackV1Body(state, record, account) {
+  const refOf = (value) => {
+    if (value === undefined || value === null || value === '') return null;
+    if (typeof value === 'object') return value;
+    return { id: 0, account: String(value), realname: String(value), avatar: '' };
+  };
+  // 正文里的图片引用在服务端是 HTML；先换成占位符，避免转义 & / < / > 时把它也吃掉
+  const images = [];
+  const text = String(record.desc ?? '').replace(/<img\b[^>]*>/gi, (tag) => {
+    images.push(tag);
+    return `\u0000IMG${images.length - 1}\u0000`;
+  });
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>')
+    .replace(/\u0000IMG(\d+)\u0000/g, (_, index) => images[Number(index)]);
+  return {
+    ...record,
+    openedBy: refOf(record.openedBy || account),
+    assignedTo: refOf(record.assignedTo),
+    reviewedBy: refOf(record.reviewedBy),
+    processedBy: refOf(record.processedBy),
+    closedBy: refOf(record.closedBy),
+    desc: `<p>${escaped}</p>`,
+    ...(state.omitActions
+      ? {}
+      : {
+          actions: record.actions ?? [
+            {
+              id: Number(record.id) * 10,
+              action: 'opened',
+              actor: String(record.openedBy || account),
+              date: record.openedDate || now(),
+              comment: '',
+            },
+          ],
+        }),
+  };
 }
 
 function createIssue(state, account, payload) {
@@ -540,10 +587,22 @@ function route(state, req, pathname, query, token, payload) {
     return { body: productListBody(state, 'feedbacks', items, query, product) };
   }
 
+  // v1 反馈详情：8.7 的 v2 详情 403 时，入口脚本用同一账号 token 回退到这里
+  m = pathname.match(/^\/api\.php\/v1\/feedbacks\/(\d+)$/);
+  if (m && req.method === 'GET') {
+    if (state.feedbackV1GetDenied) return { status: 403, body: { error: 'Access not allowed' } };
+    const record = state.feedbacks.get(Number(m[1]));
+    if (!record) return { status: 404, body: { message: '记录不存在' } };
+    return { body: feedbackV1Body(state, record, account) };
+  }
+
   m = pathname.match(/^\/api\.php\/v2\/feedbacks\/(\d+)$/);
   if (m) {
     const record = state.feedbacks.get(Number(m[1]));
-    if (req.method === 'GET') return record ? { body: { feedback: record } } : { status: 404, body: { message: '记录不存在' } };
+    if (req.method === 'GET') {
+      if (state.feedbackV2GetDenied) return { status: 403, body: { error: 'Access not allowed' } };
+      return record ? { body: { feedback: record } } : { status: 404, body: { message: '记录不存在' } };
+    }
     if (req.method === 'DELETE') {
       if (!record) return { status: 404, body: { message: '记录不存在' } };
       if (state.deleteFails) return { body: { status: 'fail', message: '没有删除该反馈的权限。' } };
