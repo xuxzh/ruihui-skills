@@ -399,6 +399,11 @@ const BUG_DETAIL_FIELDS =
   'id,title,status,product,type,severity,pri,openedBuild,project,execution,story,openedBy,openedDate,assignedTo,resolvedBy,resolvedDate,resolvedBuild,resolution,closedBy,closedDate,activatedCount,steps,actions';
 const FEEDBACK_DETAIL_FIELDS =
   'id,title,status,product,module,type,openedBy,openedDate,assignedTo,reviewedBy,reviewedDate,processedBy,processedDate,solution,closedReason,closedBy,closedDate,desc,actions';
+// 问题列表与详情：问题挂项目（project），提出人字段是 owner，创建者字段是 createdBy
+const ISSUE_LIST_FIELDS = 'id,project,title,status,assignedTo,type,severity,pri';
+const ISSUE_DETAIL_FIELDS =
+  'id,project,execution,title,status,type,severity,pri,assignedTo,owner,deadline,createdBy,createdDate,desc,actions';
+const ISSUE_READBACK_FIELDS = 'id,project,title,type,severity,pri,assignedTo,owner,deadline,desc,createdBy,createdDate,actions';
 
 // 负责人为空时写「未指派」：那是「没人接」，不是「字段缺失」
 function assignee(value) {
@@ -461,6 +466,13 @@ function productIdOf(opts, cmd) {
   return wanted;
 }
 
+function projectIdOf(opts, cmd) {
+  const wanted = String(opts.project ?? '').trim();
+  if (!wanted) throw usage(`node zentao.mjs ${cmd} --project <项目ID>`);
+  if (!/^\d+$/.test(wanted)) throw usage(`node zentao.mjs ${cmd} --project <项目ID>（项目 ID 是数字）`);
+  return wanted;
+}
+
 function recordIdOf(opts, cmd) {
   const wanted = String(opts.id ?? '').trim();
   if (!wanted) throw usage(`node zentao.mjs ${cmd} --id <单据ID>`);
@@ -503,7 +515,7 @@ function isPagingStuck(err) {
  * 服务端分页不前进时不整条失败，退回只读第 1 页；拿到的记录照常用，但这次扫描算不完整——
  * 第 1 页不是全部，不能当成全部说出去。
  *
- * 回退取回的记录还要做归属校验：请求的是产品 X，回来的记录 product 字段不是 X，就不是这个产品的记录。
+ * 回退取回的记录还要做归属校验：请求的是产品 / 项目 X，回来的记录归属字段不是 X，就不是它的记录。
  * 实测某台 max 8.2 实例上请求产品 29 的反馈列表会返回 product=1 的记录，照用会把别的产品的数据
  * 当成这个产品的（查重基线、覆盖范围全跟着错），所以这类记录一律丢弃并在输出里点名。
  */
@@ -524,24 +536,24 @@ async function warmUpFeedbackList(productId, env) {
   }
 }
 
-async function runListScan(args, productId, env) {
+async function runListScan(args, scopeId, env, scopeKey = 'product') {
   const scanOf = (payload, complete, reason) => {
     const fetched = rowsOf(payload.data);
     const rows = [];
     const dropped = [];
-    for (const row of fetched) (isProductRecord(row, productId) ? rows : dropped).push(row);
+    for (const row of fetched) (isScopeRecord(row, scopeId, scopeKey) ? rows : dropped).push(row);
     const total = Number(payload.meta?.total ?? fetched.length);
     return {
       rows,
-      // 扫到 = 服务端给了多少条，减掉不属于这个产品的
+      // 扫到 = 服务端给了多少条，减掉不属于这个产品 / 项目的
       scanned: Number(payload.meta?.fetched ?? fetched.length) - dropped.length,
       total,
-      foreign: { count: dropped.length, products: [...new Set(dropped.map((row) => idOf(row.product)))] },
+      foreign: { count: dropped.length, values: [...new Set(dropped.map((row) => idOf(row[scopeKey])))] },
       complete,
       reason,
     };
   };
-  if (args[0] === 'feedback' && args[1] === 'list') await warmUpFeedbackList(productId, env);
+  if (args[0] === 'feedback' && args[1] === 'list') await warmUpFeedbackList(scopeId, env);
   try {
     return scanOf(await runCli([...args, '--all'], env), true, '');
   } catch (err) {
@@ -551,15 +563,15 @@ async function runListScan(args, productId, env) {
   }
 }
 
-// 记录没带 product 字段时判不了归属（投影里没取到），只能照用；带了就必须与请求的产品一致
-function isProductRecord(row, productId) {
-  const product = row?.product;
-  if (product === undefined || product === null || product === '') return true;
-  return idOf(product) === String(productId);
+// 记录没带归属字段时判不了归属（投影里没取到），只能照用；带了就必须与请求的对象一致
+function isScopeRecord(row, scopeId, scopeKey = 'product') {
+  const value = row?.[scopeKey];
+  if (value === undefined || value === null || value === '') return true;
+  return idOf(value) === String(scopeId);
 }
 
-// 覆盖范围的一句话：扫了多少条、扫全没有、有没有丢掉不属于这个产品的记录。
-function scanCoverage(scan, productId) {
+// 覆盖范围的一句话：扫了多少条、扫全没有、有没有丢掉不属于这个对象的记录。
+function scanCoverage(scan, containerId, { noun = '产品', key = 'product' } = {}) {
   const parts = [];
   if (scan.complete && !scan.foreign.count) {
     parts.push(`可见 ${scan.total} 条，已扫 ${scan.scanned} 条`);
@@ -570,7 +582,7 @@ function scanCoverage(scan, productId) {
   }
   if (scan.foreign.count) {
     parts.push(
-      `禅道返回的 ${scan.foreign.count} 条记录 product 字段是 ${scan.foreign.products.join('/')}，不属于产品 ${productId}，已丢弃`
+      `禅道返回的 ${scan.foreign.count} 条记录 ${key} 字段是 ${scan.foreign.values.join('/')}，不属于${noun} ${containerId}，已丢弃`
     );
   }
   if (!scan.complete) parts.push('覆盖不完整');
@@ -578,12 +590,12 @@ function scanCoverage(scan, productId) {
 }
 
 // 表头说清范围：「产品 101 可见 25 条，已扫 25 条，筛选后 15 条，只列前 10 条」
-function printList(label, productId, scan, rows, limit) {
-  const parts = [scanCoverage(scan, productId)];
+function printList(label, containerNoun, containerId, scan, rows, limit, scopeKey = 'product') {
+  const parts = [scanCoverage(scan, containerId, { noun: containerNoun, key: scopeKey })];
   if (rows.length !== scan.scanned) parts.push(`筛选后 ${rows.length} 条`);
   const shown = rows.slice(0, limit);
   if (shown.length < rows.length) parts.push(`只列前 ${shown.length} 条`);
-  out(`# ${label}（产品 ${productId} ${parts.join('，')}）`);
+  out(`# ${label}（${containerNoun} ${containerId} ${parts.join('，')}）`);
   for (const row of shown) out(row.join('\t'));
 }
 
@@ -598,6 +610,7 @@ async function cmdBugs(env, opts) {
   );
   printList(
     '缺陷',
+    '产品',
     productId,
     scan,
     scan.rows.map((bug) => [cell(bug.id), cell(bug.title), cell(bug.status), assignee(bug.assignedTo), `${cell(bug.severity)}/${cell(bug.pri)}`]),
@@ -615,10 +628,39 @@ async function cmdFeedbacks(env, opts) {
   );
   printList(
     '反馈',
+    '产品',
     productId,
     scan,
     scan.rows.map((feedback) => [cell(feedback.id), cell(feedback.title), cell(feedback.status), assignee(feedback.assignedTo)]),
     limit
+  );
+}
+
+// 项目问题列表：按项目取（问题只挂在项目下，没有产品维度）
+async function cmdIssues(env, opts) {
+  const projectId = projectIdOf(opts, 'issues');
+  const limit = listLimitOf(opts);
+  const scan = await runListScan(
+    ['issue', 'project-issues', '--project-id', projectId, '--fields', ISSUE_LIST_FIELDS, ...listFilterArgs(opts)],
+    projectId,
+    env,
+    'project'
+  );
+  printList(
+    '项目问题',
+    '项目',
+    projectId,
+    scan,
+    scan.rows.map((issue) => [
+      cell(issue.id),
+      cell(issue.title),
+      cell(issue.status),
+      assignee(issue.assignedTo),
+      cell(issue.type),
+      `${cell(issue.severity)}/${cell(issue.pri)}`,
+    ]),
+    limit,
+    'project'
   );
 }
 
@@ -726,14 +768,45 @@ async function cmdFeedback(env, opts) {
   );
 }
 
+// 项目问题详情：一行 JSON（状态、负责人、提出人、类型、严重程度、优先级、计划解决日期、正文）
+async function cmdIssue(env, opts) {
+  const id = recordIdOf(opts, 'issue');
+  const baseline = baselineOf(opts);
+  const { data } = await runCli(['issue', 'get', id, '--fields', ISSUE_DETAIL_FIELDS], env);
+  const issue = data && typeof data === 'object' ? data : {};
+  out(
+    JSON.stringify({
+      ok: true,
+      kind: 'issue',
+      id: issue.id ?? Number(id),
+      project: issue.project ?? 0,
+      execution: issue.execution ?? 0,
+      title: issue.title ?? '',
+      status: issue.status ?? '',
+      type: issue.type ?? '',
+      severity: issue.severity ?? '',
+      pri: issue.pri ?? '',
+      assignee: issue.assignedTo ?? '',
+      owner: issue.owner ?? '',
+      deadline: issue.deadline ?? '',
+      createdBy: issue.createdBy ?? '',
+      createdDate: issue.createdDate ?? '',
+      body: stripTags(issue.desc),
+      actions: actionViews(issue.actions, baseline),
+    })
+  );
+}
+
 // 子命令 → 处理函数 + 它认的选项。写错选项要报用法，不能悄悄按默认值跑
 const COMMANDS = {
   products: { run: cmdProducts, options: [] },
   projects: { run: cmdProjects, options: ['product'] },
   bugs: { run: cmdBugs, options: ['product', 'status', 'match', 'limit'] },
   feedbacks: { run: cmdFeedbacks, options: ['product', 'status', 'match', 'limit'] },
+  issues: { run: cmdIssues, options: ['project', 'match', 'limit'] },
   bug: { run: cmdBug, options: ['id', 'baseline-actions'] },
   feedback: { run: cmdFeedback, options: ['id', 'baseline-actions'] },
+  issue: { run: cmdIssue, options: ['id', 'baseline-actions'] },
   qd: { run: cmdQd, options: ['product'] },
 };
 
@@ -837,6 +910,54 @@ function takeFeedbackPayload(file, account) {
   return payload;
 }
 
+// 项目问题的类型枚举（官方 `issue create` 的定义，8 项）
+const ISSUE_TYPES = ['design', 'code', 'performance', 'version', 'storyadd', 'storychanged', 'storyremoved', 'data'];
+
+/**
+ * 取项目问题载荷。account 是当前禅道账号——提出人（owner）要显式写成它：
+ * 问题台账上「谁提的」不能空着。项目字段按官方 `issue create` 叫 objectID，也接受 project。
+ */
+function takeIssuePayload(file, account) {
+  const payload = readPayloadObject(file, '项目问题');
+  if (payload.project !== undefined && payload.objectID === undefined) payload.objectID = payload.project;
+  delete payload.project;
+
+  const missing = [];
+  if (!(Number(payload.objectID) > 0)) missing.push('objectID');
+  if (!String(payload.title ?? '').trim()) missing.push('title');
+  if (!String(payload.type ?? '').trim()) missing.push('type');
+  if (payload.severity === undefined || payload.severity === null || payload.severity === '') missing.push('severity');
+  if (missing.length) throw new Error(`载荷缺必填字段：${missing.join('、')}`);
+
+  payload.objectID = Number(payload.objectID);
+  payload.type = String(payload.type).trim();
+  if (!ISSUE_TYPES.includes(payload.type)) {
+    throw new Error(`载荷的 type「${payload.type}」不合法：合法值是 ${ISSUE_TYPES.join(' / ')}`);
+  }
+  // 严重程度与优先级是 1-4 的整数；CLI 不认字符串
+  for (const key of ['severity', 'pri']) {
+    if (payload[key] === undefined || payload[key] === null || payload[key] === '') continue;
+    const value = Number(payload[key]);
+    if (!Number.isInteger(value) || value < 1 || value > 4) throw new Error(`载荷的 ${key} 要写 1-4 的整数`);
+    payload[key] = value;
+  }
+  if (payload.pri === undefined) payload.pri = 3;
+  // 来源固定 0（直接创建）；提出人固定为当前账号，不写别人
+  payload.from = 0;
+  if (payload.execution !== undefined && payload.execution !== null && payload.execution !== '') {
+    const execution = Number(payload.execution);
+    if (!Number.isInteger(execution) || execution <= 0) throw new Error('载荷的 execution 要写执行 ID（正整数）');
+    payload.execution = execution;
+  } else {
+    delete payload.execution;
+  }
+  // 不指派：这个字段不写，由禅道按项目默认处理；用户点名才写
+  if (payload.assignedTo === undefined || payload.assignedTo === null || payload.assignedTo === '') delete payload.assignedTo;
+  if (payload.deadline === undefined || payload.deadline === null || payload.deadline === '') delete payload.deadline;
+  payload.owner = account;
+  return payload;
+}
+
 /** 本机偏好（默认负责人、默认产品）：只对本机生效，不进技能包。 */
 function loadLocalPreferences(env) {
   const base = process.platform === 'win32'
@@ -928,10 +1049,56 @@ function feedbackMismatches(payload, feedback) {
   return mismatches;
 }
 
+/**
+ * 回读核对（项目问题）：项目、标题、类型、严重程度、描述、创建者（当前账号）。
+ * 项目问题没有 openedBy，创建者字段是 createdBy；actions 存在时按「本次新增的创建」核对，
+ * CLI 0.4.4 不返回 actions 时改用 createdBy + createdDate。
+ */
+function issueMismatches(payload, issue, account) {
+  const mismatches = [];
+  if (Number(issue.project) !== Number(payload.objectID)) mismatches.push('项目');
+  if (String(issue.title ?? '').trim() !== String(payload.title).trim()) mismatches.push('标题');
+  if (String(issue.type ?? '').trim() !== String(payload.type).trim()) mismatches.push('类型');
+  if (String(issue.severity ?? '').trim() !== String(payload.severity).trim()) mismatches.push('严重程度');
+  if (payload.desc !== undefined && normalizeBody(issue.desc, 'issue') !== normalizeBody(payload.desc, 'issue')) {
+    mismatches.push('描述');
+  }
+  const creator = String(issue.createdBy ?? '').trim();
+  if (!creator) mismatches.push('创建者字段（createdBy）');
+  else if (account && creator !== account) mismatches.push('创建者');
+  const actions = Array.isArray(issue.actions) ? issue.actions : null;
+  if (actions) {
+    if (!actions.some((action) => String(action?.action) === 'opened')) mismatches.push('操作流水里本次新增的「创建」');
+  } else if (!String(issue.createdDate ?? '').trim()) {
+    mismatches.push('创建时间（createdDate）');
+  }
+  return mismatches;
+}
+
 // 交付时要给完整直达链接；站点地址读不到就不给链接，也不编一个
 function recordLink(env, path, id) {
   const site = String(env.ZENTAO_URL || '').replace(/\/+$/, '');
   return site ? `${site}/${path}-${id}.html` : null;
+}
+
+/** 建项目问题成功的交付要素：编号、所属项目、标题、类型、严重程度、状态、提出人、直达链接。 */
+function emitIssue(issue, env, verified) {
+  out(
+    JSON.stringify({
+      ok: true,
+      kind: 'issue',
+      id: Number(issue.id),
+      project: issue.project ?? 0,
+      title: issue.title ?? '',
+      type: issue.type ?? '',
+      severity: issue.severity ?? '',
+      status: issue.status ?? '',
+      owner: String(issue.owner ?? ''),
+      createdBy: String(issue.createdBy ?? ''),
+      url: recordLink(env, 'issue-view', issue.id),
+      verified,
+    }),
+  );
 }
 
 /** 建缺陷单成功的交付要素：编号、标题、状态、负责人及其来源、提交人、直达链接。 */
@@ -976,56 +1143,88 @@ function emitFeedback(feedback, account, env, verified) {
 }
 
 /**
- * 两种单据在**建单**上的差异全在这张表里，流水线（基线 → 只发一次 → 不确定先查 → 回读 → 核对 → 交付）
+ * 三种单据在**建单**上的差异全在这张表里，流水线（基线 → 只发一次 → 不确定先查 → 回读 → 核对 → 交付）
  * 只有一份，与更新路径的 UPDATE_KINDS 同一写法。
+ * 归属容器：缺陷单与反馈单挂产品（product），项目问题挂项目（project）。
  */
 const CREATE_KINDS = {
   bug: {
     noun: '缺陷',
+    containerNoun: '产品',
+    containerKey: 'product',
     usage: 'node zentao.mjs bug-create --payload-file <路径>（文件里放缺陷单的请求体）',
     prepare: () => ({}),
     takePayload: (file) => takeBugPayload(file),
     adjust: (payload, env) => ({ assigneeSource: resolveBugAssignee(payload, env) }),
-    productOf: (payload) => payload.productID,
+    containerOf: (payload) => payload.productID,
     listArgs: (product) => ['bug', 'list', '--scope', 'products', '--scope-id', String(product), '--fields', 'id,product'],
     createArgs: (file) => ['bug', 'create', '--data', `@${file}`],
     recordOf: (created) => created.data?.bug ?? created.data,
     readArgs: (id) => ['bug', 'get', String(id), '--fields', BUG_READBACK_FIELDS],
     mismatches: (payload, record) => bugMismatches(payload, record),
+    mismatchNotes: {
+      '创建者字段（openedBy）': '（本实例的创建者字段名可能与 openedBy 不同，不要猜哪个字段是提交人）',
+    },
     emit: (record, ctx, env, verified) => emitBug(record, ctx.assigneeSource, env, verified),
   },
   feedback: {
     noun: '反馈',
+    containerNoun: '产品',
+    containerKey: 'product',
     usage: 'node zentao.mjs feedback-create --payload-file <路径>（文件里放反馈单的请求体）',
     // 反馈者要显式记成本人账号：拿不到当前账号就谈不上「谁提的」
     prepare: (env) => ({ account: requireAccount(env) }),
     takePayload: (file, ctx) => takeFeedbackPayload(file, ctx.account),
     adjust: () => ({}),
-    productOf: (payload) => payload.product,
+    containerOf: (payload) => payload.product,
     listArgs: (product) => ['feedback', 'list', '--product-id', String(product), '--fields', 'id,product'],
     createArgs: (file) => ['feedback', 'create', '--data', `@${file}`],
     recordOf: (created) => created.data?.feedback ?? created.data,
     readArgs: (id) => ['feedback', 'get', String(id), '--fields', FEEDBACK_READBACK_FIELDS],
     mismatches: (payload, record) => feedbackMismatches(payload, record),
+    mismatchNotes: {
+      '创建者字段（openedBy）': '（本实例的创建者字段名可能与 openedBy 不同，不要猜哪个字段是提交人）',
+    },
     emit: (record, ctx, env, verified) => emitFeedback(record, ctx.account, env, verified),
+  },
+  issue: {
+    noun: '项目问题',
+    containerNoun: '项目',
+    containerKey: 'project',
+    usage: 'node zentao.mjs issue-create --payload-file <路径>（文件里放项目问题的请求体）',
+    // 提出人要显式记成本人账号：问题台账上「谁提的」不能空着
+    prepare: (env) => ({ account: requireAccount(env) }),
+    takePayload: (file, ctx) => takeIssuePayload(file, ctx.account),
+    adjust: () => ({}),
+    containerOf: (payload) => payload.objectID,
+    listArgs: (project) => ['issue', 'project-issues', '--project-id', String(project), '--fields', 'id,project'],
+    createArgs: (file) => ['issue', 'create', '--data', `@${file}`],
+    recordOf: (created) => created.data?.issue ?? created.data,
+    readArgs: (id) => ['issue', 'get', String(id), '--fields', ISSUE_READBACK_FIELDS],
+    mismatches: (payload, record, ctx) => issueMismatches(payload, record, ctx.account),
+    mismatchNotes: {
+      '创建者字段（createdBy）': '（本实例的项目问题创建者字段名可能与 createdBy 不同，不要猜哪个字段是提出人）',
+    },
+    emit: (record, ctx, env, verified) => emitIssue(record, env, verified),
   },
 };
 
-/** 反馈单必须先有当前禅道账号：反馈者要显式记成本人账号。 */
+/** 建反馈单与项目问题都必须先有当前禅道账号：反馈者 / 提出人要显式记成本人账号。 */
 function requireAccount(env) {
   const account = String(env.ZENTAO_ACCOUNT || '').trim();
   if (!account) {
-    throw new Error('拿不到当前禅道账号：反馈单的反馈者要显式记成本人账号，请在本机凭据文件里写上 ZENTAO_ACCOUNT。');
+    throw new Error('拿不到当前禅道账号：单据的反馈者 / 提出人要显式记成本人账号，请在本机凭据文件里写上 ZENTAO_ACCOUNT。');
   }
   return account;
 }
 
 /**
- * 某产品下这类单据的编号：写入前拍的基线，也是结果不确定时找新记录的范围。
+ * 某产品 / 项目下这类单据的编号：写入前拍的基线，也是结果不确定时找新记录的范围。
  * 扫不全时（服务端分页不前进，只读到第 1 页）一并交代：这种基线不能当完整依据。
  */
-async function idsOf(kindName, product, env) {
-  const scan = await runListScan(CREATE_KINDS[kindName].listArgs(product), product, env);
+async function idsOf(kindName, container, env) {
+  const kind = CREATE_KINDS[kindName];
+  const scan = await runListScan(kind.listArgs(container), container, env, kind.containerKey);
   return { ...scan, ids: scan.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id)) };
 }
 
@@ -1037,11 +1236,9 @@ async function readRecord(kindName, id, env) {
 
 /** 单据写进去了但回读对不上：不重建，把现状交回终端用户。 */
 function reportCreateMismatches(kindName, id, mismatches) {
-  const { noun } = CREATE_KINDS[kindName];
-  // 反馈单的创建者字段名可能与实例不一致：取不到就如实报告，不猜哪个字段是提交人
-  const note = mismatches.includes('创建者字段（openedBy）')
-    ? '（本实例的创建者字段名可能与 openedBy 不同，不要猜哪个字段是提交人）'
-    : '';
+  const { noun, mismatchNotes = {} } = CREATE_KINDS[kindName];
+  // 创建者字段名可能与实例不一致：取不到就如实报告，不猜哪个字段是提交人 / 提出人
+  const note = mismatches.map((item) => mismatchNotes[item] || '').join('');
   const message = `回读核对没通过（${noun} #${id} 已经写入）：${mismatches.join('、')}与载荷不一致${note}。不要重建，先把单据现状告诉终端用户。`;
   process.stderr.write(`错误：${message}\n`);
   out(JSON.stringify({ ok: false, kind: kindName, id, created: true, mismatches, message }));
@@ -1056,16 +1253,16 @@ function reportCreateUncertain(kindName, message, extra = {}) {
 }
 
 /**
- * 结果不确定（超时 / 断连 / 读不懂响应）时，先查该产品这类单据的列表，只认
+ * 结果不确定（超时 / 断连 / 读不懂响应）时，先查该产品 / 项目这类单据的列表，只认
  * 「查重基线之外 + 唯一 + 回读完全一致」的那条；认不准就报未确认。
  * 基线本身不完整（只读到第 1 页）时这条判据不成立：直接报未确认，不拿不完整的扫描当依据。
  */
 async function confirmCreateByQuery(kindName, env, payload, ctx, baseline, why) {
   const kind = CREATE_KINDS[kindName];
-  const product = kind.productOf(payload);
+  const container = kind.containerOf(payload);
   if (!baseline.complete || baseline.foreign.count) {
     const coverage = baseline.complete
-      ? `有 ${baseline.foreign.count} 条记录 product 字段是 ${baseline.foreign.products.join('/')}、不属于产品 ${product}，已丢弃`
+      ? `有 ${baseline.foreign.count} 条记录 ${kind.containerKey} 字段是 ${baseline.foreign.values.join('/')}、不属于${kind.containerNoun} ${container}，已丢弃`
       : `${baseline.reason}，只扫到 ${baseline.ids.length} 条`;
     reportCreateUncertain(
       kindName,
@@ -1076,17 +1273,17 @@ async function confirmCreateByQuery(kindName, env, payload, ctx, baseline, why) 
   }
   let scan;
   try {
-    scan = await idsOf(kindName, product, env);
+    scan = await idsOf(kindName, container, env);
   } catch (err) {
     reportCreateUncertain(
       kindName,
-      `${why}；重查产品 ${product} 的${kind.noun}列表也失败（${err?.message || err}），这条${kind.noun}是否建成都未确认。不要重发。`,
+      `${why}；重查${kind.containerNoun} ${container} 的${kind.noun}列表也失败（${err?.message || err}），这条${kind.noun}是否建成都未确认。不要重发。`,
     );
     return;
   }
   if (!scan.complete || scan.foreign.count) {
     const coverage = scan.complete
-      ? `有 ${scan.foreign.count} 条记录不属于产品 ${product}，已丢弃`
+      ? `有 ${scan.foreign.count} 条记录不属于${kind.containerNoun} ${container}，已丢弃`
       : `${scan.reason}，只扫到 ${scan.ids.length} 条`;
     reportCreateUncertain(
       kindName,
@@ -1105,7 +1302,7 @@ async function confirmCreateByQuery(kindName, env, payload, ctx, baseline, why) 
     } catch {
       continue;
     }
-    if (kind.mismatches(payload, record).length === 0) matched.push(record);
+    if (kind.mismatches(payload, record, ctx).length === 0) matched.push(record);
   }
   if (matched.length === 1) {
     kind.emit(matched[0], ctx, env, 'query');
@@ -1121,16 +1318,16 @@ async function confirmCreateByQuery(kindName, env, payload, ctx, baseline, why) 
   }
   reportCreateUncertain(
     kindName,
-    `${why}；重查产品 ${product} 也没找到与载荷一致的新记录，这条${kind.noun}是否建成未确认。不要重发，先向终端用户核实。`,
+    `${why}；重查${kind.containerNoun} ${container} 也没找到与载荷一致的新记录，这条${kind.noun}是否建成未确认。不要重发，先向终端用户核实。`,
     { id: null, candidates: [] },
   );
 }
 
 /**
  * 建单：载荷落文件 → 拍查重基线 → 只发一次创建 → 按返回编号回读核对 → 交付。
- * 缺陷单与反馈单的差异在 CREATE_KINDS 里，流水线只有这一份。
+ * 三种单据的差异在 CREATE_KINDS 里，流水线只有这一份。
  *
- * 载荷文件由调用方给：读完会把生效载荷（负责人 / 反馈者）写回同一个文件交给 CLI，
+ * 载荷文件由调用方给：读完会把生效载荷（负责人 / 反馈者 / 提出人）写回同一个文件交给 CLI，
  * 结束时删掉（正文不留在磁盘上）。
  */
 async function cmdCreate(kindName, env, opts) {
@@ -1142,15 +1339,15 @@ async function cmdCreate(kindName, env, opts) {
   Object.assign(ctx, kind.adjust(payload, env));
   // 补上生效值的载荷写回同一个临时文件：交给 CLI 的永远是文件，正文不进命令行参数
   fs.writeFileSync(file, JSON.stringify(payload), { mode: 0o600 });
-  const product = kind.productOf(payload);
+  const container = kind.containerOf(payload);
 
   try {
     // 写入前拍一次查重基线：结果不确定时，只有基线之外的编号才可能是本次新建的
     let baseline;
     try {
-      baseline = await idsOf(kindName, product, env);
+      baseline = await idsOf(kindName, container, env);
     } catch (err) {
-      throw new Error(`读不到产品 ${product} 的${kind.noun}列表，没敢建单（先确认产品与权限）：${err?.message || err}`);
+      throw new Error(`读不到${kind.containerNoun} ${container} 的${kind.noun}列表，没敢建单（先确认${kind.containerNoun}与权限）：${err?.message || err}`);
     }
 
     let created;
@@ -1175,7 +1372,7 @@ async function cmdCreate(kindName, env, opts) {
       await confirmCreateByQuery(kindName, env, payload, ctx, baseline, `按返回的 #${id} 回读失败（${err.message}）`);
       return;
     }
-    const mismatches = kind.mismatches(payload, record);
+    const mismatches = kind.mismatches(payload, record, ctx);
     if (mismatches.length) {
       reportCreateMismatches(kindName, id, mismatches);
       return;
@@ -1191,6 +1388,7 @@ async function cmdCreate(kindName, env, opts) {
 Object.assign(COMMANDS, {
   'bug-create': { run: (env, opts) => cmdCreate('bug', env, opts), options: ['payload-file'] },
   'feedback-create': { run: (env, opts) => cmdCreate('feedback', env, opts), options: ['payload-file'] },
+  'issue-create': { run: (env, opts) => cmdCreate('issue', env, opts), options: ['payload-file'] },
 });
 // ----- 更新、流转与批量编辑 -----
 
@@ -2543,32 +2741,63 @@ Object.assign(COMMANDS, {
 // ===== 查重子命令 =====
 
 // 查重只投影这几个字段：候选要列编号、标题、状态、负责人，正文不进上下文；
-// product 也取来，用于归属校验（回退取回的记录可能不是这个产品的）
+// product / project 也取来，用于归属校验（回退取回的记录可能不属于请求的产品 / 项目）
 const DUP_LIST_FIELDS = 'id,title,status,assignedTo,product';
-// 候选最多列多少行：候选是给人挑的，列太多挑不动
 const DUP_CANDIDATE_LIMIT = 10;
+
+// 三类单据的查重差异：挂产品还是挂项目、列表命令与投影字段
+const DUP_KINDS = {
+  bug: {
+    label: '缺陷',
+    unit: '缺陷单',
+    containerNoun: '产品',
+    containerKey: 'product',
+    listArgs: (id) => ['bug', 'list', '--scope', 'products', '--scope-id', id],
+    fields: DUP_LIST_FIELDS,
+  },
+  feedback: {
+    label: '反馈',
+    unit: '反馈单',
+    containerNoun: '产品',
+    containerKey: 'product',
+    listArgs: (id) => ['feedback', 'list', '--product-id', id],
+    fields: DUP_LIST_FIELDS,
+  },
+  issue: {
+    label: '项目问题',
+    unit: '项目问题',
+    containerNoun: '项目',
+    containerKey: 'project',
+    listArgs: (id) => ['issue', 'project-issues', '--project-id', id],
+    fields: 'id,title,status,assignedTo,project',
+  },
+};
 
 // 查重扫描：标题切成关键词变体组，交给禅道 CLI 在客户端匹配（组内=且、组间=或，只在标题里找）。
 // 匹配一律在客户端做——服务端 filters 在当前禅道版本上会被忽略（证据见 issue #13）。
 async function cmdDup(env, opts) {
-  const kind = String(opts.kind ?? '').trim();
-  if (kind !== 'bug' && kind !== 'feedback') {
-    throw usage('node zentao.mjs dup --kind <bug|feedback> --product <产品ID> --title <标题>');
+  const kindName = String(opts.kind ?? '').trim();
+  const kind = DUP_KINDS[kindName];
+  if (!kind) {
+    throw usage('node zentao.mjs dup --kind <bug|feedback|issue> --product <产品ID> --title <标题>（项目问题用 --project <项目ID>，不带 --product）');
   }
-  const productId = productIdOf(opts, 'dup');
+  if (kindName === 'issue' && opts.product !== undefined) {
+    throw usage('dup --kind issue 用 --project <项目ID>，不带 --product');
+  }
+  if (kindName !== 'issue' && opts.project !== undefined) {
+    throw usage(`dup --kind ${kindName} 用 --product <产品ID>，不带 --project`);
+  }
+  const containerId = kindName === 'issue' ? projectIdOf(opts, 'dup') : productIdOf(opts, 'dup');
   const title = String(opts.title ?? '').trim();
-  if (!title) throw usage('node zentao.mjs dup --kind <bug|feedback> --product <产品ID> --title <标题>');
+  if (!title) throw usage(`node zentao.mjs dup --kind ${kindName} --${kind.containerKey} <${kind.containerNoun}ID> --title <标题>`);
 
   const groups = variantGroups(title);
   if (!groups.length) throw usage('--title 里没有可用于查重的关键词');
 
-  const listArgs =
-    kind === 'bug'
-      ? ['bug', 'list', '--scope', 'products', '--scope-id', productId]
-      : ['feedback', 'list', '--product-id', productId];
+  const listArgs = kind.listArgs(containerId);
 
   // 全量扫描：既是候选的来源，也是写入时的查重基线
-  const all = await runListScan([...listArgs, '--fields', DUP_LIST_FIELDS], productId, env);
+  const all = await runListScan([...listArgs, '--fields', kind.fields], containerId, env, kind.containerKey);
   const rows = all.rows;
   const baseline = rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
 
@@ -2576,7 +2805,7 @@ async function cmdDup(env, opts) {
   const searchArgs = [];
   for (const group of groups) searchArgs.push('--search', group);
   searchArgs.push('--search-fields', 'title');
-  const found = await runListScan([...listArgs, '--fields', DUP_LIST_FIELDS, ...searchArgs], productId, env);
+  const found = await runListScan([...listArgs, '--fields', kind.fields, ...searchArgs], containerId, env, kind.containerKey);
   const hits = found.rows;
 
   // 精确度自己把关：CLI 只给候选，覆盖比例不到门槛的丢掉，剩下的按匹配度降序
@@ -2591,8 +2820,8 @@ async function cmdDup(env, opts) {
   // 丢弃的异物记录按基线那次扫描来说（另一次只是同一批记录的检索视图，相加会重复计）
   const foreign = all.foreign;
 
-  const label = kind === 'bug' ? '缺陷' : '反馈';
-  out(`# 查重（产品 ${productId} · ${label}单；标题关键词匹配，客户端完成）`);
+  const { label, unit, containerNoun } = kind;
+  out(`# 查重（${containerNoun} ${containerId} · ${unit}；标题关键词匹配，客户端完成）`);
   for (const { row, score } of candidates.slice(0, DUP_CANDIDATE_LIMIT)) {
     out(
       [cell(row.id), cell(row.title), cell(row.status), assignee(row.assignedTo), `${Math.round(score * 100)}%`].join('\t')
@@ -2600,7 +2829,7 @@ async function cmdDup(env, opts) {
   }
   const hitsNote = `（在标题里命中 ${hits.length} 条）`;
   const droppedNote = foreign.count
-    ? `；另有 ${foreign.count} 条返回记录 product 字段是 ${foreign.products.join('/')}，不属于产品 ${productId}，已丢弃`
+    ? `；另有 ${foreign.count} 条返回记录 ${kind.containerKey} 字段是 ${foreign.values.join('/')}，不属于${containerNoun} ${containerId}，已丢弃`
     : '';
   if (complete && !foreign.count) {
     const scope = candidates.length
@@ -2623,13 +2852,13 @@ async function cmdDup(env, opts) {
   out(
     complete && !foreign.count
       ? `# 基线（本次扫描到的 ${baseline.length} 个单据 ID；基线之外的编号才可能是本次新建）`
-      : `# 基线（本次只扫到 ${baseline.length} 个单据 ID，${complete ? '有记录不属于本产品、' : `${reason}、`}基线不完整；写入后不能用它判断哪些是本次新建）`
+      : `# 基线（本次只扫到 ${baseline.length} 个单据 ID，${complete ? `有记录不属于本${containerNoun}、` : `${reason}、`}基线不完整；写入后不能用它判断哪些是本次新建）`
   );
   out(
     JSON.stringify({
       ok: true,
-      kind,
-      product: Number(productId),
+      kind: kindName,
+      ...(kindName === 'issue' ? { project: Number(containerId) } : { product: Number(containerId) }),
       scanned: rows.length,
       complete: complete && !foreign.count,
       total: all.total,
@@ -2642,7 +2871,7 @@ async function cmdDup(env, opts) {
 
 // 各票的子命令注册放在自己的分区里，免得同改 COMMANDS 字面量
 Object.assign(COMMANDS, {
-  dup: { run: cmdDup, options: ['kind', 'product', 'title'] },
+  dup: { run: cmdDup, options: ['kind', 'product', 'project', 'title'] },
 });
 
 // ---------------------------------------------------------------- 入口
@@ -2658,17 +2887,23 @@ const HELP = `禅道入口脚本（rh-product-feedback）
                                         缺陷列表：全量翻页 + 字段投影 + 客户端筛选，只打表格
   feedbacks --product <产品ID> [--status <状态>] [--match <关键词>] [--limit <条数>]
                                         反馈列表：同上
+  issues --project <项目ID> [--match <关键词>] [--limit <条数>]
+                                        项目问题列表：同上
   bug --id <缺陷ID> [--baseline-actions <动作ID,...>]
                                         缺陷详情：一行 JSON（正文、负责人、流水）
   feedback --id <反馈ID> [--baseline-actions <动作ID,...>]
                                         反馈详情：一行 JSON
+  issue --id <问题ID> [--baseline-actions <动作ID,...>]
+                                        项目问题详情：一行 JSON（状态、负责人、提出人、类型、严重程度、优先级、计划解决日期、正文）
   dup --kind <bug|feedback> --product <产品ID> --title <标题>
+       dup --kind issue --project <项目ID> --title <标题>
                                         查重扫描：列候选，最后一行 JSON 带 baseline
   qd --product <产品ID或名称>            产品 QD：账号、姓名、账号状态（已删除 / 已锁定 / 可用）、最后登录
 
 写（载荷只走文件或非正文短参数；正文与批量均经脚本护栏与写后回读）：
   bug-create --payload-file <路径>                 建缺陷单：只发一次 → 回读核对
   feedback-create --payload-file <路径>            建反馈单：同上
+  issue-create --payload-file <路径>               建项目问题：同上（项目问题挂项目，CLI 没有 update / resolve / close / activate）
   bug-update (--id <ID> | --ids <ID,...>) [--mode <append|edit>] [--payload-file <路径>] [--assigned-to <账号>] [--pri <1-4>] [--severity <1-4>] [--type <类型>] [--project <ID>] [--execution <ID>] [--story <ID>] [--opened-build <版本,...>] [--preview] [--fail-fast]
                                                    更新缺陷单：append 走分隔行追加，edit 走局部更新与 CAS 复核
   feedback-update (--id <ID> | --ids <ID,...>) [--mode <append|edit>] [--payload-file <路径>] [--product <ID>] [--module <ID>] [--type <类型>] [--preview] [--fail-fast]

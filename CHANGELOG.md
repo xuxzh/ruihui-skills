@@ -9,6 +9,18 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 把禅道**项目问题**（`issue`）作为第三种对象纳入技能（[ADR-0025](docs/adr/0025-把项目问题纳入技能作为第三种对象.md)）：`issue-create` 登记（只发一次、按 ID 回读核对项目 / 标题 / 类型 / 严重程度 / 描述 / 创建者）、`issues --project <项目ID>` 列表（客户端筛选与表格输出）、`issue --id <ID>` 详情，`dup --kind issue --project` 按项目标题查重
+- 项目问题沿用同一套护栏：项目必须点名或追问一次（不默认挂任何项目）、`type` 必问（8 项枚举）、`severity` / `pri` 默认 3、`owner` 为当前账号、`assignedTo` 默认不写、草稿带「不是缺陷单」声明行、登记前查重并展示可见范围
+- 路由表加「项目问题」与「项目 bug」辨析；项目问题的流转 / 改字段不开放（CLI 没有 `issue` 的 update / resolve / close / activate），指向禅道网页端
+
+### 变更
+
+- 测试 mock 的实例版本从 `max8.2` 提到 `max8.7`，补齐 `issue` 资源的创建 / 详情 / 项目问题列表；新增 `tests/zentao-cli-issue.mjs`
+- 入口脚本的列表扫描与查重按「归属容器」泛化：缺陷单 / 反馈单挂产品，项目问题挂项目
+- 文档同步：`description` 触发词、快速开始与 README 示例句、CLI 参考的 `issue` 命令面与字段、`workflow.md` 的 F1c、`error-handling.md` 的项目问题条目
+
 ## [0.14.0] - 2026-11-25
 
 ### 新增

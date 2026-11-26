@@ -463,6 +463,21 @@ test('L02 写入闸门缺一不可：缺允许清单时不得写入', { skip: NE
   });
 });
 
+test('L02b 项目问题的写入闸门：项目与项目白名单缺一不可', () => {
+  const base = { ZENTAO_E2E_ALLOW_WRITE: '1' };
+  assert.equal(resolveWriteGate(base, { target: 'project' }).allowed, false);
+  assert.equal(resolveWriteGate({ ...base, ZENTAO_E2E_PROJECT: '11' }, { target: 'project' }).allowed, false);
+  assert.equal(
+    resolveWriteGate({ ...base, ZENTAO_E2E_PROJECT: '11', ZENTAO_E2E_ALLOWED_PROJECTS: '12' }, { target: 'project' }).allowed,
+    false
+  );
+  assert.equal(
+    resolveWriteGate({ ...base, ZENTAO_E2E_PROJECT: '11', ZENTAO_E2E_ALLOWED_PROJECTS: '11,12' }, { target: 'project' })
+      .allowed,
+    true
+  );
+});
+
 test('L03 目标产品不在允许清单：不得写入', { skip: NEEDS_CLI }, async () => {
   await withAssistant({}, async ({ zentao, state }) => {
     const env = { ...LIVE_ENV, ZENTAO_E2E_ALLOWED_PRODUCTS: '102' };

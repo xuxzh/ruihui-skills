@@ -52,7 +52,7 @@ export const MOCK_API_ACCOUNTS = { [MOCK_API_ACCOUNT]: 'mock-secret-passphrase' 
 
 export function createMockApiState(overrides = {}) {
   return {
-    version: 'max8.2',
+    version: 'max8.7',
     // 禅道认可的账号 → 密码
     accounts: { ...MOCK_API_ACCOUNTS },
     // 令牌 → 账号名（令牌由 POST /api.php/v1/tokens 发出）
@@ -64,6 +64,7 @@ export function createMockApiState(overrides = {}) {
     projects: MOCK_API_PROJECTS.map((p) => ({ ...p })),
     bugs: new Map(),
     feedbacks: new Map(),
+    issues: new Map(),
     files: new Map(),
     // 删掉的附件留个底（挂载对象在这），测试好回查图片附件挂在哪张单据上
     deletedFiles: new Map(),
@@ -79,6 +80,7 @@ export function createMockApiState(overrides = {}) {
     bugStepsOnload: false,
     nextBugId: 1900,
     nextFeedbackId: 900,
+    nextIssueId: 2900,
     nextFileId: 1,
     // 服务端收到的每个请求：{ method, path, query, token, body }
     calls: [],
@@ -170,11 +172,12 @@ function productListBody(state, key, items, query, productId) {
 }
 
 // 服务端把产品列表认错了：请求产品 A，回的是产品 B 的记录（记录自己的 product 字段仍是 B）
-function foreignItemsOf(state, kind, productId) {
-  const actual = Number(state.foreignProductLists?.[productId] ?? 0);
-  if (!actual || actual === Number(productId)) return null;
-  const source = kind === 'bugs' ? state.bugs : state.feedbacks;
-  return [...source.values()].filter((record) => Number(record.product) === actual);
+function foreignItemsOf(state, kind, targetId) {
+  const actual = Number(state.foreignProductLists?.[targetId] ?? 0);
+  if (!actual || actual === Number(targetId)) return null;
+  const source = kind === 'bugs' ? state.bugs : kind === 'issues' ? state.issues : state.feedbacks;
+  const key = kind === 'issues' ? 'project' : 'product';
+  return [...source.values()].filter((record) => Number(record[key]) === actual);
 }
 
 function scenarioOf(title) {
@@ -190,13 +193,16 @@ function now() {
 }
 
 function newRecord(state, account, payload, kind) {
-  const id = kind === 'bug' ? state.nextBugId++ : state.nextFeedbackId++;
+  const id = kind === 'bug' ? state.nextBugId++ : kind === 'issue' ? state.nextIssueId++ : state.nextFeedbackId++;
+  // 项目问题的创建者字段是 createdBy / createdDate，缺陷与反馈是 openedBy / openedDate
+  const identity =
+    kind === 'issue'
+      ? { status: 'open', createdBy: account, createdDate: now() }
+      : { status: 'active', openedBy: account, openedDate: now() };
   return {
     id,
     title: String(payload.title || ''),
-    status: 'active',
-    openedBy: account,
-    openedDate: now(),
+    ...identity,
     assignedTo: '',
     ...(state.omitActions
       ? {}
@@ -264,6 +270,31 @@ function createFeedback(state, account, payload) {
     desc: String(payload.desc || ''),
     type: String(payload.type || ''),
     feedbackBy: String(payload.feedbackBy || ''),
+  };
+  if (marker === '__ALTERED_DESC__') record.desc = '服务端改写过的正文';
+  if (marker === '__NOOP__' || state.noopWrites) return { record, persist: false };
+  if (marker === '__TIMEOUT__') return { record, persist: true, hang: true };
+  return createdResult(state, record);
+}
+
+function createIssue(state, account, payload) {
+  const marker = scenarioOf(payload.title);
+  if (marker === '__FAIL__') return { fail: '『问题名称』不能为空。' };
+  const projectId = Number(payload.objectID || payload.project) || 0;
+  const project = state.projects.find((p) => Number(p.id) === projectId);
+  if (!project) return { fail: '所属项目不存在，或当前账号没有权限。' };
+  const record = {
+    ...newRecord(state, account, payload, 'issue'),
+    project: projectId,
+    title: String(payload.title || ''),
+    type: String(payload.type || 'design'),
+    severity: Number(payload.severity || 3),
+    pri: Number(payload.pri || 3),
+    execution: Number(payload.execution || 0),
+    assignedTo: payload.assignedTo === undefined ? '' : String(payload.assignedTo),
+    owner: payload.owner === undefined ? account : String(payload.owner),
+    deadline: payload.deadline ? String(payload.deadline) : '',
+    desc: String(payload.desc || ''),
   };
   if (marker === '__ALTERED_DESC__') record.desc = '服务端改写过的正文';
   if (marker === '__NOOP__' || state.noopWrites) return { record, persist: false };
@@ -547,6 +578,32 @@ function route(state, req, pathname, query, token, payload) {
     if (result.persist) state.feedbacks.set(result.record.id, result.record);
     if (result.hang) return { hang: true };
     return { body: { feedback: result.record } };
+  }
+
+  m = pathname.match(/^\/api\.php\/v2\/projects\/(\d+)\/issues$/);
+  if (req.method === 'GET' && m) {
+    const project = Number(m[1]);
+    const own = [...state.issues.values()].filter((i) => Number(i.project) === project);
+    const items = foreignItemsOf(state, 'issues', project) ?? own;
+    return { body: listBody('issues', items, query) };
+  }
+
+  if (req.method === 'GET' && pathname === '/api.php/v2/issues') {
+    return { body: listBody('issues', [...state.issues.values()], query) };
+  }
+
+  m = pathname.match(/^\/api\.php\/v2\/issues\/(\d+)$/);
+  if (m) {
+    const record = state.issues.get(Number(m[1]));
+    if (req.method === 'GET') return record ? { body: { issue: record } } : { status: 404, body: { message: '记录不存在' } };
+  }
+
+  if (req.method === 'POST' && pathname === '/api.php/v2/issues') {
+    const result = createIssue(state, account, payload);
+    if (result.fail) return { body: { status: 'fail', message: result.fail } };
+    if (result.persist) state.issues.set(result.record.id, result.record);
+    if (result.hang) return { hang: true };
+    return { body: { issue: result.record } };
   }
 
   if (req.method === 'POST' && pathname === '/api.php/v2/files') {
