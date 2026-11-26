@@ -42,7 +42,7 @@ jobs:
 
       - name: 入口脚本写通道测试
         run: |
-          for f in tests/zentao-cli-bug.mjs tests/zentao-cli-feedback.mjs tests/zentao-cli-append.mjs tests/zentao-cli-lifecycle.mjs tests/zentao-cli-file.mjs; do
+          for f in tests/zentao-cli-bug.mjs tests/zentao-cli-feedback.mjs tests/zentao-cli-issue.mjs tests/zentao-cli-append.mjs tests/zentao-cli-lifecycle.mjs tests/zentao-cli-file.mjs; do
             node --test "$f"
           done
 

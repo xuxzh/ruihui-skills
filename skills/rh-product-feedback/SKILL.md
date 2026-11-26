@@ -1,6 +1,6 @@
 ---
 name: rh-product-feedback
-description: 把自然语言产品反馈落成禅道单据：明确要 Bug 时建正式缺陷单，其余建反馈单；也支持查询进度、补充说明、正文带图，以及缺陷单/反馈单的解决、关闭、激活与字段编辑（含批量）。禅道连不上时，能引导你在当前宿主里完成接入与认证。触发场景：「提 Bug / 报缺陷 / 页面报错 / 复现步骤是…」「提需求 / 提建议 / 提交反馈」「查反馈 / 查缺陷 / 看反馈到哪了 / 补充反馈信息」「把缺陷 1936 标记已解决 / 关闭 / 重新激活」「批量把这些 bug 指给张三 / 改优先级」「帮我装禅道 / 连不上禅道」「帮我重装 / 更新一下技能」，或 report a bug、file a feature request、check feedback status、connect zentao；斜杠命令 `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）走安装模式。
+description: 把自然语言产品反馈落成禅道单据：明确要 Bug 时建正式缺陷单，其余建反馈单；项目推进中的障碍、需求变更、环境依赖可登记为项目问题；也支持查询进度、补充说明、正文带图，以及缺陷单/反馈单的解决、关闭、激活与字段编辑（含批量）。禅道连不上时，能引导你在当前宿主里完成接入与认证。触发场景：「提 Bug / 报缺陷 / 页面报错 / 复现步骤是…」「提需求 / 提建议 / 提交反馈」「登记项目问题 / 项目有问题要记 / 给某项目提个问题」「查反馈 / 查缺陷 / 查项目问题 / 看反馈到哪了 / 补充反馈信息」「把缺陷 1936 标记已解决 / 关闭 / 重新激活」「批量把这些 bug 指给张三 / 改优先级」「帮我装禅道 / 连不上禅道」「帮我重装 / 更新一下技能」，或 report a bug、file a feature request、check feedback status、log a project issue、connect zentao；斜杠命令 `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）走安装模式。
 compatibility: 需要本机 Node.js 18+ 与官方禅道 CLI（npm 包 zentao-cli，固定版本记在 config.local.json 的 zentaoCli），以及本人的禅道账号凭据（见 references/setup.md）。本机没有 Node.js 时由当前 Agent 装（优先用机器上已有的版本管理器，见 setup.md）。
 metadata:
   rh-version: "0.14.0"
@@ -9,7 +9,7 @@ metadata:
 
 # rh-product-feedback
 
-把终端用户说出的问题落成禅道里的**单据**，并支持查询、进度解释、补充说明与受控的生命周期流转：明确要 **Bug / 缺陷** → **缺陷单**（禅道 `bug` 对象，正式单据，进开发流程）；其余（反馈、需求、建议、说不清是不是 bug）→ **反馈单**（禅道 `feedback` 对象，不进开发流程）。两条路径并存，走缺陷单时**不附带建反馈单**（禅道没有「反馈转缺陷」的关联字段，两张单会变成同一件事的两份记录）。
+把终端用户说出的问题落成禅道里的**单据**，并支持查询、进度解释、补充说明与受控的生命周期流转：明确要 **Bug / 缺陷** → **缺陷单**（禅道 `bug` 对象，正式单据，进开发流程）；项目推进中的障碍、需求变更、环境依赖 → **项目问题**（禅道 `issue` 对象，挂在项目下，不进产品的开发流程）；其余（反馈、需求、建议、说不清是不是 bug）→ **反馈单**（禅道 `feedback` 对象，不进开发流程）。三条路径并存，一次诉求只落一张单；走缺陷单时**不附带建反馈单**（禅道没有「反馈转缺陷」的关联字段，两张单会变成同一件事的两份记录）。
 
 禅道 CLI 的命令、字段、枚举与错误码以实测为准 → [references/zentao-cli.md](references/zentao-cli.md)。本文件只留路由、写单据的主干与硬约束；模板、话术、错误处理按需下钻。
 
@@ -21,8 +21,8 @@ metadata:
 
 | 现在要做的事 | 读 |
 | --- | --- |
-| 提反馈单 | 本文件 + [references/feedback-templates.md](references/feedback-templates.md) |
-| 提缺陷单 | 本文件 + [references/bug-templates.md](references/bug-templates.md) |
+| 提反馈单 / 提缺陷单 | 本文件 + [references/feedback-templates.md](references/feedback-templates.md) / [references/bug-templates.md](references/bug-templates.md) |
+| 登记项目问题 | 本文件 + [references/workflow.md](references/workflow.md) 的 F1c |
 | 解决 / 关闭 / 激活单据、改派、改字段、批量操作 | 本文件 + [references/lifecycle.md](references/lifecycle.md) |
 | 拿话术、输出样例 | [references/workflow.md](references/workflow.md) |
 | 装技能 / 装禅道 CLI / 连不上禅道 / 改默认产品 | [references/setup.md](references/setup.md) |
@@ -61,7 +61,7 @@ node <技能目录>/scripts/zentao.mjs bug-update --ids 1936,1937 --assigned-to 
 
 ## 0. 会话第一步：接入自检
 
-1. **脚本能连上吗**：跑一次 `node <技能目录>/scripts/zentao.mjs products`。成功 → 打印出来的**当前账号可见的产品就是后续选品范围**（选产品、查重、建单都只能落在这里面），直接进终端用户的诉求。失败 → 按 [references/error-handling.md](references/error-handling.md) 处理，并按 [references/setup.md](references/setup.md)「Agent 执行路径」引导：先看禅道 CLI 装没装，再写本机凭据。**不要**向终端用户索要禅道地址、IP、端口或账号密码。
+1. **脚本能连上吗**：跑一次 `node <技能目录>/scripts/zentao.mjs products`。成功 → 打印出来的**当前账号可见的产品就是后续选品范围**（选产品、查重、建单都只能落在这里面；项目问题按 `projects` 的可见项目选），直接进终端用户的诉求。失败 → 按 [references/error-handling.md](references/error-handling.md) 处理，并按 [references/setup.md](references/setup.md)「Agent 执行路径」引导：先看禅道 CLI 装没装，再写本机凭据。**不要**向终端用户索要禅道地址、IP、端口或账号密码。
 2. **认证由入口脚本做，Agent 不插手**：本机凭据 → 当次禅道令牌 → 经环境变量注入**官方禅道 CLI**，全在 `scripts/zentao.mjs` 进程内完成（见 [references/zentao-cli.md](references/zentao-cli.md)）。Agent 不碰密码与令牌，也不用 curl 调试登录接口。凭据无效时脚本报错并退出非 0 → 按 [references/error-handling.md](references/error-handling.md)「认证失败」处理：让终端用户在自己的**本机页面**里重填（跑 `node <技能目录>/scripts/connect.mjs`，**先把地址单独说给他**，再用 `connect.mjs wait` 等结果——两步别串成一条命令，串起来他就看不到地址了），不要在对话里索要密码；连续失败可能触发禅道锁号，不要反复试。
 3. **禅道 CLI 不在 PATH**：脚本会如实报「找不到 zentao 命令」并退出非 0——照 [references/setup.md](references/setup.md)「Agent 执行路径」第 1 步按技能包钉住的固定版本把它装好（`config.local.json` 的 `zentaoCli.version`），装完校验版本，不要临时改用旧脚本顶替；**本机没有 Node.js 就由 Agent 装**（优先用机器上已有的版本管理器，没有就装官方的，装完让宿主重开），实在装不上时如实告知并给禅道网页端的替代路径，不退回用宿主里的禅道 MCP 工具建单。
 4. **不登记禅道 MCP**：首次接入不需要它（见 [references/setup.md](references/setup.md)「禅道 MCP：只给人手动查看」）。它的身份是**服务端配置的固定身份**，不是提交人自己，所以**只适合无关紧要的查看，不用于建单与更新**；终端用户自己登记过的条目属于他的宿主配置，技能不依赖、也不去改它。**不要为了让两边一致去改技能包里的 `config.local.json`**——那是分发下来的文件，用户没同意不要动。
@@ -74,9 +74,11 @@ node <技能目录>/scripts/zentao.mjs bug-update --ids 1936,1937 --assigned-to 
 | --- | --- | --- |
 | `/rh-product-feedback install`（pi：`/skill:rh-product-feedback install`）「帮我装 / 装禅道 CLI / 配置 / 连接禅道」「禅道连不上」「帮我重装一下」 | 安装或重装，见 [references/setup.md](references/setup.md) | — |
 | 「更新技能」「技能有新版吗」「把 rh-product-feedback 更新一下」「重装一下」 | 重装 / 更新，见 [references/setup.md](references/setup.md) 的「重装 / 更新」——同一段提示词首装和重装都能用，**不要问终端用户现在是哪一版** | — |
-| 「提 bug / 报缺陷 / 页面报错 / 崩溃 / 复现步骤是… / 这个功能报错」 | [写单据](#2-写单据反馈单与缺陷单共用一条主干) | 缺陷单 |
-| 「提需求 / 需要一个功能 / 希望支持…」「提反馈 / 提建议 / 体验不好 / 建议优化…」 | [写单据](#2-写单据反馈单与缺陷单共用一条主干) | 反馈单（类型：需求 / 建议） |
-| 「有个问题 / 不太对劲 / 你看看」 | 追问一次「提反馈单还是直接建缺陷单？」，再进对应流程 | — |
+| 「提 bug / 报缺陷 / 页面报错 / 崩溃 / 复现步骤是… / 这个功能报错」 | [写单据](#2-写单据三种对象共用一套护栏) | 缺陷单 |
+| 「提需求 / 需要一个功能 / 希望支持…」「提反馈 / 提建议 / 体验不好 / 建议优化…」 | [写单据](#2-写单据三种对象共用一套护栏) | 反馈单（类型：需求 / 建议） |
+| 「给 <项目> 登记一个问题 / 项目有问题要记 / 项目推进遇到障碍 / 需求变更要记账」 | [写单据](#2-写单据三种对象共用一套护栏) → [references/workflow.md](references/workflow.md) 的 F1c | 项目问题（挂项目） |
+| 「解决 / 关闭 / 激活项目问题」「改项目问题的字段」 | 说明 CLI 对 `issue` 没有 update / resolve / close / activate，指向禅道网页端；不绕过脚本直调 | — |
+| 「有个问题 / 不太对劲 / 你看看」 | 追问一次「提反馈单、建缺陷单，还是登记项目问题？」，给建议项后再进对应流程 | — |
 | 「反馈 123 什么状态 / 缺陷 456 谁在处理 / 到哪了 / 为什么还没排期」 | [查询与解释进度](#4-查询与解释进度) | — |
 | 「再补充一点 / 又复现了一次 / 补上业务场景」 | [补充说明](#5-补充说明与字段编辑) | — |
 | 「把缺陷 456 标记已解决 / 关闭 / 重新激活」「反馈 123 关掉」「改派给某某 / 改优先级」「批量把这几条…」 | [生命周期流转与字段编辑](#5-补充说明与字段编辑) | — |
@@ -86,26 +88,23 @@ node <技能目录>/scripts/zentao.mjs bug-update --ids 1936,1937 --assigned-to 
 
 - 说的是**产品/系统使用中的不便或期望**（「每次查询都要重选筛选条件」）→ 反馈单，类型 `advice`。
 - 说的是**明确的错误现象**（「页面报错」「复现步骤是…」）→ 缺陷单；一句话同时像 Bug 又像需求（「没有这个功能，用起来很难受」）→ 按他表述的**期望**：想要新能力 → 反馈单（类型：需求），现有能力出错 → 缺陷单。
+- 围绕**项目推进**（排期、需求变更、设计待定、环境 / 第三方依赖、数据问题）→ 项目问题，必须挂项目；「项目 bug」是缺陷单挂到项目下，不是项目问题。
 - 明确要改**这个技能本身**（「给这个工具加个记忆功能」）→ 那不是产品反馈，不要在对话里改技能包文件（见硬约束 8），建议他到仓库提 issue。
 
-## 2. 写单据（反馈单与缺陷单共用一条主干）
+## 2. 写单据（三种对象共用一套护栏）
 
 ### 2.1 收集要素
 
-- 必备：标题（一句话说清问题）、所属产品、类型（仅反馈单）、现象或期望、业务场景。
-- 缺陷单追加：复现步骤、实际结果、预期结果；建议追加：现状痛点、期望改进。
+- 必备：标题（一句话说清问题）、所属产品、类型（仅反馈单）、现象或期望、业务场景；缺陷单追加复现步骤、实际结果、预期结果，建议追加现状痛点、期望改进。
 - 只追问真正影响分类、复现或验收的信息，一次问全；终端用户没说的版本号、模块一律不补写，缺什么就在草稿里写「用户未提供」；负责人按「默认负责人」处理（见 2.5）。
-- 追问按模板的「追问格式」呈现（编号、选项字母、建议与理由）：反馈单见 [references/feedback-templates.md](references/feedback-templates.md)，缺陷单见 [references/bug-templates.md](references/bug-templates.md)。
-- 给了截图 → 记下图片文件路径，正文按 [6. 正文带图片](#6-正文带图片) 处理。
+- 追问按模板的「追问格式」呈现（编号、选项字母、建议与理由）：反馈单见 [references/feedback-templates.md](references/feedback-templates.md)，缺陷单见 [references/bug-templates.md](references/bug-templates.md)；给了截图 → 记下图片文件路径，正文按 [6. 正文带图片](#6-正文带图片) 处理。
 - 完成标准：模板里每一项都有内容或明确标注缺失。
 
 **所属产品**只能从第 0 步的可见产品里选，优先级：终端用户这次明说的 > 本机默认产品 > 追问一次；缺陷单还多一层随包默认产品，插在本机默认之后、追问之前，用它建单前要确认一句（规则见 [references/setup.md](references/setup.md)「默认产品」）。终端用户说的产品不在可见范围时，如实说明「你的账号看不到 <产品>，这条单暂时提交不到该产品，请找管理员开权限或换一个」，不报「产品不存在」，也不用默认产品顶替。
 
 ### 2.2 生成草稿
 
-按模板渲染正文。草稿要能独立读懂——终端用户只看草稿就知道禅道里会存下什么。反馈单正文是纯文本 `desc`；缺陷单正文只有一个载体 `steps`，写成结构化 HTML（模板见 [references/bug-templates.md](references/bug-templates.md)「正文模板」）。
-
-草稿一律给终端用户看**纯文本版**（同样的段落转成 Markdown 列表，不要把 HTML 标签甩给用户）。缺陷单的草稿必须包含这一行声明：「即将创建的是禅道正式缺陷单（会进入开发流程），不是反馈单。」缺陷单草稿的**负责人一栏按生效值具名**：生效值是「不指派」就写「未指派」（随包默认如此，不必查 QD）；生效值是产品 QD 就用入口脚本 `qd --product <产品ID>` 查出来，写「`产品 QD：<账号>（<姓名>）`」，该产品没有 QD 写「未指派（该产品没有 QD）」，查不到就如实说查不到——QD 属于运行时事实，不猜、也不写进技能包；终端用户指名就写他的账号。生效值是产品 QD 时由禅道侧指派，草稿写的是「谁来承接」，回读到的 `assignedTo` 才是生效结果，如实转述。
+按模板渲染正文。草稿要能独立读懂——终端用户只看草稿就知道禅道里会存下什么。反馈单正文是纯文本 `desc`；缺陷单正文只有一个载体 `steps`，写成结构化 HTML（模板见 [references/bug-templates.md](references/bug-templates.md)「正文模板」）。草稿一律给终端用户看**纯文本版**（同样的段落转成 Markdown 列表，不要把 HTML 标签甩给用户）。缺陷单的草稿必须包含这一行声明：「即将创建的是禅道正式缺陷单（会进入开发流程），不是反馈单。」缺陷单草稿的**负责人一栏按生效值具名**：生效值是「不指派」就写「未指派」（随包默认如此，不必查 QD）；生效值是产品 QD 就用入口脚本 `qd --product <产品ID>` 查出来，写「`产品 QD：<账号>（<姓名>）`」，该产品没有 QD 写「未指派（该产品没有 QD）」，查不到就如实说查不到——QD 属于运行时事实，不猜、也不写进技能包；终端用户指名就写他的账号。生效值是产品 QD 时由禅道侧指派，草稿写的是「谁来承接」，回读到的 `assignedTo` 才是生效结果，如实转述。
 
 ### 2.3 查重
 
@@ -124,6 +123,7 @@ node <技能目录>/scripts/zentao.mjs bug-update --ids 1936,1937 --assigned-to 
 ```bash
 node <技能目录>/scripts/zentao.mjs feedback-create --payload-file /tmp/rh-zentao-payload.json
 node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-zentao-payload.json
+node <技能目录>/scripts/zentao.mjs issue-create    --payload-file /tmp/rh-zentao-payload.json
 ```
 
 ```json
@@ -132,7 +132,7 @@ node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-ze
 ```
 
 - 缺陷单的 `bug-create` 输出一行 JSON：`{"ok":true,"kind":"bug","id":1945,"title":"…","status":"active","assignedTo":"","assigneeSource":"package","openedBy":"<账号>","url":"<禅道 Web 地址>/bug-view-1945.html","verified":"readback"}`——脚本写完自己按编号回读核对，`verified` 说明结论来自回读（`readback`）还是超时后的查询核实（`query`）；回读对不上 → `ok:false` + `created:true` + `mismatches`，**不要重建**；`uncertain:true` → 按「结果不确定」处理（见 2.6）。
-- **只发一次调用**：脚本只发一次请求；禅道创建接口没有幂等键，重发会产生两条记录。
+- 项目问题的载荷（`objectID` / `title` / `type` / `severity` 等）、草稿声明行与回读见 [references/workflow.md](references/workflow.md) 的 F1c；`owner` 由脚本填当前账号，`type` 必须是 8 项枚举之一。
 - 字段名与枚举见 [references/zentao-cli.md](references/zentao-cli.md)，两条路径的差异见 [3. 反馈单与缺陷单的差异](#3-反馈单与缺陷单的差异)。
 - **缺陷单的负责人按「终端用户明说 > 本机默认 > 随包默认 > 代码兜底」解析**，随包默认是**不指派**（`""`），代码兜底是**产品 QD**。终端用户明说指派给谁 → 载荷写 `assignedTo`；否则**不要写这个字段**，由入口脚本按配置补（`""` 不指派 / `"qd"` 不带该字段、交给产品 QD / 账号名指给该账号）。生效值是产品 QD 时，用 `qd --product <产品ID>` 查承接人（账号、姓名、账号状态），草稿里具名写。配置见 [references/setup.md](references/setup.md)「默认负责人」。
 - **反馈单的字段**：`feedbackBy`（反馈者）**由入口脚本显式填当前禅道账号**——这台实例的禅道**不自动记录反馈者**（实测 `feedbackBy` 恒为空），不显式填就永远没有反馈者；`source` / `module` **不填**；`product` 必须写**整数**（字符串形态会被服务端静默忽略）；`desc` 是**纯文本**描述，不写 HTML 标签。`feedback-create` 同样只发一次、写完自己回读核对（产品、标题、完整正文、反馈者、创建者字段），输出 `feedbackBy` / `openedBy` / `submitterIsCurrentAccount` 与 `verified`，失败形态与缺陷单一致。
@@ -171,11 +171,10 @@ node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-ze
 
 ## 4. 查询与解释进度
 
-- **列单据**（一次拉全量 + 字段投影 + 客户端筛选）：`node <技能目录>/scripts/zentao.mjs bugs --product <产品ID> [--status active] [--match 关键词]`；反馈单把 `bugs` 换成 `feedbacks`。脚本用 `--all` 翻完所有页、只留投影字段、在进程内按 `--status` / `--match` 筛，只打十几行表格（默认 10 条，要更多加 `--limit`），原始 JSON 不进上下文。表头的「可见 N 条」是当前账号在这个产品下能看到的全部，不是第一页。
-- **打开单据**：给了数字 ID → 缺陷 `bug --id <ID>`，反馈 `feedback --id <ID>`，输出**一行 JSON**：`status`（状态）、`assignee`（负责人）、`processor` + `processedDate`（处理人、处理时间）、`resolution`（结论）、`body`（正文：缺陷单已剥掉标签并归一化空白，可与原文逐字比对；图片引用保留成 `<img fileID="N">`，剥标签不丢它）、`actions`（流水），反馈单另有 `reviewer` / `reviewedDate`；关闭与激活相关字段（`closedBy` / `closedDate` / `resolvedBuild` / `closedReason`）也在详情里。只给了标题或产品 → 先用列表的 `--match` 列候选，让他挑编号再打详情。
+- **列单据**（一次拉全量 + 字段投影 + 客户端筛选）：`node <技能目录>/scripts/zentao.mjs bugs --product <产品ID> [--status active] [--match 关键词]`；反馈单把 `bugs` 换成 `feedbacks`，项目问题用 `issues --project <项目ID> [--match 关键词]`（项目问题只挂项目）。脚本用 `--all` 翻完所有页、只留投影字段、在进程内按 `--status` / `--match` 筛，只打十几行表格（默认 10 条，要更多加 `--limit`），原始 JSON 不进上下文。表头的「可见 N 条」是当前账号在这个产品下能看到的全部，不是第一页。
+- **打开单据**：给了数字 ID → 缺陷 `bug --id <ID>`，反馈 `feedback --id <ID>`，项目问题 `issue --id <ID>`，输出**一行 JSON**：`status`（状态）、`assignee`（负责人）、`processor` + `processedDate`（处理人、处理时间）、`resolution`（结论）、`body`（正文：缺陷单已剥掉标签并归一化空白，可与原文逐字比对；图片引用保留成 `<img fileID="N">`，剥标签不丢它）、`actions`（流水），反馈单另有 `reviewer` / `reviewedDate`；关闭与激活相关字段（`closedBy` / `closedDate` / `resolvedBuild` / `closedReason`）也在详情里，项目问题另有 `owner`（提出人）、`type`、`severity` / `pri` 与 `deadline`（计划解决日期）。只给了标题或产品 → 先用列表的 `--match` 列候选，让他挑编号再打详情。
 - **流水**：`actions` 每条有 `action` / `actor` / `date` / `comment`，`changes` 是这条动作的字段级差异（`field` + `from` → `to`，空值写「（空）」）。回读刚写过的那条单据时，把写前读到的动作 ID 传给 `--baseline-actions 19451,19452`，基线之外的动作才带 `"new": true`；不传基线就没有 `new` 字段——分不出来就说分不出来，不要把历史动作说成本次新增。CLI 0.4.4 的详情不返回 `actions` 时，如实说「这个版本取不到流水」，不要编。
-- **三段式解释**，不混写：**事实**（字段与 `actions` 直接给出的东西：谁、何时、把什么改成了什么）→ **推断**（基于事实的判断，每条标注「推断」）→ **无法确定**（禅道里没有的信息）。排期是最常见的坑：`plan` 与 `version` 均为空，只能说「禅道里没有排期记录」，不能写成「产品经理拒绝了需求」——那是推断，且必须写明只是推断。
-- **输出格式**：当前状态 / 负责人 / 处理时间线（`actions` 倒序）/ 结论 / 需要补充的信息。话术与样例见 [references/workflow.md](references/workflow.md) 的 F2 / F3。
+- **三段式解释**，不混写：**事实**（字段与 `actions` 直接给出的东西：谁、何时、把什么改成了什么）→ **推断**（基于事实的判断，每条标注「推断」）→ **无法确定**（禅道里没有的信息）。排期是最常见的坑：`plan` 与 `version` 均为空，只能说「禅道里没有排期记录」，不能写成「产品经理拒绝了需求」——那是推断，且必须写明只是推断。**输出格式**：当前状态 / 负责人 / 处理时间线（`actions` 倒序）/ 结论 / 需要补充的信息；话术与样例见 [references/workflow.md](references/workflow.md) 的 F2 / F3。
 
 ## 5. 补充说明与字段编辑
 
@@ -190,6 +189,8 @@ node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-ze
 **改派、改优先级 / 严重程度 / 类型 / 项目 / 影响版本**走同一个子命令的**编辑模式**（`bug-update --id <ID> --assigned-to <账号> [--pri 1]`），官方 CLI 的 `autoFill` 会用现值补齐未传字段，不覆盖正文与标题；**改标题或改正文**也走编辑模式，载荷必须带 `expectedTitle` / `expectedBody` 做写前复核。反馈单的编辑模式只认 `product` / `module` / `type` 与正文标题（官方 CLI 的 `feedback update` 没有 `assignedTo`，改派走 `feedback-activate`）。
 
 **解决 / 关闭 / 激活**走 `bug-resolve` / `bug-close` / `bug-activate` / `feedback-close` / `feedback-activate`：脚本先校验枚举、日期与数字格式，再预检状态（已 resolved 再 resolve、已 closed 再 close、已 active 再 activate 等冗余操作直接拦下），只发一次写入，写后回读状态与请求字段。
+
+**项目问题只做登记与查询**：CLI 对 `issue` 没有 update / resolve / close / activate；用户要流转或改字段时说明当前技能不开放，指向禅道网页端，不绕过脚本直调。
 
 **批量**（`--ids <ID,...>`，单批最多 20 条）：先跑 `--preview` 把「可执行 / 跳过 / 失败」清单给终端用户看，确认后执行；脚本串行写入并逐条回读，按**成功 / 跳过 / 失败**三栏汇报，失败项不自动重试（可加 `--fail-fast` 在首个失败处中止）。批量仅开放**状态流转**与**非正文统一字段编辑**，不批量改标题或正文。
 
@@ -207,7 +208,7 @@ node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-ze
 
 ## 硬约束
 
-1. **写入前确认按操作分级**：单条可逆流转或非正文元数据微调，且终端用户在指令里**明确给出了数字 ID、动作与全部必填业务参数**（无 AI 推断、无 `confirmClose`）→ 免二次确认直通执行；新建单据、目标 ID 或必填枚举由 AI 推断、`confirmClose`、修改或改写正文 / 标题、批量操作（≥ 2 条）→ **必须先展示草稿 / 清单并等终端用户明确确认**。脚本层的格式校验、状态预检、CAS 复核与回读对所有写入一律生效。**物理删除不开放**（要删单走禅道网页端）；能建就能流转——单据能否流转或改派由当前禅道账号在服务端的权限决定，不绕过。
+1. **写入前确认按操作分级**：单条可逆流转或非正文元数据微调，且终端用户在指令里**明确给出了数字 ID、动作与全部必填业务参数**（无 AI 推断、无 `confirmClose`）→ 免二次确认直通执行；新建单据、目标 ID 或必填枚举由 AI 推断、`confirmClose`、修改或改写正文 / 标题、批量操作（≥ 2 条）→ **必须先展示草稿 / 清单并等终端用户明确确认**。脚本层的格式校验、状态预检、CAS 复核与回读对所有写入一律生效。**物理删除不开放**（要删单走禅道网页端）。缺陷单与反馈单能建就能流转——能否流转或改派由当前禅道账号在服务端的权限决定，不绕过；项目问题第一版只登记与查询，流转与改字段走禅道网页端。
 2. **写只用随包入口脚本**：建单、更新、流转、传图一律走 `scripts/zentao.mjs` 的写子命令（`*-create` / `*-update` / `*-resolve` / `*-close` / `*-activate` / `file-create`），它带当前账号的令牌；宿主里的禅道 MCP 工具是服务端固定身份，不用于写单据。**不要绕过脚本直接调 `zentao` CLI 做写入**——那样就没有预检、CAS 与回读。
 3. **写入后回读**：按 ID 重新读取并核对内容与状态，「保存成功」的文本不作为落库证据；有 `actions` 时再确认本次**新增**了对应动作（CLI 0.4.4 不返回 `actions`，这时以字段与状态对上为准）。
 4. **不确定先查**：超时、连接中断、返回与预期不符时，先查询核实再决定下一步，同一份内容不重复写入——禅道创建无幂等，盲目重试会造重复单。结果不确定时只认「查重基线之外、唯一、回读完全一致」的新记录；认不准或复查不完整就报未确认交回终端用户，不把「没查到」说成「没创建」。**扫描不完整就不算数**：列表带上「服务端分页未向前推进，覆盖不完整」时，说明只扫到了第 1 页——不能把「在这 N 条里未发现重复」说成「没有重复」，也不能拿这种基线判定新建，如实说「查重覆盖不完整、是否新建未确认」，不重发。
@@ -219,9 +220,7 @@ node <技能目录>/scripts/zentao.mjs bug-create      --payload-file /tmp/rh-ze
 ## 参考文件
 
 - [references/setup.md](references/setup.md)：连接禅道、写接入凭据、默认产品、各宿主配置、随包入口脚本、**Agent 执行路径**（连不上或要装时读）。
-- [references/workflow.md](references/workflow.md)：各流程的完整话术与输出样例（F1 提反馈 / F1b 提缺陷 / F2 查询 / F3 解释进度 / F4 补充说明 / F5 带图 / F6 流转与批量）。
+- [references/workflow.md](references/workflow.md)：各流程的完整话术与输出样例（F1 提反馈 / F1b 提缺陷 / F1c 登记项目问题 / F2 查询 / F3 解释进度 / F4 补充说明 / F5 带图 / F6 流转与批量）。
 - [references/lifecycle.md](references/lifecycle.md)：生命周期流转、编辑模式与批量操作的命令面、格式与状态护栏、分级确认规则与输出样例。
-- [references/feedback-templates.md](references/feedback-templates.md)：反馈单的起草与追问模板。
-- [references/bug-templates.md](references/bug-templates.md)：缺陷单的模板、字段默认值与正文结构。
-- [references/zentao-cli.md](references/zentao-cli.md)：禅道 CLI 的命令面、字段与枚举、错误码、版本锁与已知限制。
-- [references/error-handling.md](references/error-handling.md)：错误分类、恢复动作与话术。
+- [references/feedback-templates.md](references/feedback-templates.md) / [references/bug-templates.md](references/bug-templates.md)：反馈单与缺陷单的起草、追问模板、字段默认值与正文结构。
+- [references/zentao-cli.md](references/zentao-cli.md)：禅道 CLI 的命令面、字段与枚举、错误码、版本锁与已知限制；[references/error-handling.md](references/error-handling.md)：错误分类、恢复动作与话术。

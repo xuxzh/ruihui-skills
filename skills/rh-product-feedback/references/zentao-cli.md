@@ -15,7 +15,7 @@
 ## 响应封装与退出码
 
 - 成功：`stdout` 是 `{"ok":true,"data":<data>,"meta":{...}}`。`meta` 含 `returned` / `fetched` / `total` / `hasMore` / `truncated` / `processingScope`。
-- list 的 `data` 是数组（CLI 已按资源键取出：`products` / `projects` / `bugs` / `feedbacks`）；get 与 create 的 `data` 是对象。
+- list 的 `data` 是数组（CLI 已按资源键取出：`products` / `projects` / `bugs` / `feedbacks` / `issues`）；get 与 create 的 `data` 是对象。
 - 失败：`stderr` 是 `{"ok":false,"error":{"code":"1004","message":"..."}}`，退出码非 0。
 - 退出码：`0` 成功、`1` 执行失败、`2` 用法错误、`130` 取消。
 - 服务端业务失败（HTTP 200 + `{"status":"fail","message":...}`）也会变成失败。
@@ -62,9 +62,14 @@
 | `feedback update` | PUT | `/feedbacks/{feedbackID}` | — | 有 |
 | `feedback close` | PUT | `/feedbacks/{feedbackID}/close` | — | 有 |
 | `feedback activate` | PUT | `/feedbacks/{feedbackID}/activate` | — | 有 |
+| `issue list` | GET | `/issues` | 有 | — |
+| `issue project-issues` | GET | `/projects/{projectID}/issues` | 有 | — |
+| `issue execution-issues` | GET | `/executions/{executionID}/issues` | 有 | — |
+| `issue get` | GET | `/issues/{issueID}` | — | — |
+| `issue create` | POST | `/issues` | — | 有 |
 | `file create` | POST | `/files`（multipart/form-data） | — | 有 |
 
-`bug confirm`、`feedback create-bug` / `create-story` 等动作的最低版本是 `max8.5`，在 `max8.2` 实例上会被 CLI 以 `E2010` 拦下，技能不封装。`bug delete` / `feedback delete` 可用但**技能不开放**（物理删除走禅道网页端）。
+`issue` 资源的命令面在实例 8.7 上可用；CLI 对 `issue` **没有** update / resolve / close / activate，技能第一版只做登记与查询，流转与改字段走禅道网页端（物理删除永不开放）。`bug confirm`、`feedback create-bug` / `create-story` 等 max8.5 动作技能不封装。`bug delete` / `feedback delete` 可用但**技能不开放**（物理删除走禅道网页端）。
 
 ## 字段
 
@@ -75,6 +80,8 @@
 - `feedback create`：`product`（整数，必填）、`title`（必填）、`module`、`type`、`desc`（纯文本）、`feedbackBy`（字符串）、`source`。
 - `feedback update`：`feedbackID`、`product`（必填）、`module`、`title`（必填）、`type`、`desc`、`feedbackBy`、`source`——**没有 `assignedTo`**。
 - `feedback close`：`closedReason`（必填，`commented` / `repeat` / `refuse`）、`comment`、`confirmClose`。`feedback activate`：`assignedTo`、`comment`。
+- `issue create`：`objectID`（整数，必填，所属项目）、`title`（必填）、`type`（必填，`design` 设计问题 / `code` 程序缺陷 / `performance` 性能问题 / `version` 版本控制 / `storyadd` 需求新增 / `storychanged` 需求修改 / `storyremoved` 需求删除 / `data` 数据问题）、`severity`（必填，1 严重 / 2 较严重 / 3 较小 / 4 建议）、`pri`（1-4）、`execution`、`assignedTo`、`owner`（提出人）、`deadline`（计划解决日期，命令行旗标是 `--data-deadline`）、`desc`（纯文本）、`from`（0 = 直接创建）。问题只挂项目，没有 `product` 字段。
+- `issue get` / `issue project-issues`：`--fields` 投影；列表分页旗标与缺陷 / 反馈相同（`--all` / `--page` / `--page-size`）。
 - `file create`：`file`（本地路径，必填）、`objectType`（`bug` \| `feedback`，必填）、`objectID`（整数，必填）。
 
 ### `update` 的 autoFill 与 `--ids` 批量
@@ -137,6 +144,7 @@
 - **选品不再有 `prep` 合并调用**：旧查询器的 `prep`（产品 + 项目 + 查重候选一次拿全）随旧通道下线，迁移后改成显式的三个子命令：`products` → `projects --product <id>` → `dup --kind … --product … --title …`。这不是漏做，是拆开让每一步都能单独重试与核对。
 - **正文里的图片引用会被服务端补属性**：落库后 `<img>` 会多出 `onload="setImageSize(this,0)"` 等属性；入口脚本比较正文时只按 `fileID` 归一化图片标签，不比较属性差异，避免把“同一张图”误判成正文不一致。缺陷单的 `steps` 还会被剥标签，剥之前先把图片引用归一成 `<img fileID="N">` 留下——「图片引用落在正文里」在回读投影与逐字比较里都看得见，认不出 `fileID` 的 `<img>` 按普通标签剥掉。
 - **`get` 不返回 `actions`**：CLI 0.4.4 的 `bug get` / `feedback get` 即使 `--fields` 里带 `actions`，返回的 JSON 里也没有这个字段（服务端 API 有流水，CLI 没映射；实测缺陷 1936 与反馈 51）。因此入口脚本的回读策略是：**有 `actions` 字段**时按 `opened` / `edited` 核对；**字段不存在**时，建单用 `openedBy` + `openedDate`，更新用“正文与完整预期正文逐字一致”（写前复核已确认原文不同）。不要要求用户为了流水去换通道或升级 CLI。
+- **项目问题的创建者字段是 `createdBy`**：`issue get` 没有 `openedBy`，创建者看 `createdBy`、创建时间看 `createdDate`；提出人是业务字段 `owner`（入口脚本建单时显式填当前账号）。状态以实例工作流为准（常见 `open` / `assigned` / `resolved` / `closed` / `canceled`），列表 browseType 与缺陷相近（`all` / `open` / `assignto` / `assignby` / `closed` / `resolved` / `canceled`）。
 
 ## 与随包脚本的分工
 

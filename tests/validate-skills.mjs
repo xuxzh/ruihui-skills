@@ -145,6 +145,9 @@ if (!parsed) {
     ['批量上限 20 条', /最多 20 条|≤ 20/],
     ['编辑模式改正文 / 标题带 CAS 复核', /expectedTitle|expectedBody/],
     ['批量先预览再执行', /--preview/],
+    ['项目问题登记走入口脚本并带声明行', /issue-create[\s\S]*不是缺陷单|不是缺陷单[\s\S]*issue-create/],
+    ['项目问题按项目查重', /dup --kind issue --project/],
+    ['项目问题的流转 / 改字段不开放', /CLI 对 `issue` 没有 update/],
   ];
   for (const [label, re] of rules) check(`rh-product-feedback: ${label}`, re.test(all));
 
@@ -241,7 +244,7 @@ if (fs.existsSync(quickStart)) {
 
     // 提单话术必须点名技能（ADR-0023）：宿主只按 description 路由，示例句不点名，
     // Agent 就可能自己调禅道接口建单，跳过查重、写入前确认与写入后回读。
-    for (const sample of ['帮我提个 Bug', '帮我提个需求', '建议保存上次的筛选条件']) {
+    for (const sample of ['帮我提个 Bug', '帮我提个需求', '建议保存上次的筛选条件', '给设备管理项目登记一个问题']) {
       const line = seg.find((l) => l.includes(sample));
       check(
         `快速开始的示例句点名了技能（${sample}）`,
@@ -337,6 +340,7 @@ if (fs.existsSync(readmePath)) {
   const unnamed = readmeSamples.filter((l) => !l.includes('用 rh-product-feedback 技能：'));
   check('README 的示例句都点名了技能', unnamed.length === 0, unnamed.length ? `${unnamed.length} 条没点名` : '');
   check('README 两处示例列表都点名了技能', readmeSamples.length >= 10, `${readmeSamples.length} 条示例`);
+  check('README 的示例句包含项目问题', readmeText.includes('给设备管理项目登记一个问题'));
 
   // README 的两处版本跟技能版本对齐：技能表格里的版本列、「当前版本（vX.Y.Z）」。
   const tableRow = readmeText.split('\n').find((l) => l.startsWith('| [`rh-product-feedback`]'));
@@ -345,6 +349,17 @@ if (fs.existsSync(readmePath)) {
   const currentVersion = readmeText.match(/当前版本（\[?v(\d+\.\d+\.\d+)/)?.[1];
   check('README「当前版本」= rh-version', currentVersion === skillVersion, `${currentVersion} vs ${skillVersion}`);
 }
+
+// 第三种对象（项目问题）的领域文档与 CLI 参考必须同步（ADR-0025）。
+const glossaryPath = path.join(ROOT, 'GLOSSARY.md');
+check(
+  'GLOSSARY 收录「项目问题」',
+  fs.existsSync(glossaryPath) && fs.readFileSync(glossaryPath, 'utf8').includes('**项目问题**')
+);
+check('ADR-0025 存在（项目问题纳入技能）', fs.existsSync(path.join(ROOT, 'docs', 'adr', '0025-把项目问题纳入技能作为第三种对象.md')));
+const cliRefText = fs.readFileSync(path.join(SKILLS_DIR, 'rh-product-feedback', 'references', 'zentao-cli.md'), 'utf8');
+check('CLI 参考写了 issue 命令面', cliRefText.includes('`issue create`') && cliRefText.includes('`issue project-issues`'));
+check('CLI 参考不再写 max8.2 的 E2010 过时限制', !cliRefText.includes('在 `max8.2` 实例上会被 CLI 以 `E2010` 拦下'));
 
 // ---- 4. 更新日志与版本号一致 ------------------------------------------
 // 技能版本只有一处真相（SKILL.md 的 rh-version）：CHANGELOG.md 的最新已发版段落、各段的对比链接都跟它对齐。

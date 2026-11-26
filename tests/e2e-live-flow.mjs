@@ -17,23 +17,45 @@ import { DefectAssistant, FeedbackAssistant, appendDraft } from './skill-flow.mj
 
 export const E2E_MARKER_PREFIX = '[rh-skill-e2e]';
 
-/** 写入闸门：三项条件全部满足才允许写入，否则只读。 */
-export function resolveWriteGate(env = {}) {
+/** 写入闸门：三项条件全部满足才允许写入，否则只读。
+ *  target 为 'project' 时（项目问题以项目为目标）校验项目维度：
+ *  ZENTAO_E2E_PROJECT + ZENTAO_E2E_ALLOWED_PROJECTS 两项缺一不可。
+ */
+export function resolveWriteGate(env = {}, { target = 'product' } = {}) {
   const reasons = [];
   const allowWrite = String(env.ZENTAO_E2E_ALLOW_WRITE || '') === '1';
-  const productId = String(env.ZENTAO_E2E_PRODUCT || '').trim();
-  const allowedProducts = String(env.ZENTAO_E2E_ALLOWED_PRODUCTS || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const isProject = target === 'project';
+  const dimension = isProject
+    ? {
+        label: '项目',
+        id: String(env.ZENTAO_E2E_PROJECT || '').trim(),
+        idEnv: 'ZENTAO_E2E_PROJECT',
+        allowedEnv: 'ZENTAO_E2E_ALLOWED_PROJECTS',
+        allowed: String(env.ZENTAO_E2E_ALLOWED_PROJECTS || '').split(',').map((s) => s.trim()).filter(Boolean),
+      }
+    : {
+        label: '产品',
+        id: String(env.ZENTAO_E2E_PRODUCT || '').trim(),
+        idEnv: 'ZENTAO_E2E_PRODUCT',
+        allowedEnv: 'ZENTAO_E2E_ALLOWED_PRODUCTS',
+        allowed: String(env.ZENTAO_E2E_ALLOWED_PRODUCTS || '').split(',').map((s) => s.trim()).filter(Boolean),
+      };
   if (!allowWrite) reasons.push('未设置 ZENTAO_E2E_ALLOW_WRITE=1');
-  if (!productId) reasons.push('未设置 ZENTAO_E2E_PRODUCT');
-  if (!allowedProducts.length) {
-    reasons.push('未设置 ZENTAO_E2E_ALLOWED_PRODUCTS（允许写入的产品白名单）');
-  } else if (productId && !allowedProducts.includes(productId)) {
-    reasons.push(`产品 #${productId} 不在 ZENTAO_E2E_ALLOWED_PRODUCTS 白名单内`);
+  if (!dimension.id) reasons.push(`未设置 ${dimension.idEnv}`);
+  if (!dimension.allowed.length) {
+    reasons.push(`未设置 ${dimension.allowedEnv}（允许写入的${dimension.label}白名单）`);
+  } else if (dimension.id && !dimension.allowed.includes(dimension.id)) {
+    reasons.push(`${dimension.label} #${dimension.id} 不在 ${dimension.allowedEnv} 白名单内`);
   }
-  return { allowed: reasons.length === 0, requested: allowWrite, reasons, productId, allowedProducts };
+  return {
+    allowed: reasons.length === 0,
+    requested: allowWrite,
+    reasons,
+    productId: isProject ? '' : dimension.id,
+    allowedProducts: isProject ? [] : dimension.allowed,
+    projectId: isProject ? dimension.id : '',
+    allowedProjects: isProject ? dimension.allowed : [],
+  };
 }
 
 /** 本次运行的唯一标识：用于识别「本次创建的测试记录」，清理时只认它。 */
